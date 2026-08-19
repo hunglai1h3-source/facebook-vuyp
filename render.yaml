@@ -21,6 +21,6 @@ services:
           property: connectionString
 
 databases:
-  - name: fb-post-pro-db
-    region: singapore
+  - name: chatbot tư vấn sức khỏe
+    region: Oregon
     plan: free
