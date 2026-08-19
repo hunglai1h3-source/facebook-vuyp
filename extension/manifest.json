@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "FB POST PRO Connector",
+  "version": "1.0.0",
+  "description": "Liên kết FB POST PRO với Facebook đang đăng nhập trên Chrome. Không gửi mật khẩu hoặc cookie Facebook lên server.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://*.facebook.com/*",
+    "https://*.onrender.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FB POST PRO Connector"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.facebook.com/*"
+      ],
+      "js": [
+        "facebook_runner.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.onrender.com/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "web_bridge.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

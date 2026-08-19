@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: fb-post-pro
+    runtime: python
+    region: singapore
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DATA_ROOT
+        value: /var/data/fbpostpro
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fb-post-pro-db
+          property: connectionString
+    disk:
+      name: fbpost-data
+      mountPath: /var/data/fbpostpro
+      sizeGB: 1
+
+databases:
+  - name: fb-post-pro-db
+    region: singapore
+    plan: basic-256mb
