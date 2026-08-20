@@ -1,20 +1,1262 @@
-const VERSION=chrome.runtime.getManifest().version;let busy=false,lastHeartbeatAt=0,lastHeartbeatResult=null;const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function cfg(){return await chrome.storage.local.get(['serverOrigin','deviceId','token','customerId']);}
-function headers(c,json=true){const h={'X-Device-ID':c.deviceId,'X-Agent-Token':c.token};if(json)h['Content-Type']='application/json';return h;}
-async function facebookLoggedIn(){try{const c=await chrome.cookies.get({url:'https://www.facebook.com/',name:'c_user'});return !!(c&&c.value);}catch(e){return false;}}
-async function heartbeat(force=false){const c=await cfg();if(!c.serverOrigin||!c.deviceId||!c.token)return {ok:false,error:'Chưa liên kết'};if(!force&&lastHeartbeatResult&&(Date.now()-lastHeartbeatAt)<15000)return lastHeartbeatResult;const fb=await facebookLoggedIn();const r=await fetch(c.serverOrigin+'/api/agent/heartbeat',{method:'POST',headers:headers(c),body:JSON.stringify({device_name:'Google Chrome • FB POST PRO',extension_version:VERSION,facebook_logged_in:fb})});if(!r.ok)throw new Error('Heartbeat '+r.status);lastHeartbeatAt=Date.now();lastHeartbeatResult={ok:true,facebookLoggedIn:fb,deviceName:'Google Chrome'};return lastHeartbeatResult;}
+const VERSION =
+  chrome.runtime
+    .getManifest()
+    .version;
 
-async function pairFromWeb(serverOrigin,code){const server=String(serverOrigin||'').trim().replace(/\/+$/,'');const pairCode=String(code||'').trim().toUpperCase();if(!server||!pairCode)return {ok:false,error:'Thiếu website hoặc mã liên kết'};try{const r=await fetch(server+'/api/extension/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:pairCode,device_name:'Google Chrome • FB POST PRO',extension_version:VERSION})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Liên kết thất bại');await chrome.storage.local.set({serverOrigin:server,deviceId:d.device_id,token:d.token,customerId:d.customer_id});lastHeartbeatAt=0;lastHeartbeatResult=null;const hb=await heartbeat(true);return {ok:true,facebookLoggedIn:hb.facebookLoggedIn,deviceId:d.device_id};}catch(e){return {ok:false,error:e?.message||String(e)};}}
-async function report(c,data){try{await fetch(c.serverOrigin+'/api/agent/status',{method:'POST',headers:headers(c),body:JSON.stringify(data)});}catch(e){console.warn('report',e);}}
-async function control(c){try{const r=await fetch(c.serverOrigin+'/api/agent/control',{headers:headers(c,false)});if(r.ok)return await r.json();}catch(e){}return {stop_requested:false};}
-function rnd(min,max){min=Math.max(0,Number(min)||0);max=Math.max(0,Number(max)||0);if(min>max)[min,max]=[max,min];return Math.floor(Math.random()*(max-min+1))+min;}
-async function imageData(c,name){const r=await fetch(c.serverOrigin+'/api/agent/image/'+encodeURIComponent(name),{headers:headers(c,false)});if(!r.ok)throw new Error('Không tải được ảnh '+name);const blob=await r.blob();if(blob.size>8*1024*1024)throw new Error('Ảnh '+name+' lớn hơn 8MB; hãy nén ảnh.');const buf=new Uint8Array(await blob.arrayBuffer());let binary='';const chunk=0x8000;for(let i=0;i<buf.length;i+=chunk)binary+=String.fromCharCode(...buf.subarray(i,i+chunk));return {name,mime:blob.type||'application/octet-stream',base64:btoa(binary)};}
-async function loadImages(c,names){const out=[];let total=0;for(const n of names||[]){const item=await imageData(c,n);total+=Math.ceil(item.base64.length*0.75);if(total>30*1024*1024)throw new Error('Tổng ảnh vượt 30MB; hãy giảm dung lượng ảnh.');out.push(item);}return out;}
-function waitTab(tabId,timeout=45000){return new Promise((resolve,reject)=>{const end=Date.now()+timeout;const on=(id,info,tab)=>{if(id===tabId&&info.status==='complete'){chrome.tabs.onUpdated.removeListener(on);resolve(tab);}};chrome.tabs.onUpdated.addListener(on);const timer=setInterval(async()=>{if(Date.now()>end){clearInterval(timer);chrome.tabs.onUpdated.removeListener(on);reject(new Error('Facebook tải quá lâu.'));}},1000);});}
-async function postGroup(c,url,content,images){const tab=await chrome.tabs.create({url,active:false});try{await waitTab(tab.id);await sleep(2200);const latest=await chrome.tabs.get(tab.id);const u=(latest.url||'').toLowerCase();if(u.includes('/checkpoint')){await chrome.tabs.update(tab.id,{active:true});return {ok:false,code:'checkpoint',error:'Facebook yêu cầu checkpoint.'};}if(u.includes('/login')){await chrome.tabs.update(tab.id,{active:true});return {ok:false,code:'login',error:'Facebook chưa đăng nhập.'};}let res;for(let i=0;i<10;i++){try{res=await chrome.tabs.sendMessage(tab.id,{type:'FBPOST_POST',content,images});break;}catch(e){await sleep(700);}}if(!res)throw new Error('Không kết nối được script trên Facebook.');if(res.code==='login'||res.code==='checkpoint'){await chrome.tabs.update(tab.id,{active:true});return res;}return res;}finally{try{const t=await chrome.tabs.get(tab.id);if(t&&!((t.url||'').includes('/login')||(t.url||'').includes('/checkpoint')))await chrome.tabs.remove(tab.id);}catch(e){}}}
-async function stoppableDelay(c,seconds,nextIndex,stats){while(seconds>0){const ctl=await control(c);if(ctl.stop_requested)return false;const m=Math.floor(seconds/60),s=seconds%60;await report(c,{status:'delay',message:`Chờ ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')} → Group ${nextIndex}`,processed:stats.processed,success:stats.success,errors:stats.errors});await sleep(1000);seconds--;}return true;}
-async function processJob(c,job){busy=true;let processed=0,success=0,errors=0;try{const fb=await facebookLoggedIn();if(!fb){await chrome.tabs.create({url:'https://www.facebook.com/',active:true});await report(c,{status:'needs_facebook_login',message:'Facebook chưa đăng nhập. Hãy đăng nhập trên Chrome rồi chạy lại.',processed,success,errors});return;}await report(c,{status:'running',message:'Connector đã nhận chiến dịch. Đang chuẩn bị...',processed,success,errors});const images=await loadImages(c,job.images||[]);const groups=job.groups||[];for(let i=0;i<groups.length;i++){const ctl=await control(c);if(ctl.stop_requested){await report(c,{status:'stopped',message:'Chiến dịch đã dừng.',processed,success,errors});return;}await report(c,{status:'posting',message:`Đang đăng Group ${i+1}/${groups.length}`,processed,success,errors});let res;try{res=await postGroup(c,groups[i],job.content||'',images);}catch(e){res={ok:false,error:e?.message||String(e)};}processed++;if(res?.ok){success++;await report(c,{status:'posting',event:'group_success',message:`Đăng thành công • ${job.campaign_name||'Chiến dịch'}`,group_url:groups[i],processed,success,errors});}else{errors++;await report(c,{status:'posting',event:'group_error',message:`Lỗi đăng bài • ${job.campaign_name||'Chiến dịch'}`,group_url:groups[i],detail:res?.error||'Lỗi không xác định',processed,success,errors});if(res?.code==='login'){await report(c,{status:'needs_facebook_login',message:'Facebook đã mất phiên đăng nhập.',processed,success,errors});return;}if(res?.code==='checkpoint'){await report(c,{status:'facebook_checkpoint',message:'Facebook yêu cầu checkpoint/xác minh. Hãy xử lý trên tab vừa mở.',processed,success,errors});return;}}
-if(i<groups.length-1){const seconds=rnd(job.min_delay,job.max_delay)*60;if(seconds>0){const ok=await stoppableDelay(c,seconds,i+2,{processed,success,errors});if(!ok){await report(c,{status:'stopped',message:'Chiến dịch đã dừng.',processed,success,errors});return;}}}}
-const status=errors?'finished_with_errors':'finished';await report(c,{status,message:errors?`Hoàn tất. Thành công ${success}, lỗi ${errors}.`:`Hoàn tất. Đăng thành công ${success}/${groups.length} Group.`,processed,success,errors});}catch(e){await report(c,{status:'error',message:e?.message||String(e),processed,success,errors:errors+1});}finally{busy=false;}}
-async function poll(){if(busy)return {ok:true,busy:true};const c=await cfg();if(!c.serverOrigin||!c.deviceId||!c.token)return {ok:false,error:'Chưa liên kết'};let hb;try{hb=await heartbeat();}catch(e){return {ok:false,error:e?.message||String(e)};}try{const r=await fetch(c.serverOrigin+'/api/agent/job',{headers:headers(c,false)});if(r.status===401){await chrome.storage.local.remove(['deviceId','token','customerId']);return {ok:false,error:'Liên kết đã hết hiệu lực'};}const d=await r.json();if(d.has_job){processJob(c,d.job);return {ok:true,job:true,facebookLoggedIn:hb.facebookLoggedIn};}return {ok:true,job:false,facebookLoggedIn:hb.facebookLoggedIn,deviceName:'Google Chrome'};}catch(e){return {ok:false,error:e?.message||String(e)};}}
-chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create('fbpost-poll',{periodInMinutes:0.5});poll();});chrome.runtime.onStartup.addListener(()=>poll());chrome.alarms.onAlarm.addListener(a=>{if(a.name==='fbpost-poll')poll();});chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{if(msg?.type==='POLL_NOW'){poll().then(sendResponse);return true;}if(msg?.type==='PAIR_FROM_WEB'){pairFromWeb(msg.serverOrigin,msg.code).then(sendResponse);return true;}if(msg?.type==='GET_STATUS'){Promise.all([cfg(),facebookLoggedIn()]).then(([c,fb])=>sendResponse({ok:!!(c.deviceId&&c.token),facebookLoggedIn:fb,deviceName:'Google Chrome'}));return true;}});
+let busy = false;
+let lastHeartbeatAt = 0;
+let lastHeartbeatResult = null;
+
+const sleep = ms =>
+  new Promise(
+    r => setTimeout(r, ms)
+  );
+
+async function cfg() {
+  return await chrome.storage.local.get([
+    'serverOrigin',
+    'deviceId',
+    'token',
+    'customerId'
+  ]);
+}
+
+function headers(
+  c,
+  json = true
+) {
+  const h = {
+    'X-Device-ID':
+      c.deviceId,
+    'X-Agent-Token':
+      c.token
+  };
+
+  if (json) {
+    h['Content-Type'] =
+      'application/json';
+  }
+
+  return h;
+}
+
+async function facebookLoggedIn() {
+  try {
+    const c =
+      await chrome.cookies.get({
+        url:
+          'https://www.facebook.com/',
+        name:
+          'c_user'
+      });
+
+    return !!(
+      c &&
+      c.value
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
+async function heartbeat(
+  force = false
+) {
+  const c =
+    await cfg();
+
+  if (
+    !c.serverOrigin ||
+    !c.deviceId ||
+    !c.token
+  ) {
+    return {
+      ok: false,
+      error:
+        'Chưa liên kết'
+    };
+  }
+
+  if (
+    !force &&
+    lastHeartbeatResult &&
+    Date.now() -
+      lastHeartbeatAt <
+      15000
+  ) {
+    return lastHeartbeatResult;
+  }
+
+  const fb =
+    await facebookLoggedIn();
+
+  const r =
+    await fetch(
+      c.serverOrigin +
+        '/api/agent/heartbeat',
+      {
+        method:
+          'POST',
+        headers:
+          headers(c),
+        body:
+          JSON.stringify({
+            device_name:
+              'Google Chrome • FB POST PRO',
+            extension_version:
+              VERSION,
+            facebook_logged_in:
+              fb
+          })
+      }
+    );
+
+  if (!r.ok) {
+    throw new Error(
+      'Heartbeat ' +
+      r.status
+    );
+  }
+
+  lastHeartbeatAt =
+    Date.now();
+
+  lastHeartbeatResult = {
+    ok: true,
+    facebookLoggedIn:
+      fb,
+    deviceName:
+      'Google Chrome'
+  };
+
+  return lastHeartbeatResult;
+}
+
+async function pairFromWeb(
+  serverOrigin,
+  code
+) {
+  const server =
+    String(
+      serverOrigin || ''
+    )
+      .trim()
+      .replace(
+        /\/+$/,
+        ''
+      );
+
+  const pairCode =
+    String(
+      code || ''
+    )
+      .trim()
+      .toUpperCase();
+
+  if (
+    !server ||
+    !pairCode
+  ) {
+    return {
+      ok: false,
+      error:
+        'Thiếu website hoặc mã liên kết'
+    };
+  }
+
+  try {
+    const r =
+      await fetch(
+        server +
+          '/api/extension/pair',
+        {
+          method:
+            'POST',
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+          body:
+            JSON.stringify({
+              code:
+                pairCode,
+              device_name:
+                'Google Chrome • FB POST PRO',
+              extension_version:
+                VERSION
+            })
+        }
+      );
+
+    const d =
+      await r.json();
+
+    if (!r.ok) {
+      throw new Error(
+        d.error ||
+        'Liên kết thất bại'
+      );
+    }
+
+    await chrome.storage.local.set({
+      serverOrigin:
+        server,
+      deviceId:
+        d.device_id,
+      token:
+        d.token,
+      customerId:
+        d.customer_id
+    });
+
+    lastHeartbeatAt = 0;
+    lastHeartbeatResult = null;
+
+    const hb =
+      await heartbeat(true);
+
+    return {
+      ok: true,
+      facebookLoggedIn:
+        hb.facebookLoggedIn,
+      deviceId:
+        d.device_id
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error:
+        e?.message ||
+        String(e)
+    };
+  }
+}
+
+async function report(
+  c,
+  data
+) {
+  try {
+    await fetch(
+      c.serverOrigin +
+        '/api/agent/status',
+      {
+        method:
+          'POST',
+        headers:
+          headers(c),
+        body:
+          JSON.stringify(
+            data
+          )
+      }
+    );
+  } catch (e) {
+    console.warn(
+      'report',
+      e
+    );
+  }
+}
+
+async function control(c) {
+  try {
+    const r =
+      await fetch(
+        c.serverOrigin +
+          '/api/agent/control',
+        {
+          headers:
+            headers(
+              c,
+              false
+            )
+        }
+      );
+
+    if (r.ok) {
+      return await r.json();
+    }
+  } catch (e) {}
+
+  return {
+    stop_requested:
+      false
+  };
+}
+
+function rnd(
+  min,
+  max
+) {
+  min =
+    Math.max(
+      0,
+      Number(min) || 0
+    );
+
+  max =
+    Math.max(
+      0,
+      Number(max) || 0
+    );
+
+  if (min > max) {
+    [min, max] =
+      [max, min];
+  }
+
+  return Math.floor(
+    Math.random() *
+      (
+        max -
+        min +
+        1
+      )
+  ) + min;
+}
+
+async function imageData(
+  c,
+  name
+) {
+  const r =
+    await fetch(
+      c.serverOrigin +
+        '/api/agent/image/' +
+        encodeURIComponent(
+          name
+        ),
+      {
+        headers:
+          headers(
+            c,
+            false
+          )
+      }
+    );
+
+  if (!r.ok) {
+    throw new Error(
+      'Không tải được ảnh ' +
+      name
+    );
+  }
+
+  const blob =
+    await r.blob();
+
+  if (
+    blob.size >
+    8 *
+      1024 *
+      1024
+  ) {
+    throw new Error(
+      'Ảnh ' +
+      name +
+      ' lớn hơn 8MB; hãy nén ảnh.'
+    );
+  }
+
+  const buf =
+    new Uint8Array(
+      await blob.arrayBuffer()
+    );
+
+  let binary = '';
+
+  const chunk =
+    0x8000;
+
+  for (
+    let i = 0;
+    i < buf.length;
+    i += chunk
+  ) {
+    binary +=
+      String.fromCharCode(
+        ...buf.subarray(
+          i,
+          i + chunk
+        )
+      );
+  }
+
+  return {
+    name,
+    mime:
+      blob.type ||
+      'application/octet-stream',
+    base64:
+      btoa(binary)
+  };
+}
+
+async function loadImages(
+  c,
+  names
+) {
+  const out = [];
+  let total = 0;
+
+  for (
+    const n of names || []
+  ) {
+    const item =
+      await imageData(
+        c,
+        n
+      );
+
+    total +=
+      Math.ceil(
+        item.base64.length *
+        0.75
+      );
+
+    if (
+      total >
+      30 *
+        1024 *
+        1024
+    ) {
+      throw new Error(
+        'Tổng ảnh vượt 30MB; hãy giảm dung lượng ảnh.'
+      );
+    }
+
+    out.push(item);
+  }
+
+  return out;
+}
+
+function waitTab(
+  tabId,
+  timeout = 45000
+) {
+  return new Promise(
+    (
+      resolve,
+      reject
+    ) => {
+      const end =
+        Date.now() +
+        timeout;
+
+      let timer = null;
+
+      const cleanup =
+        () => {
+          chrome.tabs.onUpdated
+            .removeListener(
+              on
+            );
+
+          if (timer) {
+            clearInterval(
+              timer
+            );
+          }
+        };
+
+      const on =
+        (
+          id,
+          info,
+          tab
+        ) => {
+          if (
+            id === tabId &&
+            info.status ===
+              'complete'
+          ) {
+            cleanup();
+            resolve(tab);
+          }
+        };
+
+      chrome.tabs.onUpdated
+        .addListener(on);
+
+      timer =
+        setInterval(
+          async () => {
+            if (
+              Date.now() >
+              end
+            ) {
+              cleanup();
+
+              reject(
+                new Error(
+                  'Facebook tải quá lâu.'
+                )
+              );
+            }
+          },
+          1000
+        );
+    }
+  );
+}
+
+async function postGroup(
+  c,
+  url,
+  content,
+  images
+) {
+  /*
+   * DEBUG:
+   * mở tab active để Facebook render
+   * đầy đủ giao diện.
+   */
+  const tab =
+    await chrome.tabs.create({
+      url,
+      active: true
+    });
+
+  try {
+    await waitTab(
+      tab.id
+    );
+
+    /*
+     * Chrome báo complete chưa chắc
+     * Facebook đã render xong.
+     */
+    await sleep(5000);
+
+    const latest =
+      await chrome.tabs.get(
+        tab.id
+      );
+
+    const u =
+      (
+        latest.url ||
+        ''
+      ).toLowerCase();
+
+    if (
+      u.includes(
+        '/checkpoint'
+      )
+    ) {
+      await chrome.tabs.update(
+        tab.id,
+        {
+          active:
+            true
+        }
+      );
+
+      return {
+        ok: false,
+        code:
+          'checkpoint',
+        error:
+          'Facebook yêu cầu checkpoint.'
+      };
+    }
+
+    if (
+      u.includes(
+        '/login'
+      )
+    ) {
+      await chrome.tabs.update(
+        tab.id,
+        {
+          active:
+            true
+        }
+      );
+
+      return {
+        ok: false,
+        code:
+          'login',
+        error:
+          'Facebook chưa đăng nhập.'
+      };
+    }
+
+    /*
+     * Luôn đưa Facebook lên foreground.
+     */
+    await chrome.tabs.update(
+      tab.id,
+      {
+        active:
+          true
+      }
+    );
+
+    await sleep(1500);
+
+    let res = null;
+    let lastError = null;
+
+    /*
+     * Thử nhiều lần để chắc chắn
+     * facebook_runner.js đã inject.
+     */
+    for (
+      let i = 0;
+      i < 15;
+      i++
+    ) {
+      try {
+        res =
+          await chrome.tabs.sendMessage(
+            tab.id,
+            {
+              type:
+                'FBPOST_POST',
+              content,
+              images
+            }
+          );
+
+        if (res) {
+          break;
+        }
+      } catch (e) {
+        lastError = e;
+
+        console.log(
+          'Chờ facebook_runner.js:',
+          i + 1,
+          e
+        );
+      }
+
+      await sleep(1000);
+    }
+
+    if (!res) {
+      throw new Error(
+        'Không kết nối được facebook_runner.js. ' +
+        (
+          lastError?.message ||
+          ''
+        )
+      );
+    }
+
+    if (
+      res.code ===
+        'login' ||
+      res.code ===
+        'checkpoint'
+    ) {
+      await chrome.tabs.update(
+        tab.id,
+        {
+          active:
+            true
+        }
+      );
+
+      return res;
+    }
+
+    if (!res.ok) {
+      console.error(
+        'FB POST PRO ERROR:',
+        res
+      );
+
+      /*
+       * KHÔNG đóng tab khi lỗi.
+       * Giữ nguyên màn hình để debug.
+       */
+      await chrome.tabs.update(
+        tab.id,
+        {
+          active:
+            true
+        }
+      );
+
+      return res;
+    }
+
+    console.log(
+      'FB POST PRO SUCCESS:',
+      res
+    );
+
+    /*
+     * Tạm thời cũng giữ tab khi thành công.
+     * Khi mọi thứ ổn mới bật lại tự đóng.
+     */
+    return res;
+
+  } catch (e) {
+    console.error(
+      'postGroup error:',
+      e
+    );
+
+    try {
+      await chrome.tabs.update(
+        tab.id,
+        {
+          active:
+            true
+        }
+      );
+    } catch (err) {}
+
+    return {
+      ok: false,
+      error:
+        e?.message ||
+        String(e)
+    };
+  }
+
+  /*
+   * CỐ Ý KHÔNG có finally remove tab.
+   */
+}
+
+async function stoppableDelay(
+  c,
+  seconds,
+  nextIndex,
+  stats
+) {
+  while (
+    seconds > 0
+  ) {
+    const ctl =
+      await control(c);
+
+    if (
+      ctl.stop_requested
+    ) {
+      return false;
+    }
+
+    const m =
+      Math.floor(
+        seconds / 60
+      );
+
+    const s =
+      seconds % 60;
+
+    await report(
+      c,
+      {
+        status:
+          'delay',
+        message:
+          `Chờ ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} → Group ${nextIndex}`,
+        processed:
+          stats.processed,
+        success:
+          stats.success,
+        errors:
+          stats.errors
+      }
+    );
+
+    await sleep(1000);
+
+    seconds--;
+  }
+
+  return true;
+}
+
+async function processJob(
+  c,
+  job
+) {
+  busy = true;
+
+  let processed = 0;
+  let success = 0;
+  let errors = 0;
+
+  try {
+    const fb =
+      await facebookLoggedIn();
+
+    if (!fb) {
+      await chrome.tabs.create({
+        url:
+          'https://www.facebook.com/',
+        active:
+          true
+      });
+
+      await report(
+        c,
+        {
+          status:
+            'needs_facebook_login',
+          message:
+            'Facebook chưa đăng nhập. Hãy đăng nhập trên Chrome rồi chạy lại.',
+          processed,
+          success,
+          errors
+        }
+      );
+
+      return;
+    }
+
+    await report(
+      c,
+      {
+        status:
+          'running',
+        message:
+          'Connector đã nhận chiến dịch. Đang chuẩn bị...',
+        processed,
+        success,
+        errors
+      }
+    );
+
+    const images =
+      await loadImages(
+        c,
+        job.images || []
+      );
+
+    const groups =
+      job.groups || [];
+
+    for (
+      let i = 0;
+      i < groups.length;
+      i++
+    ) {
+      const ctl =
+        await control(c);
+
+      if (
+        ctl.stop_requested
+      ) {
+        await report(
+          c,
+          {
+            status:
+              'stopped',
+            message:
+              'Chiến dịch đã dừng.',
+            processed,
+            success,
+            errors
+          }
+        );
+
+        return;
+      }
+
+      await report(
+        c,
+        {
+          status:
+            'posting',
+          message:
+            `Đang đăng Group ${i + 1}/${groups.length}`,
+          processed,
+          success,
+          errors
+        }
+      );
+
+      let res;
+
+      try {
+        res =
+          await postGroup(
+            c,
+            groups[i],
+            job.content || '',
+            images
+          );
+      } catch (e) {
+        res = {
+          ok: false,
+          error:
+            e?.message ||
+            String(e)
+        };
+      }
+
+      processed++;
+
+      if (res?.ok) {
+        success++;
+
+        await report(
+          c,
+          {
+            status:
+              'posting',
+            event:
+              'group_success',
+            message:
+              `Đăng thành công • ${job.campaign_name || 'Chiến dịch'}`,
+            group_url:
+              groups[i],
+            processed,
+            success,
+            errors
+          }
+        );
+      } else {
+        errors++;
+
+        await report(
+          c,
+          {
+            status:
+              'posting',
+            event:
+              'group_error',
+            message:
+              `Lỗi đăng bài • ${job.campaign_name || 'Chiến dịch'}`,
+            group_url:
+              groups[i],
+            detail:
+              res?.error ||
+              'Lỗi không xác định',
+            processed,
+            success,
+            errors
+          }
+        );
+
+        if (
+          res?.code ===
+          'login'
+        ) {
+          await report(
+            c,
+            {
+              status:
+                'needs_facebook_login',
+              message:
+                'Facebook đã mất phiên đăng nhập.',
+              processed,
+              success,
+              errors
+            }
+          );
+
+          return;
+        }
+
+        if (
+          res?.code ===
+          'checkpoint'
+        ) {
+          await report(
+            c,
+            {
+              status:
+                'facebook_checkpoint',
+              message:
+                'Facebook yêu cầu checkpoint/xác minh. Hãy xử lý trên tab vừa mở.',
+              processed,
+              success,
+              errors
+            }
+          );
+
+          return;
+        }
+      }
+
+      if (
+        i <
+        groups.length - 1
+      ) {
+        const seconds =
+          rnd(
+            job.min_delay,
+            job.max_delay
+          ) * 60;
+
+        if (
+          seconds > 0
+        ) {
+          const ok =
+            await stoppableDelay(
+              c,
+              seconds,
+              i + 2,
+              {
+                processed,
+                success,
+                errors
+              }
+            );
+
+          if (!ok) {
+            await report(
+              c,
+              {
+                status:
+                  'stopped',
+                message:
+                  'Chiến dịch đã dừng.',
+                processed,
+                success,
+                errors
+              }
+            );
+
+            return;
+          }
+        }
+      }
+    }
+
+    const status =
+      errors
+        ? 'finished_with_errors'
+        : 'finished';
+
+    await report(
+      c,
+      {
+        status,
+        message:
+          errors
+            ? `Hoàn tất. Thành công ${success}, lỗi ${errors}.`
+            : `Hoàn tất. Đăng thành công ${success}/${groups.length} Group.`,
+        processed,
+        success,
+        errors
+      }
+    );
+  } catch (e) {
+    await report(
+      c,
+      {
+        status:
+          'error',
+        message:
+          e?.message ||
+          String(e),
+        processed,
+        success,
+        errors:
+          errors + 1
+      }
+    );
+  } finally {
+    busy = false;
+  }
+}
+
+async function poll() {
+  if (busy) {
+    return {
+      ok: true,
+      busy:
+        true
+    };
+  }
+
+  const c =
+    await cfg();
+
+  if (
+    !c.serverOrigin ||
+    !c.deviceId ||
+    !c.token
+  ) {
+    return {
+      ok: false,
+      error:
+        'Chưa liên kết'
+    };
+  }
+
+  let hb;
+
+  try {
+    hb =
+      await heartbeat();
+  } catch (e) {
+    return {
+      ok: false,
+      error:
+        e?.message ||
+        String(e)
+    };
+  }
+
+  try {
+    const r =
+      await fetch(
+        c.serverOrigin +
+          '/api/agent/job',
+        {
+          headers:
+            headers(
+              c,
+              false
+            )
+        }
+      );
+
+    if (
+      r.status === 401
+    ) {
+      await chrome.storage.local.remove([
+        'deviceId',
+        'token',
+        'customerId'
+      ]);
+
+      return {
+        ok: false,
+        error:
+          'Liên kết đã hết hiệu lực'
+      };
+    }
+
+    const d =
+      await r.json();
+
+    if (d.has_job) {
+      processJob(
+        c,
+        d.job
+      );
+
+      return {
+        ok: true,
+        job:
+          true,
+        facebookLoggedIn:
+          hb.facebookLoggedIn
+      };
+    }
+
+    return {
+      ok: true,
+      job:
+        false,
+      facebookLoggedIn:
+        hb.facebookLoggedIn,
+      deviceName:
+        'Google Chrome'
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error:
+        e?.message ||
+        String(e)
+    };
+  }
+}
+
+chrome.runtime.onInstalled.addListener(
+  () => {
+    chrome.alarms.create(
+      'fbpost-poll',
+      {
+        periodInMinutes:
+          0.5
+      }
+    );
+
+    poll();
+  }
+);
+
+chrome.runtime.onStartup.addListener(
+  () => poll()
+);
+
+chrome.alarms.onAlarm.addListener(
+  a => {
+    if (
+      a.name ===
+      'fbpost-poll'
+    ) {
+      poll();
+    }
+  }
+);
+
+chrome.runtime.onMessage.addListener(
+  (
+    msg,
+    sender,
+    sendResponse
+  ) => {
+    if (
+      msg?.type ===
+      'POLL_NOW'
+    ) {
+      poll()
+        .then(
+          sendResponse
+        );
+
+      return true;
+    }
+
+    if (
+      msg?.type ===
+      'PAIR_FROM_WEB'
+    ) {
+      pairFromWeb(
+        msg.serverOrigin,
+        msg.code
+      ).then(
+        sendResponse
+      );
+
+      return true;
+    }
+
+    if (
+      msg?.type ===
+      'GET_STATUS'
+    ) {
+      Promise.all([
+        cfg(),
+        facebookLoggedIn()
+      ]).then(
+        (
+          [
+            c,
+            fb
+          ]
+        ) =>
+          sendResponse({
+            ok:
+              !!(
+                c.deviceId &&
+                c.token
+              ),
+            facebookLoggedIn:
+              fb,
+            deviceName:
+              'Google Chrome'
+          })
+      );
+
+      return true;
+    }
+  }
+);

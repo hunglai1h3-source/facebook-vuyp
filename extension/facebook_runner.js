@@ -1,44 +1,66 @@
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function visible(el){
-  if(!el) return false;
-  const r=el.getBoundingClientRect();
-  const s=getComputedStyle(el);
-  return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0';
+function visible(el) {
+  if (!el) return false;
+
+  const r = el.getBoundingClientRect();
+  const s = getComputedStyle(el);
+
+  return (
+    r.width > 0 &&
+    r.height > 0 &&
+    s.visibility !== 'hidden' &&
+    s.display !== 'none' &&
+    s.opacity !== '0'
+  );
 }
 
-async function waitFor(fn,timeout=25000,step=250){
-  const end=Date.now()+timeout;
-  while(Date.now()<end){
-    try{
-      const v=fn();
-      if(v)return v;
-    }catch(e){}
+async function waitFor(fn, timeout = 25000, step = 250) {
+  const end = Date.now() + timeout;
+
+  while (Date.now() < end) {
+    try {
+      const v = fn();
+      if (v) return v;
+    } catch (e) {}
+
     await sleep(step);
   }
+
   return null;
 }
 
-function pageNeedsLogin(){
-  const u=location.href.toLowerCase();
-  if(u.includes('/checkpoint')) return 'checkpoint';
+function pageNeedsLogin() {
+  const u = location.href.toLowerCase();
 
-  if(
+  if (u.includes('/checkpoint')) {
+    return 'checkpoint';
+  }
+
+  if (
     u.includes('/login') ||
-    document.querySelector('input[name="email"],input[name="pass"]')
-  ) return 'login';
+    document.querySelector(
+      'input[name="email"],input[name="pass"]'
+    )
+  ) {
+    return 'login';
+  }
 
   return '';
 }
 
-function textOf(el){
-  return (el?.innerText||el?.textContent||'')
-    .replace(/\s+/g,' ')
+function textOf(el) {
+  return (
+    el?.innerText ||
+    el?.textContent ||
+    ''
+  )
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
-function findComposerTrigger(){
-  const needles=[
+function findComposerTrigger() {
+  const needles = [
     'bạn viết gì đi',
     'bạn viết gì',
     'bạn đang nghĩ gì',
@@ -50,19 +72,20 @@ function findComposerTrigger(){
     'create post'
   ];
 
-  const els=[
+  const els = [
     ...document.querySelectorAll(
       '[role="button"],button,div[tabindex="0"]'
     )
   ].filter(visible);
 
-  for(const el of els){
-    const t=(
-      textOf(el)+' '+
-      (el.getAttribute('aria-label')||'')
+  for (const el of els) {
+    const t = (
+      textOf(el) +
+      ' ' +
+      (el.getAttribute('aria-label') || '')
     ).toLowerCase();
 
-    if(needles.some(n=>t.includes(n))){
+    if (needles.some(n => t.includes(n))) {
       return el;
     }
   }
@@ -70,8 +93,8 @@ function findComposerTrigger(){
   return null;
 }
 
-function textboxCandidates(root=document){
-  const selectors=[
+function textboxCandidates(root = document) {
+  const selectors = [
     '[contenteditable="true"][data-lexical-editor="true"]',
     '[role="textbox"][contenteditable="true"]',
     '[contenteditable="true"][role="textbox"]',
@@ -79,19 +102,21 @@ function textboxCandidates(root=document){
     'div[contenteditable="true"]'
   ];
 
-  const seen=new Set();
-  const out=[];
+  const seen = new Set();
+  const out = [];
 
-  for(const sel of selectors){
-    for(const el of root.querySelectorAll(sel)){
-      if(seen.has(el)||!visible(el)) continue;
+  for (const sel of selectors) {
+    for (const el of root.querySelectorAll(sel)) {
+      if (seen.has(el)) continue;
+      if (!visible(el)) continue;
 
       seen.add(el);
 
-      const r=el.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
 
-      // Bỏ qua những editor quá nhỏ như comment/reaction.
-      if(r.width<120||r.height<20) continue;
+      if (r.width < 120 || r.height < 20) {
+        continue;
+      }
 
       out.push(el);
     }
@@ -100,117 +125,128 @@ function textboxCandidates(root=document){
   return out;
 }
 
-function findPostTextbox(root=document){
-  const boxes=textboxCandidates(root);
+function findPostTextbox(root = document) {
+  const boxes = textboxCandidates(root);
 
-  if(!boxes.length) return null;
+  if (!boxes.length) {
+    return null;
+  }
 
-  boxes.sort((a,b)=>{
-    const score=el=>{
-      let s=0;
+  boxes.sort((a, b) => {
+    const score = el => {
+      let s = 0;
 
-      if(el.getAttribute('data-lexical-editor')==='true'){
-        s+=1000000;
+      if (
+        el.getAttribute('data-lexical-editor') === 'true'
+      ) {
+        s += 1000000;
       }
 
-      if(el.getAttribute('role')==='textbox'){
-        s+=500000;
+      if (el.getAttribute('role') === 'textbox') {
+        s += 500000;
       }
 
-      const label=(
-        el.getAttribute('aria-label')||''
+      const label = (
+        el.getAttribute('aria-label') || ''
       ).toLowerCase();
 
-      if(/bài viết|post|mind|viết|write/.test(label)){
-        s+=250000;
+      if (
+        /bài viết|post|mind|viết|write/.test(label)
+      ) {
+        s += 250000;
       }
 
-      const r=el.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
 
-      return s+r.width*r.height;
+      return s + r.width * r.height;
     };
 
-    return score(b)-score(a);
+    return score(b) - score(a);
   });
 
   return boxes[0];
 }
 
-function findDialog(){
-  const dialogs=[
-    ...document.querySelectorAll('div[role="dialog"]')
+function findDialog() {
+  const dialogs = [
+    ...document.querySelectorAll(
+      'div[role="dialog"]'
+    )
   ].filter(visible);
 
-  const preferred=[];
-  const fallback=[];
+  const preferred = [];
+  const fallback = [];
 
-  for(const d of dialogs){
-    const label=(
-      (d.getAttribute('aria-label')||'')+
-      ' '+
-      textOf(d).slice(0,500)
+  for (const d of dialogs) {
+    const label = (
+      (d.getAttribute('aria-label') || '') +
+      ' ' +
+      textOf(d).slice(0, 500)
     ).toLowerCase();
 
-    const box=findPostTextbox(d);
+    const box = findPostTextbox(d);
 
-    if(
+    if (
       box &&
-      /tạo bài viết|create post|bài viết|post/.test(label)
-    ){
+      /tạo bài viết|create post|bài viết|post/.test(
+        label
+      )
+    ) {
       preferred.push(d);
-    }
-    else if(box){
+    } else if (box) {
       fallback.push(d);
     }
   }
 
-  return preferred.at(-1)||fallback.at(-1)||null;
+  return (
+    preferred.at(-1) ||
+    fallback.at(-1) ||
+    null
+  );
 }
 
-async function openComposer(){
+async function openComposer() {
+  let d = findDialog();
 
-  // Không dùng nhầm dialog khác chỉ vì nó có contenteditable.
-  let d=findDialog();
+  if (d) {
+    return d;
+  }
 
-  if(d) return d;
-
-  const trigger=await waitFor(
+  const trigger = await waitFor(
     findComposerTrigger,
     20000
   );
 
-  if(!trigger){
+  if (!trigger) {
     throw new Error(
       'Không tìm thấy ô tạo bài viết trong Group.'
     );
   }
 
   trigger.scrollIntoView({
-    block:'center',
-    inline:'center'
+    block: 'center',
+    inline: 'center'
   });
 
-  await sleep(250);
+  await sleep(400);
 
   trigger.click();
 
-  d=await waitFor(
+  d = await waitFor(
     findDialog,
     25000
   );
 
-  if(d) return d;
+  if (d) {
+    return d;
+  }
 
-  /*
-   * Một số phiên bản Facebook không render
-   * composer bằng role="dialog".
-   */
-  const box=await waitFor(
-    ()=>findPostTextbox(document),
-    8000
+  const box = await waitFor(
+    () => findPostTextbox(document),
+    10000
   );
 
-  if(box){
+  if (box) {
     return (
       box.closest('[role="dialog"]') ||
       document.body
@@ -222,41 +258,34 @@ async function openComposer(){
   );
 }
 
-async function fillText(dialog,content){
-
-  let box=await waitFor(
-    ()=>findPostTextbox(dialog),
-    12000
+async function fillText(dialog, content) {
+  let box = await waitFor(
+    () => findPostTextbox(dialog),
+    15000
   );
 
-  if(!box){
-    box=await waitFor(
-      ()=>findPostTextbox(document),
-      6000
+  if (!box) {
+    box = await waitFor(
+      () => findPostTextbox(document),
+      8000
     );
   }
 
-  if(!box){
+  if (!box) {
     throw new Error(
       'Không tìm thấy ô nhập nội dung. Facebook có thể đã đổi giao diện.'
     );
   }
 
   box.scrollIntoView({
-    block:'center'
+    block: 'center'
   });
 
   box.focus();
 
-  await sleep(250);
+  await sleep(500);
 
-  /*
-   * Facebook dùng Lexical Editor.
-   * execCommand thường hoạt động ổn định hơn
-   * việc gán trực tiếp innerText.
-   */
-  try{
-
+  try {
     document.execCommand(
       'selectAll',
       false,
@@ -274,91 +303,114 @@ async function fillText(dialog,content){
       false,
       content
     );
+  } catch (e) {}
 
-  }catch(e){}
+  await sleep(300);
 
-  /*
-   * Nếu cách trên chưa nhập được chữ
-   * thì thử lại bằng Range.
-   */
-  if(
+  if (
     content &&
     !textOf(box).includes(
       content.slice(
         0,
-        Math.min(20,content.length)
+        Math.min(15, content.length)
       )
     )
-  ){
+  ) {
+    try {
+      box.focus();
 
-    box.focus();
+      const sel =
+        window.getSelection();
 
-    const sel=window.getSelection();
+      const range =
+        document.createRange();
 
-    const range=document.createRange();
+      range.selectNodeContents(box);
 
-    range.selectNodeContents(box);
+      sel.removeAllRanges();
+      sel.addRange(range);
 
-    sel.removeAllRanges();
-
-    sel.addRange(range);
-
-    document.execCommand(
-      'insertText',
-      false,
-      content
-    );
+      document.execCommand(
+        'insertText',
+        false,
+        content
+      );
+    } catch (e) {}
   }
 
-  box.dispatchEvent(
-    new InputEvent(
-      'input',
-      {
-        bubbles:true,
-        inputType:'insertText',
-        data:content
-      }
-    )
-  );
+  try {
+    box.dispatchEvent(
+      new InputEvent(
+        'beforeinput',
+        {
+          bubbles: true,
+          inputType: 'insertText',
+          data: content
+        }
+      )
+    );
+  } catch (e) {}
+
+  try {
+    box.dispatchEvent(
+      new InputEvent(
+        'input',
+        {
+          bubbles: true,
+          inputType: 'insertText',
+          data: content
+        }
+      )
+    );
+  } catch (e) {}
 
   box.dispatchEvent(
     new Event(
       'change',
       {
-        bubbles:true
+        bubbles: true
       }
     )
   );
 
-  await sleep(800);
+  await sleep(1200);
 }
 
-function b64ToFile(item){
+function b64ToFile(item) {
+  const bin = atob(item.base64);
 
-  const bin=atob(item.base64);
+  const bytes =
+    new Uint8Array(bin.length);
 
-  const bytes=new Uint8Array(
-    bin.length
-  );
-
-  for(let i=0;i<bin.length;i++){
-    bytes[i]=bin.charCodeAt(i);
+  for (
+    let i = 0;
+    i < bin.length;
+    i++
+  ) {
+    bytes[i] =
+      bin.charCodeAt(i);
   }
 
   return new File(
     [bytes],
-    item.name||'image.jpg',
+    item.name || 'image.jpg',
     {
-      type:item.mime||'image/jpeg'
+      type:
+        item.mime ||
+        'image/jpeg'
     }
   );
 }
 
-async function attachImages(dialog,images){
+async function attachImages(
+  dialog,
+  images
+) {
+  if (!images?.length) {
+    return;
+  }
 
-  if(!images?.length) return;
-
-  let input=
+  let input =
     dialog.querySelector(
       'input[type="file"]'
     ) ||
@@ -366,30 +418,32 @@ async function attachImages(dialog,images){
       'input[type="file"][accept*="image"]'
     );
 
-  if(!input){
-
-    const controls=[
+  if (!input) {
+    const controls = [
       ...dialog.querySelectorAll(
         '[role="button"],button,div[tabindex="0"]'
       )
     ].filter(visible);
 
-    const btn=controls.find(
-      el=>
+    const btn = controls.find(
+      el =>
         /ảnh\/?video|photo\/?video/i.test(
-          textOf(el)+
-          ' '+
-          (el.getAttribute('aria-label')||'')
+          textOf(el) +
+          ' ' +
+          (
+            el.getAttribute(
+              'aria-label'
+            ) || ''
+          )
         )
     );
 
-    if(btn){
-
+    if (btn) {
       btn.click();
 
-      await sleep(1200);
+      await sleep(1500);
 
-      input=
+      input =
         dialog.querySelector(
           'input[type="file"]'
         ) ||
@@ -399,27 +453,29 @@ async function attachImages(dialog,images){
     }
   }
 
-  if(!input){
+  if (!input) {
     throw new Error(
       'Không tìm thấy ô upload ảnh.'
     );
   }
 
-  const dt=new DataTransfer();
+  const dt =
+    new DataTransfer();
 
-  for(const item of images){
+  for (const item of images) {
     dt.items.add(
       b64ToFile(item)
     );
   }
 
-  input.files=dt.files;
+  input.files =
+    dt.files;
 
   input.dispatchEvent(
     new Event(
       'input',
       {
-        bubbles:true
+        bubbles: true
       }
     )
   );
@@ -428,119 +484,152 @@ async function attachImages(dialog,images){
     new Event(
       'change',
       {
-        bubbles:true
+        bubbles: true
       }
     )
   );
 
   await sleep(
     Math.max(
-      4000,
-      images.length*1800
+      5000,
+      images.length * 2000
     )
   );
 }
 
-async function clickPost(dialog){
-
-  const candidates=[
+async function clickPost(dialog) {
+  const candidates = [
     ...dialog.querySelectorAll(
       '[role="button"],button'
     )
   ].filter(visible);
 
-  let btn=candidates.find(
-    el=>
-      /^(đăng|post)$/i.test(
-        textOf(el)
-      )
-  );
-
-  if(!btn){
-
-    btn=candidates.find(
-      el=>
-        /\bđăng\b|\bpost\b/i.test(
-          textOf(el)+
-          ' '+
-          (el.getAttribute('aria-label')||'')
+  let btn =
+    candidates.find(
+      el =>
+        /^(đăng|post)$/i.test(
+          textOf(el).trim()
         )
     );
+
+  if (!btn) {
+    btn =
+      candidates.find(
+        el =>
+          /^(đăng|post)$/i.test(
+            (
+              el.getAttribute(
+                'aria-label'
+              ) || ''
+            ).trim()
+          )
+      );
   }
 
-  if(!btn){
+  if (!btn) {
+    btn =
+      candidates.find(
+        el =>
+          /\bđăng\b|\bpost\b/i.test(
+            textOf(el) +
+            ' ' +
+            (
+              el.getAttribute(
+                'aria-label'
+              ) || ''
+            )
+          )
+      );
+  }
+
+  if (!btn) {
     throw new Error(
       'Không tìm thấy nút Đăng.'
     );
   }
 
-  const ready=await waitFor(
-    ()=>
-      !btn.hasAttribute('disabled') &&
-      btn.getAttribute('aria-disabled')!=='true',
-    30000
-  );
+  const ready =
+    await waitFor(
+      () =>
+        !btn.hasAttribute(
+          'disabled'
+        ) &&
+        btn.getAttribute(
+          'aria-disabled'
+        ) !== 'true' &&
+        !btn.disabled,
+      30000
+    );
 
-  if(!ready){
+  if (!ready) {
     throw new Error(
       'Nút Đăng chưa sẵn sàng.'
     );
   }
 
   btn.scrollIntoView({
-    block:'center'
+    block: 'center'
   });
+
+  await sleep(500);
 
   btn.click();
 
-  const gone=await waitFor(
-    ()=>
-      !document.contains(dialog) ||
-      !visible(dialog),
-    60000,
-    500
-  );
+  const gone =
+    await waitFor(
+      () =>
+        !document.contains(
+          dialog
+        ) ||
+        !visible(dialog),
+      60000,
+      500
+    );
 
-  if(!gone){
+  if (!gone) {
     throw new Error(
       'Đã bấm Đăng nhưng cửa sổ tạo bài chưa đóng.'
     );
   }
 }
 
-async function postCurrentGroup(payload){
+async function postCurrentGroup(
+  payload
+) {
+  const state =
+    pageNeedsLogin();
 
-  const state=pageNeedsLogin();
-
-  if(state==='checkpoint'){
+  if (state === 'checkpoint') {
     return {
-      ok:false,
-      code:'checkpoint',
-      error:'Facebook yêu cầu checkpoint/xác minh.'
+      ok: false,
+      code: 'checkpoint',
+      error:
+        'Facebook yêu cầu checkpoint/xác minh.'
     };
   }
 
-  if(state==='login'){
+  if (state === 'login') {
     return {
-      ok:false,
-      code:'login',
-      error:'Facebook chưa đăng nhập.'
+      ok: false,
+      code: 'login',
+      error:
+        'Facebook chưa đăng nhập.'
     };
   }
 
-  await sleep(2200);
+  await sleep(3500);
 
-  const dialog=
+  const dialog =
     await openComposer();
 
   await fillText(
     dialog,
-    payload.content||''
+    payload.content || ''
   );
 
   await attachImages(
     dialog,
-    payload.images||[]
+    payload.images || []
   );
 
   await clickPost(
@@ -548,26 +637,33 @@ async function postCurrentGroup(payload){
   );
 
   return {
-    ok:true
+    ok: true
   };
 }
 
 chrome.runtime.onMessage.addListener(
-  (msg,sender,sendResponse)=>{
-
-    if(msg?.type!=='FBPOST_POST'){
+  (
+    msg,
+    sender,
+    sendResponse
+  ) => {
+    if (
+      msg?.type !==
+      'FBPOST_POST'
+    ) {
       return;
     }
 
     postCurrentGroup(msg)
       .then(sendResponse)
       .catch(
-        e=>sendResponse({
-          ok:false,
-          error:
-            e?.message||
-            String(e)
-        })
+        e =>
+          sendResponse({
+            ok: false,
+            error:
+              e?.message ||
+              String(e)
+          })
       );
 
     return true;
