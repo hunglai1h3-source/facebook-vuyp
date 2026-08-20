@@ -1,27 +1,30 @@
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function visible(el) {
   if (!el) return false;
 
-  const r = el.getBoundingClientRect();
-  const s = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
 
   return (
-    r.width > 0 &&
-    r.height > 0 &&
-    s.visibility !== 'hidden' &&
-    s.display !== 'none' &&
-    s.opacity !== '0'
+    rect.width > 0 &&
+    rect.height > 0 &&
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    style.opacity !== "0"
   );
 }
 
-async function waitFor(fn, timeout = 25000, step = 250) {
+async function waitFor(fn, timeout = 25000, step = 300) {
   const end = Date.now() + timeout;
 
   while (Date.now() < end) {
     try {
-      const v = fn();
-      if (v) return v;
+      const result = fn();
+
+      if (result) {
+        return result;
+      }
     } catch (e) {}
 
     await sleep(step);
@@ -30,62 +33,66 @@ async function waitFor(fn, timeout = 25000, step = 250) {
   return null;
 }
 
-function pageNeedsLogin() {
-  const u = location.href.toLowerCase();
-
-  if (u.includes('/checkpoint')) {
-    return 'checkpoint';
-  }
-
-  if (
-    u.includes('/login') ||
-    document.querySelector(
-      'input[name="email"],input[name="pass"]'
-    )
-  ) {
-    return 'login';
-  }
-
-  return '';
-}
-
 function textOf(el) {
   return (
     el?.innerText ||
     el?.textContent ||
-    ''
+    ""
   )
-    .replace(/\s+/g, ' ')
+    .replace(/\s+/g, " ")
     .trim();
 }
 
+function pageNeedsLogin() {
+  const url = location.href.toLowerCase();
+
+  if (url.includes("/checkpoint")) {
+    return "checkpoint";
+  }
+
+  if (
+    url.includes("/login") ||
+    document.querySelector(
+      'input[name="email"], input[name="pass"]'
+    )
+  ) {
+    return "login";
+  }
+
+  return "";
+}
+
 function findComposerTrigger() {
-  const needles = [
-    'bạn viết gì đi',
-    'bạn viết gì',
-    'bạn đang nghĩ gì',
-    'viết gì đó',
-    'tạo bài viết',
-    'write something',
+  const keywords = [
+    "bạn viết gì đi",
+    "bạn viết gì",
+    "bạn đang nghĩ gì",
+    "viết gì đó",
+    "tạo bài viết",
+    "write something",
     "what's on your mind",
-    'create a public post',
-    'create post'
+    "create post",
+    "create a public post"
   ];
 
-  const els = [
+  const elements = [
     ...document.querySelectorAll(
-      '[role="button"],button,div[tabindex="0"]'
+      '[role="button"], button, div[tabindex="0"]'
     )
   ].filter(visible);
 
-  for (const el of els) {
-    const t = (
+  for (const el of elements) {
+    const value = (
       textOf(el) +
-      ' ' +
-      (el.getAttribute('aria-label') || '')
+      " " +
+      (el.getAttribute("aria-label") || "")
     ).toLowerCase();
 
-    if (needles.some(n => t.includes(n))) {
+    if (
+      keywords.some(keyword =>
+        value.includes(keyword)
+      )
+    ) {
       return el;
     }
   }
@@ -93,311 +100,513 @@ function findComposerTrigger() {
   return null;
 }
 
-function textboxCandidates(root = document) {
+function getEditors(root) {
+  if (!root) return [];
+
   const selectors = [
-    '[contenteditable="true"][data-lexical-editor="true"]',
+    '[data-lexical-editor="true"][contenteditable="true"]',
     '[role="textbox"][contenteditable="true"]',
     '[contenteditable="true"][role="textbox"]',
-    '[contenteditable="true"][aria-label]',
-    'div[contenteditable="true"]'
+    'div[contenteditable="true"]',
+    '[contenteditable="true"]'
   ];
 
+  const result = [];
   const seen = new Set();
-  const out = [];
 
-  for (const sel of selectors) {
-    for (const el of root.querySelectorAll(sel)) {
+  for (const selector of selectors) {
+    let elements = [];
+
+    try {
+      elements = [
+        ...root.querySelectorAll(selector)
+      ];
+    } catch (e) {
+      continue;
+    }
+
+    for (const el of elements) {
       if (seen.has(el)) continue;
-      if (!visible(el)) continue;
 
       seen.add(el);
 
-      const r = el.getBoundingClientRect();
+      if (!visible(el)) continue;
 
-      if (r.width < 120 || r.height < 20) {
+      const rect = el.getBoundingClientRect();
+
+      if (
+        rect.width < 120 ||
+        rect.height < 18
+      ) {
         continue;
       }
 
-      out.push(el);
+      result.push(el);
     }
   }
 
-  return out;
+  return result;
 }
 
-function findPostTextbox(root = document) {
-  const boxes = textboxCandidates(root);
+function scoreEditor(el) {
+  let score = 0;
 
-  if (!boxes.length) {
+  const rect = el.getBoundingClientRect();
+
+  const aria = (
+    el.getAttribute("aria-label") ||
+    ""
+  ).toLowerCase();
+
+  const placeholder = (
+    el.getAttribute("data-placeholder") ||
+    ""
+  ).toLowerCase();
+
+  if (
+    el.getAttribute("data-lexical-editor") ===
+    "true"
+  ) {
+    score += 100000;
+  }
+
+  if (
+    el.getAttribute("role") ===
+    "textbox"
+  ) {
+    score += 50000;
+  }
+
+  if (
+    /bạn đang nghĩ gì|bạn viết gì|viết gì đó|bài viết|what's on your mind|write something|create post/.test(
+      aria + " " + placeholder
+    )
+  ) {
+    score += 100000;
+  }
+
+  score += Math.min(
+    rect.width * rect.height,
+    300000
+  );
+
+  if (rect.height < 35) {
+    score -= 50000;
+  }
+
+  return score;
+}
+
+function findBestEditor(root) {
+  const editors = getEditors(root);
+
+  if (!editors.length) {
     return null;
   }
 
-  boxes.sort((a, b) => {
-    const score = el => {
-      let s = 0;
+  editors.sort(
+    (a, b) =>
+      scoreEditor(b) -
+      scoreEditor(a)
+  );
 
-      if (
-        el.getAttribute('data-lexical-editor') === 'true'
-      ) {
-        s += 1000000;
-      }
-
-      if (el.getAttribute('role') === 'textbox') {
-        s += 500000;
-      }
-
-      const label = (
-        el.getAttribute('aria-label') || ''
-      ).toLowerCase();
-
-      if (
-        /bài viết|post|mind|viết|write/.test(label)
-      ) {
-        s += 250000;
-      }
-
-      const r = el.getBoundingClientRect();
-
-      return s + r.width * r.height;
-    };
-
-    return score(b) - score(a);
-  });
-
-  return boxes[0];
+  return editors[0];
 }
 
-function findDialog() {
+function findComposerDialog() {
   const dialogs = [
     ...document.querySelectorAll(
-      'div[role="dialog"]'
+      '[role="dialog"]'
     )
   ].filter(visible);
 
-  const preferred = [];
-  const fallback = [];
-
-  for (const d of dialogs) {
-    const label = (
-      (d.getAttribute('aria-label') || '') +
-      ' ' +
-      textOf(d).slice(0, 500)
-    ).toLowerCase();
-
-    const box = findPostTextbox(d);
-
-    if (
-      box &&
-      /tạo bài viết|create post|bài viết|post/.test(
-        label
-      )
-    ) {
-      preferred.push(d);
-    } else if (box) {
-      fallback.push(d);
-    }
+  if (!dialogs.length) {
+    return null;
   }
 
+  const candidates = [];
+
+  for (const dialog of dialogs) {
+    const editor =
+      findBestEditor(dialog);
+
+    if (!editor) continue;
+
+    const text = (
+      textOf(dialog).slice(0, 600) +
+      " " +
+      (
+        dialog.getAttribute(
+          "aria-label"
+        ) || ""
+      )
+    ).toLowerCase();
+
+    let score = 0;
+
+    if (
+      /tạo bài viết|create post|bài viết/.test(
+        text
+      )
+    ) {
+      score += 10000;
+    }
+
+    score += scoreEditor(editor);
+
+    candidates.push({
+      dialog,
+      score
+    });
+  }
+
+  candidates.sort(
+    (a, b) =>
+      b.score -
+      a.score
+  );
+
   return (
-    preferred.at(-1) ||
-    fallback.at(-1) ||
+    candidates[0]?.dialog ||
     null
   );
 }
 
 async function openComposer() {
-  let d = findDialog();
+  let dialog =
+    findComposerDialog();
 
-  if (d) {
-    return d;
+  if (dialog) {
+    return dialog;
   }
 
-  const trigger = await waitFor(
-    findComposerTrigger,
-    20000
-  );
+  const trigger =
+    await waitFor(
+      findComposerTrigger,
+      25000,
+      400
+    );
 
   if (!trigger) {
     throw new Error(
-      'Không tìm thấy ô tạo bài viết trong Group.'
+      "Không tìm thấy ô tạo bài viết trong Group."
     );
   }
 
   trigger.scrollIntoView({
-    block: 'center',
-    inline: 'center'
+    block: "center",
+    inline: "center"
   });
 
-  await sleep(400);
+  await sleep(500);
 
-  trigger.click();
+  try {
+    trigger.click();
+  } catch (e) {}
 
-  d = await waitFor(
-    findDialog,
-    25000
-  );
+  await sleep(1000);
 
-  if (d) {
-    return d;
+  dialog =
+    await waitFor(
+      findComposerDialog,
+      20000,
+      400
+    );
+
+  if (dialog) {
+    return dialog;
   }
 
-  const box = await waitFor(
-    () => findPostTextbox(document),
-    10000
-  );
+  const editor =
+    await waitFor(
+      () =>
+        findBestEditor(document),
+      10000,
+      400
+    );
 
-  if (box) {
+  if (editor) {
     return (
-      box.closest('[role="dialog"]') ||
+      editor.closest(
+        '[role="dialog"]'
+      ) ||
       document.body
     );
   }
 
   throw new Error(
-    'Không mở được cửa sổ Tạo bài viết.'
+    "Không mở được cửa sổ Tạo bài viết."
   );
 }
 
-async function fillText(dialog, content) {
-  let box = await waitFor(
-    () => findPostTextbox(dialog),
-    15000
+async function fillText(
+  dialog,
+  content
+) {
+  let editor =
+    await waitFor(
+      () =>
+        findBestEditor(dialog),
+      15000,
+      300
+    );
+
+  if (!editor) {
+    editor =
+      await waitFor(
+        () =>
+          findBestEditor(document),
+        10000,
+        300
+      );
+  }
+
+  if (!editor) {
+    console.error(
+      "FB POST PRO DEBUG",
+      {
+        url:
+          location.href,
+
+        dialogs:
+          document.querySelectorAll(
+            '[role="dialog"]'
+          ).length,
+
+        editable:
+          document.querySelectorAll(
+            '[contenteditable="true"]'
+          ).length,
+
+        textbox:
+          document.querySelectorAll(
+            '[role="textbox"]'
+          ).length
+      }
+    );
+
+    throw new Error(
+      "Không tìm thấy ô nhập nội dung Facebook."
+    );
+  }
+
+  console.log(
+    "FB POST PRO: tìm thấy editor",
+    editor
   );
 
-  if (!box) {
-    box = await waitFor(
-      () => findPostTextbox(document),
-      8000
-    );
-  }
-
-  if (!box) {
-    throw new Error(
-      'Không tìm thấy ô nhập nội dung. Facebook có thể đã đổi giao diện.'
-    );
-  }
-
-  box.scrollIntoView({
-    block: 'center'
+  editor.scrollIntoView({
+    block: "center"
   });
-
-  box.focus();
-
-  await sleep(500);
-
-  try {
-    document.execCommand(
-      'selectAll',
-      false,
-      null
-    );
-
-    document.execCommand(
-      'delete',
-      false,
-      null
-    );
-
-    document.execCommand(
-      'insertText',
-      false,
-      content
-    );
-  } catch (e) {}
 
   await sleep(300);
 
+  try {
+    editor.click();
+  } catch (e) {}
+
+  editor.focus();
+
+  await sleep(400);
+
+  /*
+   * Xóa nội dung cũ.
+   */
+  try {
+    const selection =
+      window.getSelection();
+
+    const range =
+      document.createRange();
+
+    range.selectNodeContents(
+      editor
+    );
+
+    selection.removeAllRanges();
+
+    selection.addRange(
+      range
+    );
+
+    document.execCommand(
+      "delete",
+      false,
+      null
+    );
+  } catch (e) {}
+
+  await sleep(250);
+
+  /*
+   * Cách chính để nhập vào
+   * Facebook Lexical Editor.
+   */
+  try {
+    editor.focus();
+
+    document.execCommand(
+      "insertText",
+      false,
+      content
+    );
+  } catch (e) {
+    console.warn(
+      "insertText lỗi",
+      e
+    );
+  }
+
+  await sleep(500);
+
+  let current =
+    textOf(editor);
+
+  /*
+   * Nếu insertText lần đầu
+   * chưa hoạt động.
+   */
   if (
     content &&
-    !textOf(box).includes(
+    !current.includes(
       content.slice(
         0,
-        Math.min(15, content.length)
+        Math.min(
+          10,
+          content.length
+        )
       )
     )
   ) {
     try {
-      box.focus();
+      editor.focus();
 
-      const sel =
+      const selection =
         window.getSelection();
 
       const range =
         document.createRange();
 
-      range.selectNodeContents(box);
+      range.selectNodeContents(
+        editor
+      );
 
-      sel.removeAllRanges();
-      sel.addRange(range);
+      range.collapse(false);
+
+      selection.removeAllRanges();
+
+      selection.addRange(
+        range
+      );
 
       document.execCommand(
-        'insertText',
+        "insertText",
         false,
         content
       );
     } catch (e) {}
   }
 
+  /*
+   * Trigger event cho React/Lexical.
+   */
   try {
-    box.dispatchEvent(
+    editor.dispatchEvent(
       new InputEvent(
-        'beforeinput',
+        "beforeinput",
         {
           bubbles: true,
-          inputType: 'insertText',
-          data: content
+          cancelable: true,
+          inputType:
+            "insertText",
+          data:
+            content
         }
       )
     );
   } catch (e) {}
 
   try {
-    box.dispatchEvent(
+    editor.dispatchEvent(
       new InputEvent(
-        'input',
+        "input",
         {
           bubbles: true,
-          inputType: 'insertText',
-          data: content
+          inputType:
+            "insertText",
+          data:
+            content
         }
       )
     );
   } catch (e) {}
 
-  box.dispatchEvent(
-    new Event(
-      'change',
-      {
-        bubbles: true
-      }
+  try {
+    editor.dispatchEvent(
+      new Event(
+        "change",
+        {
+          bubbles: true
+        }
+      )
+    );
+  } catch (e) {}
+
+  await sleep(1000);
+
+  current =
+    textOf(editor);
+
+  if (
+    content &&
+    !current.includes(
+      content.slice(
+        0,
+        Math.min(
+          8,
+          content.length
+        )
+      )
     )
+  ) {
+    throw new Error(
+      "Đã tìm thấy ô nhập nhưng Facebook không nhận nội dung."
+    );
+  }
+
+  console.log(
+    "FB POST PRO: nhập nội dung thành công"
   );
 
-  await sleep(1200);
+  return editor;
 }
 
 function b64ToFile(item) {
-  const bin = atob(item.base64);
+  const binary =
+    atob(item.base64);
 
   const bytes =
-    new Uint8Array(bin.length);
+    new Uint8Array(
+      binary.length
+    );
 
   for (
     let i = 0;
-    i < bin.length;
+    i < binary.length;
     i++
   ) {
     bytes[i] =
-      bin.charCodeAt(i);
+      binary.charCodeAt(i);
   }
 
   return new File(
     [bytes],
-    item.name || 'image.jpg',
+    item.name ||
+      "image.jpg",
     {
       type:
         item.mime ||
-        'image/jpeg'
+        "image/jpeg"
     }
   );
 }
@@ -406,40 +615,56 @@ async function attachImages(
   dialog,
   images
 ) {
-  if (!images?.length) {
+  if (
+    !images ||
+    !images.length
+  ) {
     return;
   }
 
   let input =
     dialog.querySelector(
       'input[type="file"]'
-    ) ||
-    document.querySelector(
-      'input[type="file"][accept*="image"]'
     );
 
   if (!input) {
-    const controls = [
+    input =
+      document.querySelector(
+        'input[type="file"][accept*="image"]'
+      );
+  }
+
+  if (!input) {
+    const buttons = [
       ...dialog.querySelectorAll(
-        '[role="button"],button,div[tabindex="0"]'
+        '[role="button"], button, div[tabindex="0"]'
       )
     ].filter(visible);
 
-    const btn = controls.find(
-      el =>
-        /ảnh\/?video|photo\/?video/i.test(
+    const photoButton =
+      buttons.find(el => {
+        const text = (
           textOf(el) +
-          ' ' +
+          " " +
           (
             el.getAttribute(
-              'aria-label'
-            ) || ''
+              "aria-label"
+            ) || ""
           )
-        )
-    );
+        ).toLowerCase();
 
-    if (btn) {
-      btn.click();
+        return (
+          text.includes("ảnh/video") ||
+          text.includes("ảnh") ||
+          text.includes("photo/video") ||
+          text.includes("photo")
+        );
+      });
+
+    if (photoButton) {
+      try {
+        photoButton.click();
+      } catch (e) {}
 
       await sleep(1500);
 
@@ -455,25 +680,25 @@ async function attachImages(
 
   if (!input) {
     throw new Error(
-      'Không tìm thấy ô upload ảnh.'
+      "Không tìm thấy ô upload ảnh."
     );
   }
 
-  const dt =
+  const dataTransfer =
     new DataTransfer();
 
   for (const item of images) {
-    dt.items.add(
+    dataTransfer.items.add(
       b64ToFile(item)
     );
   }
 
   input.files =
-    dt.files;
+    dataTransfer.files;
 
   input.dispatchEvent(
     new Event(
-      'input',
+      "input",
       {
         bubbles: true
       }
@@ -482,7 +707,7 @@ async function attachImages(
 
   input.dispatchEvent(
     new Event(
-      'change',
+      "change",
       {
         bubbles: true
       }
@@ -497,85 +722,82 @@ async function attachImages(
   );
 }
 
-async function clickPost(dialog) {
-  const candidates = [
+async function clickPost(
+  dialog
+) {
+  const buttons = [
     ...dialog.querySelectorAll(
-      '[role="button"],button'
+      '[role="button"], button'
     )
   ].filter(visible);
 
-  let btn =
-    candidates.find(
-      el =>
-        /^(đăng|post)$/i.test(
-          textOf(el).trim()
+  let postButton =
+    buttons.find(el => {
+      const text =
+        textOf(el)
+          .trim()
+          .toLowerCase();
+
+      return (
+        text === "đăng" ||
+        text === "post"
+      );
+    });
+
+  if (!postButton) {
+    postButton =
+      buttons.find(el => {
+        const label = (
+          el.getAttribute(
+            "aria-label"
+          ) || ""
         )
-    );
+          .trim()
+          .toLowerCase();
 
-  if (!btn) {
-    btn =
-      candidates.find(
-        el =>
-          /^(đăng|post)$/i.test(
-            (
-              el.getAttribute(
-                'aria-label'
-              ) || ''
-            ).trim()
-          )
-      );
+        return (
+          label === "đăng" ||
+          label === "post"
+        );
+      });
   }
 
-  if (!btn) {
-    btn =
-      candidates.find(
-        el =>
-          /\bđăng\b|\bpost\b/i.test(
-            textOf(el) +
-            ' ' +
-            (
-              el.getAttribute(
-                'aria-label'
-              ) || ''
-            )
-          )
-      );
-  }
-
-  if (!btn) {
+  if (!postButton) {
     throw new Error(
-      'Không tìm thấy nút Đăng.'
+      "Không tìm thấy nút Đăng."
     );
   }
 
   const ready =
     await waitFor(
       () =>
-        !btn.hasAttribute(
-          'disabled'
-        ) &&
-        btn.getAttribute(
-          'aria-disabled'
-        ) !== 'true' &&
-        !btn.disabled,
-      30000
+        postButton.getAttribute(
+          "aria-disabled"
+        ) !== "true" &&
+        !postButton.hasAttribute(
+          "disabled"
+        ),
+      30000,
+      500
     );
 
   if (!ready) {
     throw new Error(
-      'Nút Đăng chưa sẵn sàng.'
+      "Nút Đăng chưa sẵn sàng."
     );
   }
 
-  btn.scrollIntoView({
-    block: 'center'
+  postButton.scrollIntoView({
+    block: "center"
   });
 
-  await sleep(500);
+  await sleep(400);
 
-  btn.click();
+  postButton.click();
 
-  const gone =
+  await sleep(1500);
+
+  const closed =
     await waitFor(
       () =>
         !document.contains(
@@ -586,9 +808,9 @@ async function clickPost(dialog) {
       500
     );
 
-  if (!gone) {
+  if (!closed) {
     throw new Error(
-      'Đã bấm Đăng nhưng cửa sổ tạo bài chưa đóng.'
+      "Đã bấm Đăng nhưng cửa sổ tạo bài chưa đóng."
     );
   }
 }
@@ -596,35 +818,47 @@ async function clickPost(dialog) {
 async function postCurrentGroup(
   payload
 ) {
-  const state =
+  const loginState =
     pageNeedsLogin();
 
-  if (state === 'checkpoint') {
+  if (
+    loginState ===
+    "checkpoint"
+  ) {
     return {
       ok: false,
-      code: 'checkpoint',
+      code:
+        "checkpoint",
       error:
-        'Facebook yêu cầu checkpoint/xác minh.'
+        "Facebook yêu cầu checkpoint/xác minh."
     };
   }
 
-  if (state === 'login') {
+  if (
+    loginState ===
+    "login"
+  ) {
     return {
       ok: false,
-      code: 'login',
+      code:
+        "login",
       error:
-        'Facebook chưa đăng nhập.'
+        "Facebook chưa đăng nhập."
     };
   }
 
-  await sleep(3500);
+  /*
+   * Chờ Facebook render
+   * sau khi trang vừa load.
+   */
+  await sleep(4000);
 
   const dialog =
     await openComposer();
 
   await fillText(
     dialog,
-    payload.content || ''
+    payload.content || ""
   );
 
   await attachImages(
@@ -649,23 +883,35 @@ chrome.runtime.onMessage.addListener(
   ) => {
     if (
       msg?.type !==
-      'FBPOST_POST'
+      "FBPOST_POST"
     ) {
       return;
     }
 
     postCurrentGroup(msg)
-      .then(sendResponse)
-      .catch(
-        e =>
-          sendResponse({
-            ok: false,
-            error:
-              e?.message ||
-              String(e)
-          })
-      );
+      .then(result => {
+        sendResponse(
+          result
+        );
+      })
+      .catch(error => {
+        console.error(
+          "FB POST PRO RUNNER ERROR:",
+          error
+        );
+
+        sendResponse({
+          ok: false,
+          error:
+            error?.message ||
+            String(error)
+        });
+      });
 
     return true;
   }
+);
+
+console.log(
+  "FB POST PRO facebook_runner.js loaded"
 );

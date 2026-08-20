@@ -80,9 +80,10 @@ async function heartbeat(
   if (
     !force &&
     lastHeartbeatResult &&
-    Date.now() -
-      lastHeartbeatAt <
-      15000
+    (
+      Date.now() -
+      lastHeartbeatAt
+    ) < 15000
   ) {
     return lastHeartbeatResult;
   }
@@ -97,14 +98,18 @@ async function heartbeat(
       {
         method:
           'POST',
+
         headers:
           headers(c),
+
         body:
           JSON.stringify({
             device_name:
               'Google Chrome • FB POST PRO',
+
             extension_version:
               VERSION,
+
             facebook_logged_in:
               fb
           })
@@ -123,8 +128,10 @@ async function heartbeat(
 
   lastHeartbeatResult = {
     ok: true,
+
     facebookLoggedIn:
       fb,
+
     deviceName:
       'Google Chrome'
   };
@@ -138,7 +145,8 @@ async function pairFromWeb(
 ) {
   const server =
     String(
-      serverOrigin || ''
+      serverOrigin ||
+      ''
     )
       .trim()
       .replace(
@@ -148,7 +156,8 @@ async function pairFromWeb(
 
   const pairCode =
     String(
-      code || ''
+      code ||
+      ''
     )
       .trim()
       .toUpperCase();
@@ -172,16 +181,20 @@ async function pairFromWeb(
         {
           method:
             'POST',
+
           headers: {
             'Content-Type':
               'application/json'
           },
+
           body:
             JSON.stringify({
               code:
                 pairCode,
+
               device_name:
                 'Google Chrome • FB POST PRO',
+
               extension_version:
                 VERSION
             })
@@ -201,10 +214,13 @@ async function pairFromWeb(
     await chrome.storage.local.set({
       serverOrigin:
         server,
+
       deviceId:
         d.device_id,
+
       token:
         d.token,
+
       customerId:
         d.customer_id
     });
@@ -217,14 +233,17 @@ async function pairFromWeb(
 
     return {
       ok: true,
+
       facebookLoggedIn:
         hb.facebookLoggedIn,
+
       deviceId:
         d.device_id
     };
   } catch (e) {
     return {
       ok: false,
+
       error:
         e?.message ||
         String(e)
@@ -243,8 +262,10 @@ async function report(
       {
         method:
           'POST',
+
         headers:
           headers(c),
+
         body:
           JSON.stringify(
             data
@@ -292,28 +313,38 @@ function rnd(
   min =
     Math.max(
       0,
-      Number(min) || 0
+      Number(min) ||
+      0
     );
 
   max =
     Math.max(
       0,
-      Number(max) || 0
+      Number(max) ||
+      0
     );
 
   if (min > max) {
-    [min, max] =
-      [max, min];
+    [
+      min,
+      max
+    ] = [
+      max,
+      min
+    ];
   }
 
-  return Math.floor(
-    Math.random() *
+  return (
+    Math.floor(
+      Math.random() *
       (
         max -
         min +
         1
       )
-  ) + min;
+    ) +
+    min
+  );
 }
 
 async function imageData(
@@ -385,9 +416,11 @@ async function imageData(
 
   return {
     name,
+
     mime:
       blob.type ||
       'application/octet-stream',
+
     base64:
       btoa(binary)
   };
@@ -401,7 +434,8 @@ async function loadImages(
   let total = 0;
 
   for (
-    const n of names || []
+    const n of names ||
+    []
   ) {
     const item =
       await imageData(
@@ -445,23 +479,50 @@ function waitTab(
         Date.now() +
         timeout;
 
-      let timer = null;
+      let finished =
+        false;
 
       const cleanup =
         () => {
           chrome.tabs.onUpdated
             .removeListener(
-              on
+              onUpdated
             );
 
-          if (timer) {
-            clearInterval(
-              timer
-            );
-          }
+          clearInterval(
+            timer
+          );
         };
 
-      const on =
+      const done =
+        value => {
+          if (finished) {
+            return;
+          }
+
+          finished =
+            true;
+
+          cleanup();
+
+          resolve(value);
+        };
+
+      const fail =
+        error => {
+          if (finished) {
+            return;
+          }
+
+          finished =
+            true;
+
+          cleanup();
+
+          reject(error);
+        };
+
+      const onUpdated =
         (
           id,
           info,
@@ -472,31 +533,45 @@ function waitTab(
             info.status ===
               'complete'
           ) {
-            cleanup();
-            resolve(tab);
+            done(tab);
           }
         };
 
       chrome.tabs.onUpdated
-        .addListener(on);
+        .addListener(
+          onUpdated
+        );
 
-      timer =
+      const timer =
         setInterval(
           async () => {
+            try {
+              const tab =
+                await chrome.tabs.get(
+                  tabId
+                );
+
+              if (
+                tab.status ===
+                'complete'
+              ) {
+                done(tab);
+                return;
+              }
+            } catch (e) {}
+
             if (
               Date.now() >
               end
             ) {
-              cleanup();
-
-              reject(
+              fail(
                 new Error(
                   'Facebook tải quá lâu.'
                 )
               );
             }
           },
-          1000
+          500
         );
     }
   );
@@ -509,9 +584,10 @@ async function postGroup(
   images
 ) {
   /*
-   * DEBUG:
-   * mở tab active để Facebook render
-   * đầy đủ giao diện.
+   * QUAN TRỌNG:
+   * active:true
+   *
+   * Bản cũ của bạn dùng active:false.
    */
   const tab =
     await chrome.tabs.create({
@@ -525,8 +601,8 @@ async function postGroup(
     );
 
     /*
-     * Chrome báo complete chưa chắc
-     * Facebook đã render xong.
+     * Facebook là SPA.
+     * Tab complete chưa có nghĩa DOM đã render.
      */
     await sleep(5000);
 
@@ -556,8 +632,10 @@ async function postGroup(
 
       return {
         ok: false,
+
         code:
           'checkpoint',
+
         error:
           'Facebook yêu cầu checkpoint.'
       };
@@ -578,15 +656,17 @@ async function postGroup(
 
       return {
         ok: false,
+
         code:
           'login',
+
         error:
           'Facebook chưa đăng nhập.'
       };
     }
 
     /*
-     * Luôn đưa Facebook lên foreground.
+     * Đảm bảo tab vẫn đang active.
      */
     await chrome.tabs.update(
       tab.id,
@@ -602,8 +682,7 @@ async function postGroup(
     let lastError = null;
 
     /*
-     * Thử nhiều lần để chắc chắn
-     * facebook_runner.js đã inject.
+     * Thử kết nối content script nhiều lần.
      */
     for (
       let i = 0;
@@ -617,8 +696,14 @@ async function postGroup(
             {
               type:
                 'FBPOST_POST',
-              content,
-              images
+
+              content:
+                content ||
+                '',
+
+              images:
+                images ||
+                []
             }
           );
 
@@ -626,7 +711,8 @@ async function postGroup(
           break;
         }
       } catch (e) {
-        lastError = e;
+        lastError =
+          e;
 
         console.log(
           'Chờ facebook_runner.js:',
@@ -635,12 +721,14 @@ async function postGroup(
         );
       }
 
-      await sleep(1000);
+      await sleep(
+        1000
+      );
     }
 
     if (!res) {
       throw new Error(
-        'Không kết nối được facebook_runner.js. ' +
+        'Không kết nối được script trên Facebook. ' +
         (
           lastError?.message ||
           ''
@@ -665,16 +753,16 @@ async function postGroup(
       return res;
     }
 
+    /*
+     * DEBUG:
+     * khi lỗi KHÔNG đóng tab.
+     */
     if (!res.ok) {
       console.error(
         'FB POST PRO ERROR:',
         res
       );
 
-      /*
-       * KHÔNG đóng tab khi lỗi.
-       * Giữ nguyên màn hình để debug.
-       */
       await chrome.tabs.update(
         tab.id,
         {
@@ -692,8 +780,8 @@ async function postGroup(
     );
 
     /*
-     * Tạm thời cũng giữ tab khi thành công.
-     * Khi mọi thứ ổn mới bật lại tự đóng.
+     * Trong lúc test:
+     * thành công cũng giữ tab.
      */
     return res;
 
@@ -715,6 +803,7 @@ async function postGroup(
 
     return {
       ok: false,
+
       error:
         e?.message ||
         String(e)
@@ -722,7 +811,9 @@ async function postGroup(
   }
 
   /*
-   * CỐ Ý KHÔNG có finally remove tab.
+   * CỐ Ý KHÔNG CÓ finally chrome.tabs.remove()
+   *
+   * để tab Facebook không đóng khi lỗi.
    */
 }
 
@@ -733,7 +824,8 @@ async function stoppableDelay(
   stats
 ) {
   while (
-    seconds > 0
+    seconds >
+    0
   ) {
     const ctl =
       await control(c);
@@ -746,29 +838,37 @@ async function stoppableDelay(
 
     const m =
       Math.floor(
-        seconds / 60
+        seconds /
+        60
       );
 
     const s =
-      seconds % 60;
+      seconds %
+      60;
 
     await report(
       c,
       {
         status:
           'delay',
+
         message:
           `Chờ ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} → Group ${nextIndex}`,
+
         processed:
           stats.processed,
+
         success:
           stats.success,
+
         errors:
           stats.errors
       }
     );
 
-    await sleep(1000);
+    await sleep(
+      1000
+    );
 
     seconds--;
   }
@@ -794,6 +894,7 @@ async function processJob(
       await chrome.tabs.create({
         url:
           'https://www.facebook.com/',
+
         active:
           true
       });
@@ -803,8 +904,10 @@ async function processJob(
         {
           status:
             'needs_facebook_login',
+
           message:
             'Facebook chưa đăng nhập. Hãy đăng nhập trên Chrome rồi chạy lại.',
+
           processed,
           success,
           errors
@@ -819,8 +922,10 @@ async function processJob(
       {
         status:
           'running',
+
         message:
           'Connector đã nhận chiến dịch. Đang chuẩn bị...',
+
         processed,
         success,
         errors
@@ -830,11 +935,13 @@ async function processJob(
     const images =
       await loadImages(
         c,
-        job.images || []
+        job.images ||
+        []
       );
 
     const groups =
-      job.groups || [];
+      job.groups ||
+      [];
 
     for (
       let i = 0;
@@ -852,8 +959,10 @@ async function processJob(
           {
             status:
               'stopped',
+
             message:
               'Chiến dịch đã dừng.',
+
             processed,
             success,
             errors
@@ -868,8 +977,10 @@ async function processJob(
         {
           status:
             'posting',
+
           message:
             `Đang đăng Group ${i + 1}/${groups.length}`,
+
           processed,
           success,
           errors
@@ -883,12 +994,14 @@ async function processJob(
           await postGroup(
             c,
             groups[i],
-            job.content || '',
+            job.content ||
+              '',
             images
           );
       } catch (e) {
         res = {
           ok: false,
+
           error:
             e?.message ||
             String(e)
@@ -905,12 +1018,16 @@ async function processJob(
           {
             status:
               'posting',
+
             event:
               'group_success',
+
             message:
               `Đăng thành công • ${job.campaign_name || 'Chiến dịch'}`,
+
             group_url:
               groups[i],
+
             processed,
             success,
             errors
@@ -924,15 +1041,20 @@ async function processJob(
           {
             status:
               'posting',
+
             event:
               'group_error',
+
             message:
               `Lỗi đăng bài • ${job.campaign_name || 'Chiến dịch'}`,
+
             group_url:
               groups[i],
+
             detail:
               res?.error ||
               'Lỗi không xác định',
+
             processed,
             success,
             errors
@@ -948,8 +1070,10 @@ async function processJob(
             {
               status:
                 'needs_facebook_login',
+
               message:
                 'Facebook đã mất phiên đăng nhập.',
+
               processed,
               success,
               errors
@@ -968,8 +1092,10 @@ async function processJob(
             {
               status:
                 'facebook_checkpoint',
+
               message:
                 'Facebook yêu cầu checkpoint/xác minh. Hãy xử lý trên tab vừa mở.',
+
               processed,
               success,
               errors
@@ -982,16 +1108,19 @@ async function processJob(
 
       if (
         i <
-        groups.length - 1
+        groups.length -
+          1
       ) {
         const seconds =
           rnd(
             job.min_delay,
             job.max_delay
-          ) * 60;
+          ) *
+          60;
 
         if (
-          seconds > 0
+          seconds >
+          0
         ) {
           const ok =
             await stoppableDelay(
@@ -1011,8 +1140,10 @@ async function processJob(
               {
                 status:
                   'stopped',
+
                 message:
                   'Chiến dịch đã dừng.',
+
                 processed,
                 success,
                 errors
@@ -1034,10 +1165,12 @@ async function processJob(
       c,
       {
         status,
+
         message:
           errors
             ? `Hoàn tất. Thành công ${success}, lỗi ${errors}.`
             : `Hoàn tất. Đăng thành công ${success}/${groups.length} Group.`,
+
         processed,
         success,
         errors
@@ -1049,17 +1182,21 @@ async function processJob(
       {
         status:
           'error',
+
         message:
           e?.message ||
           String(e),
+
         processed,
         success,
+
         errors:
           errors + 1
       }
     );
   } finally {
-    busy = false;
+    busy =
+      false;
   }
 }
 
@@ -1095,6 +1232,7 @@ async function poll() {
   } catch (e) {
     return {
       ok: false,
+
       error:
         e?.message ||
         String(e)
@@ -1116,7 +1254,8 @@ async function poll() {
       );
 
     if (
-      r.status === 401
+      r.status ===
+      401
     ) {
       await chrome.storage.local.remove([
         'deviceId',
@@ -1142,8 +1281,10 @@ async function poll() {
 
       return {
         ok: true,
+
         job:
           true,
+
         facebookLoggedIn:
           hb.facebookLoggedIn
       };
@@ -1151,16 +1292,20 @@ async function poll() {
 
     return {
       ok: true,
+
       job:
         false,
+
       facebookLoggedIn:
         hb.facebookLoggedIn,
+
       deviceName:
         'Google Chrome'
     };
   } catch (e) {
     return {
       ok: false,
+
       error:
         e?.message ||
         String(e)
@@ -1183,7 +1328,9 @@ chrome.runtime.onInstalled.addListener(
 );
 
 chrome.runtime.onStartup.addListener(
-  () => poll()
+  () => {
+    poll();
+  }
 );
 
 chrome.alarms.onAlarm.addListener(
@@ -1222,9 +1369,10 @@ chrome.runtime.onMessage.addListener(
       pairFromWeb(
         msg.serverOrigin,
         msg.code
-      ).then(
-        sendResponse
-      );
+      )
+        .then(
+          sendResponse
+        );
 
       return true;
     }
@@ -1236,25 +1384,28 @@ chrome.runtime.onMessage.addListener(
       Promise.all([
         cfg(),
         facebookLoggedIn()
-      ]).then(
-        (
-          [
-            c,
-            fb
-          ]
-        ) =>
-          sendResponse({
-            ok:
-              !!(
-                c.deviceId &&
-                c.token
-              ),
-            facebookLoggedIn:
-              fb,
-            deviceName:
-              'Google Chrome'
-          })
-      );
+      ])
+        .then(
+          (
+            [
+              c,
+              fb
+            ]
+          ) =>
+            sendResponse({
+              ok:
+                !!(
+                  c.deviceId &&
+                  c.token
+                ),
+
+              facebookLoggedIn:
+                fb,
+
+              deviceName:
+                'Google Chrome'
+            })
+        );
 
       return true;
     }

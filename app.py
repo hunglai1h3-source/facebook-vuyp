@@ -1289,30 +1289,156 @@ def logout():
 
 
 # ============================================================
-# GROUPS
+# GROUPS - POSTGRES PRODUCTION / FILE LOCAL FALLBACK
 # ============================================================
 
-def load_groups(
-    customer_id
-):
+def init_groups_table():
+    """
+    Tạo bảng lưu Group trên PostgreSQL.
 
-    path = (
-        customer_groups_file(
-            customer_id
-        )
+    Mỗi Group gắn với user_id/customer_id riêng,
+    nên khách A không nhìn thấy Group của khách B.
+
+    Khi deploy/update code trên Render,
+    dữ liệu trong PostgreSQL vẫn còn nguyên.
+    """
+
+    if not postgres_enabled():
+        return
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fbpostpro_groups (
+                    id BIGSERIAL PRIMARY KEY,
+
+                    customer_id VARCHAR(40) NOT NULL,
+
+                    group_url TEXT NOT NULL,
+
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+                    UNIQUE(customer_id, group_url)
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fbpostpro_groups_customer
+                ON fbpostpro_groups (customer_id)
+                """
+            )
+
+        conn.commit()
+
+
+def normalize_group_url(url):
+    """
+    Chuẩn hóa URL để hạn chế lưu trùng.
+
+    Ví dụ:
+    https://facebook.com/groups/123/
+    và
+    https://www.facebook.com/groups/123
+
+    sẽ được lưu gần như cùng một dạng.
+    """
+
+    url = str(url or "").strip()
+
+    if not url:
+        return ""
+
+    url = url.replace(
+        "https://facebook.com/",
+        "https://www.facebook.com/",
     )
 
-    if not path.exists():
+    url = url.replace(
+        "http://facebook.com/",
+        "https://www.facebook.com/",
+    )
 
+    url = url.replace(
+        "http://www.facebook.com/",
+        "https://www.facebook.com/",
+    )
+
+    # Bỏ query string kiểu ?ref=share...
+    url = url.split("?", 1)[0]
+
+    # Bỏ dấu / cuối
+    url = url.rstrip("/")
+
+    return url
+
+
+def load_groups(customer_id):
+    """
+    Production:
+        đọc Group từ PostgreSQL.
+
+    Local:
+        vẫn sử dụng groups.txt để test bình thường.
+    """
+
+    customer_id = sanitize_customer_id(
+        customer_id
+    )
+
+    if not customer_id:
         return []
 
+    # ========================================
+    # LOCAL FALLBACK
+    # ========================================
+
+    if not postgres_enabled():
+
+        path = customer_groups_file(
+            customer_id
+        )
+
+        if not path.exists():
+            return []
+
+        return [
+            normalize_group_url(x)
+            for x in path.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if normalize_group_url(x)
+        ]
+
+    # ========================================
+    # POSTGRES
+    # ========================================
+
+    init_groups_table()
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT group_url
+                FROM fbpostpro_groups
+                WHERE customer_id = %s
+                ORDER BY id ASC
+                """,
+                (
+                    customer_id,
+                ),
+            )
+
+            rows = cur.fetchall()
+
     return [
-        x.strip()
-        for x
-        in path.read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if x.strip()
+        row["group_url"]
+        for row in rows
+        if row.get("group_url")
     ]
 
 
@@ -1320,15 +1446,191 @@ def save_groups(
     customer_id,
     groups,
 ):
+    """
+    Đồng bộ toàn bộ danh sách Group.
 
-    customer_groups_file(
+    Hàm này giữ tương thích với code cũ:
+    add_group() và delete_group() không cần sửa.
+    """
+
+    customer_id = sanitize_customer_id(
         customer_id
-    ).write_text(
-        "\n".join(
-            groups
-        ),
-        encoding="utf-8",
     )
+
+    if not customer_id:
+        return
+
+    clean_groups = []
+
+    seen = set()
+
+    for group in groups or []:
+
+        group = normalize_group_url(
+            group
+        )
+
+        if not group:
+            continue
+
+        if group in seen:
+            continue
+
+        seen.add(group)
+
+        clean_groups.append(
+            group
+        )
+
+    # ========================================
+    # LOCAL FALLBACK
+    # ========================================
+
+    if not postgres_enabled():
+
+        customer_groups_file(
+            customer_id
+        ).write_text(
+            "\n".join(
+                clean_groups
+            ),
+            encoding="utf-8",
+        )
+
+        return
+
+    # ========================================
+    # POSTGRES
+    # ========================================
+
+    init_groups_table()
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+
+            # Xóa danh sách cũ của riêng khách này.
+            cur.execute(
+                """
+                DELETE FROM fbpostpro_groups
+                WHERE customer_id = %s
+                """,
+                (
+                    customer_id,
+                ),
+            )
+
+            # Lưu lại danh sách mới.
+            for group_url in clean_groups:
+
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_groups (
+                        customer_id,
+                        group_url
+                    )
+                    VALUES (%s, %s)
+                    ON CONFLICT (
+                        customer_id,
+                        group_url
+                    )
+                    DO NOTHING
+                    """,
+                    (
+                        customer_id,
+                        group_url,
+                    ),
+                )
+
+        conn.commit()
+
+
+def migrate_groups_file_to_postgres(
+    customer_id
+):
+    """
+    Import groups.txt cũ lên PostgreSQL một lần.
+
+    Nếu database đã có Group của tài khoản
+    thì không làm gì.
+    """
+
+    if not postgres_enabled():
+        return
+
+    customer_id = sanitize_customer_id(
+        customer_id
+    )
+
+    if not customer_id:
+        return
+
+    path = customer_groups_file(
+        customer_id
+    )
+
+    if not path.exists():
+        return
+
+    old_groups = [
+        normalize_group_url(x)
+        for x in path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if normalize_group_url(x)
+    ]
+
+    if not old_groups:
+        return
+
+    init_groups_table()
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM fbpostpro_groups
+                WHERE customer_id = %s
+                """,
+                (
+                    customer_id,
+                ),
+            )
+
+            row = cur.fetchone()
+
+            total = int(
+                row["total"]
+                if row
+                else 0
+            )
+
+            if total > 0:
+                return
+
+            for group_url in old_groups:
+
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_groups (
+                        customer_id,
+                        group_url
+                    )
+                    VALUES (%s, %s)
+                    ON CONFLICT (
+                        customer_id,
+                        group_url
+                    )
+                    DO NOTHING
+                    """,
+                    (
+                        customer_id,
+                        group_url,
+                    ),
+                )
+
+        conn.commit()
 
 
 # ============================================================
