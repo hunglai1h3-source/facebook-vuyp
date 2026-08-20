@@ -1,648 +1,575 @@
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-let FBPOST_LOCK = null;
+function visible(el){
+  if(!el) return false;
+  const r=el.getBoundingClientRect();
+  const s=getComputedStyle(el);
+  return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0';
+}
 
-function visible(el) {
-    if (!el) return false;
+async function waitFor(fn,timeout=25000,step=250){
+  const end=Date.now()+timeout;
+  while(Date.now()<end){
+    try{
+      const v=fn();
+      if(v)return v;
+    }catch(e){}
+    await sleep(step);
+  }
+  return null;
+}
 
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
+function pageNeedsLogin(){
+  const u=location.href.toLowerCase();
+  if(u.includes('/checkpoint')) return 'checkpoint';
 
+  if(
+    u.includes('/login') ||
+    document.querySelector('input[name="email"],input[name="pass"]')
+  ) return 'login';
+
+  return '';
+}
+
+function textOf(el){
+  return (el?.innerText||el?.textContent||'')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function findComposerTrigger(){
+  const needles=[
+    'bạn viết gì đi',
+    'bạn viết gì',
+    'bạn đang nghĩ gì',
+    'viết gì đó',
+    'tạo bài viết',
+    'write something',
+    "what's on your mind",
+    'create a public post',
+    'create post'
+  ];
+
+  const els=[
+    ...document.querySelectorAll(
+      '[role="button"],button,div[tabindex="0"]'
+    )
+  ].filter(visible);
+
+  for(const el of els){
+    const t=(
+      textOf(el)+' '+
+      (el.getAttribute('aria-label')||'')
+    ).toLowerCase();
+
+    if(needles.some(n=>t.includes(n))){
+      return el;
+    }
+  }
+
+  return null;
+}
+
+function textboxCandidates(root=document){
+  const selectors=[
+    '[contenteditable="true"][data-lexical-editor="true"]',
+    '[role="textbox"][contenteditable="true"]',
+    '[contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"][aria-label]',
+    'div[contenteditable="true"]'
+  ];
+
+  const seen=new Set();
+  const out=[];
+
+  for(const sel of selectors){
+    for(const el of root.querySelectorAll(sel)){
+      if(seen.has(el)||!visible(el)) continue;
+
+      seen.add(el);
+
+      const r=el.getBoundingClientRect();
+
+      // Bỏ qua những editor quá nhỏ như comment/reaction.
+      if(r.width<120||r.height<20) continue;
+
+      out.push(el);
+    }
+  }
+
+  return out;
+}
+
+function findPostTextbox(root=document){
+  const boxes=textboxCandidates(root);
+
+  if(!boxes.length) return null;
+
+  boxes.sort((a,b)=>{
+    const score=el=>{
+      let s=0;
+
+      if(el.getAttribute('data-lexical-editor')==='true'){
+        s+=1000000;
+      }
+
+      if(el.getAttribute('role')==='textbox'){
+        s+=500000;
+      }
+
+      const label=(
+        el.getAttribute('aria-label')||''
+      ).toLowerCase();
+
+      if(/bài viết|post|mind|viết|write/.test(label)){
+        s+=250000;
+      }
+
+      const r=el.getBoundingClientRect();
+
+      return s+r.width*r.height;
+    };
+
+    return score(b)-score(a);
+  });
+
+  return boxes[0];
+}
+
+function findDialog(){
+  const dialogs=[
+    ...document.querySelectorAll('div[role="dialog"]')
+  ].filter(visible);
+
+  const preferred=[];
+  const fallback=[];
+
+  for(const d of dialogs){
+    const label=(
+      (d.getAttribute('aria-label')||'')+
+      ' '+
+      textOf(d).slice(0,500)
+    ).toLowerCase();
+
+    const box=findPostTextbox(d);
+
+    if(
+      box &&
+      /tạo bài viết|create post|bài viết|post/.test(label)
+    ){
+      preferred.push(d);
+    }
+    else if(box){
+      fallback.push(d);
+    }
+  }
+
+  return preferred.at(-1)||fallback.at(-1)||null;
+}
+
+async function openComposer(){
+
+  // Không dùng nhầm dialog khác chỉ vì nó có contenteditable.
+  let d=findDialog();
+
+  if(d) return d;
+
+  const trigger=await waitFor(
+    findComposerTrigger,
+    20000
+  );
+
+  if(!trigger){
+    throw new Error(
+      'Không tìm thấy ô tạo bài viết trong Group.'
+    );
+  }
+
+  trigger.scrollIntoView({
+    block:'center',
+    inline:'center'
+  });
+
+  await sleep(250);
+
+  trigger.click();
+
+  d=await waitFor(
+    findDialog,
+    25000
+  );
+
+  if(d) return d;
+
+  /*
+   * Một số phiên bản Facebook không render
+   * composer bằng role="dialog".
+   */
+  const box=await waitFor(
+    ()=>findPostTextbox(document),
+    8000
+  );
+
+  if(box){
     return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        style.visibility !== "hidden" &&
-        style.display !== "none"
+      box.closest('[role="dialog"]') ||
+      document.body
     );
+  }
+
+  throw new Error(
+    'Không mở được cửa sổ Tạo bài viết.'
+  );
 }
 
-async function waitFor(fn, timeout = 20000, step = 250) {
-    const end = Date.now() + timeout;
+async function fillText(dialog,content){
 
-    while (Date.now() < end) {
-        try {
-            const value = fn();
-            if (value) return value;
-        } catch (e) {}
+  let box=await waitFor(
+    ()=>findPostTextbox(dialog),
+    12000
+  );
 
-        await sleep(step);
-    }
+  if(!box){
+    box=await waitFor(
+      ()=>findPostTextbox(document),
+      6000
+    );
+  }
 
-    return null;
-}
+  if(!box){
+    throw new Error(
+      'Không tìm thấy ô nhập nội dung. Facebook có thể đã đổi giao diện.'
+    );
+  }
 
-function pageNeedsLogin() {
-    const url = location.href.toLowerCase();
+  box.scrollIntoView({
+    block:'center'
+  });
 
-    if (url.includes("/checkpoint")) {
-        return "checkpoint";
-    }
+  box.focus();
 
-    if (
-        url.includes("/login") ||
-        document.querySelector('input[name="email"], input[name="pass"]')
-    ) {
-        return "login";
-    }
+  await sleep(250);
 
-    return "";
-}
+  /*
+   * Facebook dùng Lexical Editor.
+   * execCommand thường hoạt động ổn định hơn
+   * việc gán trực tiếp innerText.
+   */
+  try{
 
-function textOf(el) {
-    return (el?.innerText || el?.textContent || "")
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
-// ============================================================
-// KHÓA THAO TÁC NGƯỜI DÙNG KHI ĐANG ĐĂNG
-// ============================================================
-
-function lockUserInteraction() {
-    if (FBPOST_LOCK) return;
-
-    const events = [
-        "pointerdown",
-        "pointerup",
-        "mousedown",
-        "mouseup",
-        "click",
-        "dblclick",
-        "contextmenu",
-        "wheel",
-        "touchstart",
-        "touchmove",
-        "keydown",
-        "keyup"
-    ];
-
-    const blocker = event => {
-        // Không chặn click do code tạo ra.
-        if (!event.isTrusted) return;
-
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-    };
-
-    for (const eventName of events) {
-        window.addEventListener(eventName, blocker, true);
-    }
-
-    const overlay = document.createElement("div");
-    overlay.id = "fbpostpro-running-lock";
-
-    Object.assign(overlay.style, {
-        position: "fixed",
-        inset: "0",
-        zIndex: "2147483647",
-        background: "rgba(0, 0, 0, 0.02)",
-        pointerEvents: "auto",
-        cursor: "wait"
-    });
-
-    const notice = document.createElement("div");
-    notice.innerHTML = `
-        <div style="font-weight:700;font-size:15px;margin-bottom:5px;">
-            FB POST PRO đang đăng bài
-        </div>
-        <div style="font-size:13px;opacity:.85;">
-            Bạn có thể xem tab này. Thao tác chuột tạm thời được khóa để tránh làm gián đoạn chiến dịch.
-        </div>
-    `;
-
-    Object.assign(notice.style, {
-        position: "fixed",
-        top: "18px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        width: "min(520px, calc(100% - 32px))",
-        padding: "14px 18px",
-        borderRadius: "14px",
-        color: "#fff",
-        background: "rgba(25,25,30,.94)",
-        boxShadow: "0 8px 30px rgba(0,0,0,.25)",
-        fontFamily: "Arial, sans-serif",
-        textAlign: "center",
-        pointerEvents: "none"
-    });
-
-    overlay.appendChild(notice);
-    document.documentElement.appendChild(overlay);
-
-    FBPOST_LOCK = {
-        events,
-        blocker,
-        overlay
-    };
-}
-
-function unlockUserInteraction() {
-    if (!FBPOST_LOCK) return;
-
-    for (const eventName of FBPOST_LOCK.events) {
-        window.removeEventListener(
-            eventName,
-            FBPOST_LOCK.blocker,
-            true
-        );
-    }
-
-    try {
-        FBPOST_LOCK.overlay?.remove();
-    } catch (e) {}
-
-    FBPOST_LOCK = null;
-}
-
-// ============================================================
-// TÌM VÀ MỞ HỘP TẠO BÀI
-// ============================================================
-
-function findComposerTrigger() {
-    const elements = [
-        ...document.querySelectorAll(
-            '[role="button"], div[tabindex="0"]'
-        )
-    ].filter(visible);
-
-    const needles = [
-        "bạn viết gì đi",
-        "bạn viết gì",
-        "viết gì đó",
-        "write something",
-        "create a public post",
-        "tạo bài viết"
-    ];
-
-    for (const el of elements) {
-        const text = textOf(el).toLowerCase();
-
-        if (needles.some(needle => text.includes(needle))) {
-            return el;
-        }
-    }
-
-    return null;
-}
-
-function findDialog() {
-    const dialogs = [
-        ...document.querySelectorAll('div[role="dialog"]')
-    ].filter(visible);
-
-    for (const dialog of dialogs) {
-        if (
-            dialog.querySelector('[contenteditable="true"]') ||
-            dialog.querySelector('[role="textbox"]')
-        ) {
-            return dialog;
-        }
-    }
-
-    return dialogs[dialogs.length - 1] || null;
-}
-
-async function openComposer() {
-    let dialog = findDialog();
-
-    if (dialog) {
-        return dialog;
-    }
-
-    const trigger = await waitFor(
-        findComposerTrigger,
-        15000,
-        250
+    document.execCommand(
+      'selectAll',
+      false,
+      null
     );
 
-    if (!trigger) {
-        throw new Error(
-            "Không tìm thấy ô tạo bài viết trong Group."
-        );
-    }
-
-    trigger.click();
-
-    dialog = await waitFor(
-        findDialog,
-        15000,
-        250
+    document.execCommand(
+      'delete',
+      false,
+      null
     );
 
-    if (!dialog) {
-        throw new Error(
-            "Không mở được cửa sổ Tạo bài viết."
-        );
-    }
-
-    return dialog;
-}
-
-// ============================================================
-// TÌM Ô NHẬP NỘI DUNG
-// ============================================================
-
-function findPostTextbox(dialog) {
-    const selectors = [
-        '[role="textbox"][contenteditable="true"]',
-        '[contenteditable="true"][role="textbox"]',
-        '[contenteditable="true"][data-lexical-editor="true"]',
-        'div[contenteditable="true"]'
-    ];
-
-    const roots = [];
-
-    if (dialog) {
-        roots.push(dialog);
-    }
-
-    roots.push(document);
-
-    for (const root of roots) {
-        for (const selector of selectors) {
-            const boxes = [
-                ...root.querySelectorAll(selector)
-            ].filter(visible);
-
-            for (const box of boxes) {
-                const aria = (
-                    box.getAttribute("aria-label") || ""
-                ).toLowerCase();
-
-                const placeholder = (
-                    box.getAttribute("data-placeholder") || ""
-                ).toLowerCase();
-
-                // Loại các ô không phải ô viết bài.
-                if (
-                    aria.includes("bình luận") ||
-                    aria.includes("comment") ||
-                    aria.includes("tìm kiếm") ||
-                    aria.includes("search")
-                ) {
-                    continue;
-                }
-
-                // Ưu tiên các nhãn thường gặp của Facebook.
-                if (
-                    aria.includes("bạn viết gì") ||
-                    aria.includes("write something") ||
-                    aria.includes("tạo bài") ||
-                    aria.includes("create post") ||
-                    placeholder.includes("bạn viết gì") ||
-                    placeholder.includes("write something")
-                ) {
-                    return box;
-                }
-
-                // Nếu nằm trong dialog tạo bài thì ưu tiên luôn.
-                if (dialog && dialog.contains(box)) {
-                    return box;
-                }
-
-                if (
-                    box.getAttribute("contenteditable") === "true" &&
-                    box.getAttribute("role") === "textbox"
-                ) {
-                    return box;
-                }
-            }
-        }
-    }
-
-    return null;
-}
-
-async function fillText(dialog, content) {
-    const box = await waitFor(
-        () => findPostTextbox(dialog),
-        20000,
-        300
+    document.execCommand(
+      'insertText',
+      false,
+      content
     );
 
-    if (!box) {
-        throw new Error(
-            "Không tìm thấy ô nhập nội dung Facebook."
-        );
-    }
+  }catch(e){}
 
-    box.scrollIntoView({
-        block: "center",
-        inline: "nearest"
-    });
+  /*
+   * Nếu cách trên chưa nhập được chữ
+   * thì thử lại bằng Range.
+   */
+  if(
+    content &&
+    !textOf(box).includes(
+      content.slice(
+        0,
+        Math.min(20,content.length)
+      )
+    )
+  ){
 
     box.focus();
-    await sleep(400);
 
-    // Xóa nội dung cũ trong chính textbox.
-    try {
-        const selection = window.getSelection();
-        const range = document.createRange();
+    const sel=window.getSelection();
 
-        range.selectNodeContents(box);
-        selection.removeAllRanges();
-        selection.addRange(range);
+    const range=document.createRange();
 
-        document.execCommand(
-            "delete",
-            false,
-            null
-        );
-    } catch (e) {}
+    range.selectNodeContents(box);
 
-    await sleep(200);
+    sel.removeAllRanges();
 
-    let inserted = false;
+    sel.addRange(range);
 
-    // Cách Facebook/Lexical thường nhận tốt nhất.
-    try {
-        inserted = document.execCommand(
-            "insertText",
-            false,
-            content
-        );
-    } catch (e) {}
-
-    // Fallback nếu execCommand không nhập được.
-    if (
-        !inserted ||
-        !(box.innerText || box.textContent || "").trim()
-    ) {
-        try {
-            box.textContent = content;
-
-            box.dispatchEvent(
-                new InputEvent(
-                    "input",
-                    {
-                        bubbles: true,
-                        inputType: "insertText",
-                        data: content
-                    }
-                )
-            );
-        } catch (e) {
-            box.textContent = content;
-
-            box.dispatchEvent(
-                new Event(
-                    "input",
-                    {
-                        bubbles: true
-                    }
-                )
-            );
-        }
-    }
-
-    box.dispatchEvent(
-        new Event(
-            "change",
-            {
-                bubbles: true
-            }
-        )
+    document.execCommand(
+      'insertText',
+      false,
+      content
     );
+  }
 
-    await sleep(1000);
+  box.dispatchEvent(
+    new InputEvent(
+      'input',
+      {
+        bubbles:true,
+        inputType:'insertText',
+        data:content
+      }
+    )
+  );
 
-    const finalText = (
-        box.innerText ||
-        box.textContent ||
-        ""
-    ).trim();
+  box.dispatchEvent(
+    new Event(
+      'change',
+      {
+        bubbles:true
+      }
+    )
+  );
 
-    if (!finalText && String(content || "").trim()) {
-        throw new Error(
-            "Đã tìm thấy ô nhập nhưng Facebook chưa nhận nội dung."
-        );
-    }
+  await sleep(800);
 }
 
-// ============================================================
-// XỬ LÝ ẢNH
-// ============================================================
+function b64ToFile(item){
 
-function b64ToFile(item) {
-    const binary = atob(item.base64);
-    const bytes = new Uint8Array(binary.length);
+  const bin=atob(item.base64);
 
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+  const bytes=new Uint8Array(
+    bin.length
+  );
+
+  for(let i=0;i<bin.length;i++){
+    bytes[i]=bin.charCodeAt(i);
+  }
+
+  return new File(
+    [bytes],
+    item.name||'image.jpg',
+    {
+      type:item.mime||'image/jpeg'
     }
-
-    return new File(
-        [bytes],
-        item.name || "image.jpg",
-        {
-            type: item.mime || "image/jpeg"
-        }
-    );
+  );
 }
 
-async function attachImages(dialog, images) {
-    if (!images?.length) {
-        return;
-    }
+async function attachImages(dialog,images){
 
-    let input = dialog.querySelector(
-        'input[type="file"]'
+  if(!images?.length) return;
+
+  let input=
+    dialog.querySelector(
+      'input[type="file"]'
+    ) ||
+    document.querySelector(
+      'input[type="file"][accept*="image"]'
     );
 
-    if (!input) {
-        const controls = [
-            ...dialog.querySelectorAll(
-                '[role="button"], button, div[tabindex="0"]'
-            )
-        ].filter(visible);
+  if(!input){
 
-        const button = controls.find(el =>
-            /ảnh\/?video|photo\/?video/i.test(textOf(el))
-        );
-
-        if (button) {
-            button.click();
-            await sleep(900);
-
-            input = dialog.querySelector(
-                'input[type="file"]'
-            );
-        }
-    }
-
-    if (!input) {
-        throw new Error(
-            "Không tìm thấy ô upload ảnh."
-        );
-    }
-
-    const transfer = new DataTransfer();
-
-    for (const item of images) {
-        transfer.items.add(
-            b64ToFile(item)
-        );
-    }
-
-    input.files = transfer.files;
-
-    input.dispatchEvent(
-        new Event(
-            "input",
-            {
-                bubbles: true
-            }
-        )
-    );
-
-    input.dispatchEvent(
-        new Event(
-            "change",
-            {
-                bubbles: true
-            }
-        )
-    );
-
-    await sleep(
-        Math.max(
-            3500,
-            images.length * 1800
-        )
-    );
-}
-
-// ============================================================
-// BẤM NÚT ĐĂNG
-// ============================================================
-
-async function clickPost(dialog) {
-    const candidates = [
-        ...dialog.querySelectorAll(
-            '[role="button"], button'
-        )
+    const controls=[
+      ...dialog.querySelectorAll(
+        '[role="button"],button,div[tabindex="0"]'
+      )
     ].filter(visible);
 
-    let button = candidates.find(el =>
-        /^(đăng|post)$/i.test(textOf(el))
+    const btn=controls.find(
+      el=>
+        /ảnh\/?video|photo\/?video/i.test(
+          textOf(el)+
+          ' '+
+          (el.getAttribute('aria-label')||'')
+        )
     );
 
-    if (!button) {
-        button = candidates.find(el =>
-            /\bđăng\b|\bpost\b/i.test(textOf(el))
+    if(btn){
+
+      btn.click();
+
+      await sleep(1200);
+
+      input=
+        dialog.querySelector(
+          'input[type="file"]'
+        ) ||
+        document.querySelector(
+          'input[type="file"][accept*="image"]'
         );
     }
+  }
 
-    if (!button) {
-        throw new Error(
-            "Không tìm thấy nút Đăng."
-        );
-    }
-
-    const ready = await waitFor(
-        () =>
-            !button.hasAttribute("aria-disabled") &&
-            button.getAttribute("aria-disabled") !== "true" &&
-            !button.disabled,
-        30000,
-        300
+  if(!input){
+    throw new Error(
+      'Không tìm thấy ô upload ảnh.'
     );
+  }
 
-    if (!ready) {
-        throw new Error(
-            "Nút Đăng chưa sẵn sàng."
-        );
-    }
+  const dt=new DataTransfer();
 
-    button.click();
-
-    const gone = await waitFor(
-        () =>
-            !document.contains(dialog) ||
-            !visible(dialog),
-        60000,
-        500
+  for(const item of images){
+    dt.items.add(
+      b64ToFile(item)
     );
+  }
 
-    if (!gone) {
-        throw new Error(
-            "Đã bấm Đăng nhưng cửa sổ tạo bài chưa đóng."
-        );
-    }
+  input.files=dt.files;
+
+  input.dispatchEvent(
+    new Event(
+      'input',
+      {
+        bubbles:true
+      }
+    )
+  );
+
+  input.dispatchEvent(
+    new Event(
+      'change',
+      {
+        bubbles:true
+      }
+    )
+  );
+
+  await sleep(
+    Math.max(
+      4000,
+      images.length*1800
+    )
+  );
 }
 
-// ============================================================
-// CHẠY 1 GROUP
-// ============================================================
+async function clickPost(dialog){
 
-async function postCurrentGroup(payload) {
-    const state = pageNeedsLogin();
+  const candidates=[
+    ...dialog.querySelectorAll(
+      '[role="button"],button'
+    )
+  ].filter(visible);
 
-    if (state === "checkpoint") {
-        return {
-            ok: false,
-            code: "checkpoint",
-            error: "Facebook yêu cầu checkpoint/xác minh."
-        };
-    }
+  let btn=candidates.find(
+    el=>
+      /^(đăng|post)$/i.test(
+        textOf(el)
+      )
+  );
 
-    if (state === "login") {
-        return {
-            ok: false,
-            code: "login",
-            error: "Facebook chưa đăng nhập."
-        };
-    }
+  if(!btn){
 
-    lockUserInteraction();
+    btn=candidates.find(
+      el=>
+        /\bđăng\b|\bpost\b/i.test(
+          textOf(el)+
+          ' '+
+          (el.getAttribute('aria-label')||'')
+        )
+    );
+  }
 
-    try {
-        await sleep(1800);
+  if(!btn){
+    throw new Error(
+      'Không tìm thấy nút Đăng.'
+    );
+  }
 
-        const dialog = await openComposer();
+  const ready=await waitFor(
+    ()=>
+      !btn.hasAttribute('disabled') &&
+      btn.getAttribute('aria-disabled')!=='true',
+    30000
+  );
 
-        await fillText(
-            dialog,
-            payload.content || ""
-        );
+  if(!ready){
+    throw new Error(
+      'Nút Đăng chưa sẵn sàng.'
+    );
+  }
 
-        await attachImages(
-            dialog,
-            payload.images || []
-        );
+  btn.scrollIntoView({
+    block:'center'
+  });
 
-        await clickPost(dialog);
+  btn.click();
 
-        return {
-            ok: true
-        };
-    } finally {
-        unlockUserInteraction();
-    }
+  const gone=await waitFor(
+    ()=>
+      !document.contains(dialog) ||
+      !visible(dialog),
+    60000,
+    500
+  );
+
+  if(!gone){
+    throw new Error(
+      'Đã bấm Đăng nhưng cửa sổ tạo bài chưa đóng.'
+    );
+  }
 }
 
-// ============================================================
-// NHẬN LỆNH TỪ SERVICE WORKER
-// ============================================================
+async function postCurrentGroup(payload){
+
+  const state=pageNeedsLogin();
+
+  if(state==='checkpoint'){
+    return {
+      ok:false,
+      code:'checkpoint',
+      error:'Facebook yêu cầu checkpoint/xác minh.'
+    };
+  }
+
+  if(state==='login'){
+    return {
+      ok:false,
+      code:'login',
+      error:'Facebook chưa đăng nhập.'
+    };
+  }
+
+  await sleep(2200);
+
+  const dialog=
+    await openComposer();
+
+  await fillText(
+    dialog,
+    payload.content||''
+  );
+
+  await attachImages(
+    dialog,
+    payload.images||[]
+  );
+
+  await clickPost(
+    dialog
+  );
+
+  return {
+    ok:true
+  };
+}
 
 chrome.runtime.onMessage.addListener(
-    (msg, sender, sendResponse) => {
-        if (msg?.type !== "FBPOST_POST") {
-            return;
-        }
+  (msg,sender,sendResponse)=>{
 
-        postCurrentGroup(msg)
-            .then(sendResponse)
-            .catch(error =>
-                sendResponse({
-                    ok: false,
-                    error:
-                        error?.message ||
-                        String(error)
-                })
-            );
-
-        return true;
+    if(msg?.type!=='FBPOST_POST'){
+      return;
     }
+
+    postCurrentGroup(msg)
+      .then(sendResponse)
+      .catch(
+        e=>sendResponse({
+          ok:false,
+          error:
+            e?.message||
+            String(e)
+        })
+      );
+
+    return true;
+  }
 );
