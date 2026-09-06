@@ -1,0 +1,23 @@
+{
+  "templates/base.html": "252fbf341164459d0a6ac16d8c7a8620362544382385b66352858749403bb9f8",
+  "templates/compose.html": "7b4c9b3478c1e75f3017df708c55fb78697a9e6b44508d1158ab771063a073a6",
+  "templates/dashboard.html": "5d656c67051a4e861984d64020fe2d2f55d9cb06eafe5dbd751506268bac1916",
+  "templates/groups.html": "b60f4b0aea67d76964f6445a8440bbed4547a417c42a321a3b8f6a35ecf55a30",
+  "templates/history.html": "40e6987d8b97bc6251cf89ceda3901ec47125c5aaf9300ba05fd8d3d754d4f08",
+  "templates/login.html": "cfd2c7bfd46b1877d2dda7179652688e7e26467c21e6058ef50f633bcfe3e24b",
+  "templates/register.html": "84563d832c24112378dc98fd23d3e00a287e2d2c59c2859d418347c60f8d466f",
+  "templates/settings.html": "f60da0c5eba6d1c630abdfa29462bc9fd61a2655791de239961b436f8c7fbbfc",
+  "extension/facebook_runner.js": "f4b3bd44ba6876232220ae30560763de6f46e15bd08510985981ce7608503088",
+  "extension/manifest.json": "355e6e61b17b706d7f1a9f201762da69bf2f20e6c7a8b6ec143a7cdc8bc5b0bd",
+  "extension/popup.css": "d37eaa1b9813d7cf2a1cad1a82b7e35f3ce77878bd07a693d1ead0870148edfa",
+  "extension/popup.html": "a183bc69f1efad08638c7c4749120b3bcd7a5fb67f56d11964e5a91c033ccff3",
+  "extension/popup.js": "416cd40de772deef63a2d58794f54f38a0f831433aadf3dd2edd029bf1baa85b",
+  "extension/service_worker.js": "ff447bd831e74adb3d8f632f3f494a9b49ca8110c848df8991a6d1a02acaa9d1",
+  "extension/web_bridge.js": "bc7aee86ad4121a1487045b89b4fc7a8f9bd7d5a3e173b51d997cd36fe51ce62",
+  "app.py": "f076b4d06e035fca345180e21a5957e0717cd3a24cca56eacccf1c31a69681f8",
+  "render.yaml": "0081d3c850f42422b2345896607525225df5df5fd2456b79a7a262a10d11b675",
+  "requirements.txt": "fd7140df5a91790171a2b7044da2fe618c5939f9f7dd507237544d8515d91a60",
+  ".env.example": "69d9e25d28c2400f0a2373099a856f01845e6d135c046a2a937cea2d5b573a55",
+  ".python-version": "02e735b3dfe1c32833eb550b7ff8ffa17f5f2bc3fa1e7bae61a8f5a3883ce398",
+  "run_local.bat": "14abdb32e528b94ccf4c5463b8ebfcafb3d0d8062c4c70cff09d033cf92f90c0"
+}

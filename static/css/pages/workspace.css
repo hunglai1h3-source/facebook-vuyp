@@ -1,0 +1,18 @@
+/* Shared presentation for redesigned workspace pages; no new controls or data. */
+body .page { max-width: 2000px; margin-inline: auto; padding: clamp(16px, 2.4vw, 48px); padding-bottom: 64px; }
+.page > section { min-width: 0; }
+.page .section-title { font-size: clamp(18px, 1.3vw, 24px); }
+.page .eyebrow { color: var(--text3); letter-spacing: .1em; }
+.page .panel { background: linear-gradient(150deg, var(--accent-tint), transparent 35%), var(--surface); }
+.page .card-pad-lg { padding: clamp(20px, 2vw, 32px); }
+.page .section-header > * { min-width: 0; overflow-wrap: anywhere; }
+.page .btn svg { flex-shrink: 0; }
+.page .panel, .page .stat-card { animation: workspace-enter 320ms var(--ease-out); }
+@keyframes workspace-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 600px) {
+  body .page { padding: 20px 16px 48px; }
+  .page .card-pad-lg { padding: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page .panel, .page .stat-card { animation: none; }
+}

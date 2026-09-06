@@ -1,0 +1,51 @@
+/* Presentation only. No hidden entrance state or business-state transitions. */
+html { scroll-behavior: smooth; }
+.page { animation: ds-page-in var(--duration-enter) var(--ease-out); }
+.pulse.pulsing { animation: ds-pulse 2s ease-in-out infinite; }
+.toast { animation: ds-toast-in 220ms var(--ease-out); }
+/* Existing closeToast() removes the element after 200ms; keep exit below that. */
+.toast.removing { animation: ds-toast-out 180ms ease-in forwards; }
+dialog.ds-dialog[open] { animation: ds-dialog-in var(--duration-normal) var(--ease-out); }
+.ds-spinner { animation: ds-spin 800ms linear infinite; }
+.skeleton::after { animation: ds-shimmer 1600ms ease-in-out infinite; }
+
+@keyframes ds-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ds-pulse { 50% { opacity: 0.55; } }
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ds-toast-out { to { opacity: 0; transform: translateY(8px); } }
+@keyframes ds-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+@keyframes ds-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+/* ui-motion.js only toggles this flag; existing click handlers are untouched. */
+html[data-ui-paused] *, html[data-ui-paused] *::before, html[data-ui-paused] *::after {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .page, .auth-wrapper, .toast, .toast.removing, dialog.ds-dialog[open],
+  .ds-spinner, .pulse.pulsing, .skeleton::after { animation: none !important; }
+  .skeleton::after { opacity: 0; }
+  /* Preserve the sidebar transform: it controls the mobile drawer's visibility. */
+  .btn:hover, .btn:active, .btn-login:hover, .btn-login:active,
+  .btn-login:hover svg { transform: none !important; }
+}

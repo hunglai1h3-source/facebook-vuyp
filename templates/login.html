@@ -5,29 +5,195 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Đăng nhập • FB POST PRO</title>
-<style>
-*{box-sizing:border-box}:root{--bg:#070a12;--panel:#101727;--line:rgba(255,255,255,.09);--text:#f8fafc;--muted:#94a3b8;--violet:#7c3aed;--blue:#2563eb;--red:#ef4444}body{margin:0;min-height:100vh;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text);background:radial-gradient(circle at 13% 9%,rgba(124,58,237,.25),transparent 30%),radial-gradient(circle at 88% 88%,rgba(37,99,235,.18),transparent 32%),var(--bg);display:grid;place-items:center;padding:24px}.shell{width:min(1040px,100%);min-height:610px;display:grid;grid-template-columns:1.08fr .92fr;border:1px solid var(--line);border-radius:30px;overflow:hidden;background:rgba(8,12,23,.89);box-shadow:0 38px 110px rgba(0,0,0,.48);backdrop-filter:blur(18px)}.visual{padding:55px;position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(124,58,237,.22),rgba(37,99,235,.07))}.visual:before,.visual:after{content:"";position:absolute;border-radius:50%;filter:blur(4px)}.visual:before{width:300px;height:300px;right:-120px;top:-90px;background:rgba(59,130,246,.15)}.visual:after{width:280px;height:280px;left:-130px;bottom:-120px;background:rgba(139,92,246,.16)}.brand{position:relative;z-index:2;display:flex;align-items:center;gap:13px}.logo{width:51px;height:51px;border-radius:16px;display:grid;place-items:center;font-weight:950;background:linear-gradient(135deg,#8b5cf6,#2563eb);box-shadow:0 14px 36px rgba(99,102,241,.32)}.brand strong{font-size:18px}.brand small{display:block;color:#a5b4fc;font-size:11px;margin-top:3px}.visual-copy{position:relative;z-index:2;margin-top:100px}.eyebrow{font-size:10px;letter-spacing:.18em;font-weight:850;color:#a78bfa}.visual h1{font-size:47px;line-height:1.02;letter-spacing:-1.8px;margin:14px 0 18px;max-width:520px}.visual p{font-size:14px;line-height:1.75;color:#cbd5e1;max-width:490px}.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:28px}.chip{font-size:11px;padding:8px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);color:#dbeafe}.login{padding:52px 48px;display:flex;flex-direction:column;justify-content:center}.login .eyebrow{margin-bottom:7px}.login h2{font-size:29px;margin:0 0 8px;letter-spacing:-.5px}.sub{font-size:13px;line-height:1.65;color:var(--muted);margin-bottom:24px}.error{padding:11px 13px;border-radius:12px;border:1px solid rgba(239,68,68,.23);background:rgba(239,68,68,.07);color:#fecaca;font-size:12px;margin-bottom:13px}.field{margin-bottom:14px}.field label{display:block;font-size:11px;color:#cbd5e1;font-weight:750;margin-bottom:8px}.field input[type="text"],.field input[type="password"]{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:13px;background:#090f1d;color:#fff;outline:none;font-size:14px}.field input:focus{border-color:rgba(124,58,237,.65);box-shadow:0 0 0 4px rgba(124,58,237,.1)}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 15px;font-size:11px;color:var(--muted)}.remember{display:flex;align-items:center;gap:8px}.remember input{accent-color:#7c3aed}.submit{width:100%;border:0;border-radius:13px;padding:14px 15px;color:white;font-weight:850;cursor:pointer;background:linear-gradient(135deg,#7c3aed,#2563eb);box-shadow:0 14px 34px rgba(99,102,241,.27)}.register-link{text-align:center;margin-top:18px;color:var(--muted);font-size:12px}.register-link a{color:#c4b5fd;text-decoration:none;font-weight:800}.security{text-align:center;color:#5f6d86;font-size:10px;margin-top:20px}.next{display:none}@media(max-width:800px){.shell{grid-template-columns:1fr;min-height:auto}.visual{display:none}.login{padding:38px 26px}}
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/auth.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/login.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/motion.css') }}">
+<script defer src="{{ url_for('static', filename='js/ui-motion.js') }}"></script>
 </head>
 <body>
-<div class="shell">
-  <section class="visual">
-    <div class="brand"><div class="logo">FB</div><div><strong>FB POST PRO</strong><small>Local Chrome</small></div></div>
-    <div class="visual-copy"><div class="eyebrow">MULTI-USER AUTOMATION</div><h1>Quản lý chiến dịch Facebook trong một nơi.</h1><p>Đăng nhập để quản lý Groups, nội dung, lịch sử chiến dịch và Chrome profile Facebook riêng cho tài khoản của bạn.</p><div class="chips"><span class="chip">🌐 Chrome</span><span class="chip">◉ PostgreSQL</span><span class="chip">⚡ Local</span></div></div>
+
+<main class="auth-wrapper">
+  <!-- LEFT: SHOWCASE VISUAL -->
+  <section class="showcase-pane">
+    <div class="brand-top">
+      <div class="brand-icon">FB</div>
+      <div class="brand-meta">
+        <strong>FB POST PRO</strong>
+        <small>Automation Suite &amp; Connector</small>
+      </div>
+    </div>
+
+    <div class="showcase-body">
+      <div class="hero-tag">
+        <span class="live-dot"></span>
+        HỆ THỐNG ĐĂNG BÀI TỰ ĐỘNG
+      </div>
+      <h1 class="showcase-title">
+        Quản lý &amp; Đăng bài<br>
+        Facebook <span class="gradient-text">chuẩn SaaS</span>
+      </h1>
+      <p class="showcase-desc">
+        Tự động hóa hoàn toàn với Chrome Extension Connector. Đăng bài trực tiếp từ phiên trình duyệt thật, bảo mật 100% tài khoản.
+      </p>
+
+      <!-- MINI DASHBOARD MOCKUP -->
+      <div class="mock-dashboard">
+        <div class="mock-top-row">
+          <span class="mock-pill">
+            <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>
+            CONNECTOR LIVE
+          </span>
+          <span class="mock-stat">Thành công: <strong>98.6%</strong></span>
+        </div>
+
+        <div class="mock-prog-wrap">
+          <div class="mock-prog-label">
+            <span>Tiến độ chiến dịch</span>
+            <span id="mockProgPct">0%</span>
+          </div>
+          <div class="mock-prog-track">
+            <div class="mock-prog-bar" id="mockProgBar"></div>
+          </div>
+        </div>
+
+        <div class="mock-campaign-item">
+          <div class="mock-item-icon">1</div>
+          <div class="mock-item-info">
+            <strong>Chiến dịch Tuyển sinh &amp; Quảng bá</strong>
+            <span>18 Groups • Delay 5–10 phút</span>
+          </div>
+          <span class="mock-item-badge running">Đang chạy</span>
+        </div>
+
+        <div class="mock-campaign-item">
+          <div class="mock-item-icon">2</div>
+          <div class="mock-item-info">
+            <strong>Chia sẻ bài viết Bất động sản</strong>
+            <span>24 Groups • 6 ảnh đính kèm</span>
+          </div>
+          <span class="mock-item-badge done">Hoàn thành</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="showcase-footer">
+      <div class="sec-badge">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        <span>Không lưu mật khẩu FB</span>
+      </div>
+      <div class="sec-badge">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        <span>Bảo mật phiên đăng nhập</span>
+      </div>
+    </div>
   </section>
-  <section class="login">
-    <div class="eyebrow">WELCOME BACK</div><h2>Đăng nhập</h2><div class="sub">Tiếp tục vào FB POST PRO bằng username hoặc email.</div>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <!-- RIGHT: LOGIN FORM -->
+  <section class="form-pane">
+    <div class="form-header">
+      <p class="form-eyebrow">Welcome back</p>
+      <h2>Đăng nhập hệ thống</h2>
+      <p>Nhập thông tin tài khoản để tiếp tục quản lý chiến dịch</p>
+    </div>
+
+    {% if error %}
+    <div class="error-box">
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+      <span>{{ error }}</span>
+    </div>
+    {% endif %}
+
     <form method="post">
       <input class="next" type="hidden" name="next" value="{{ next_url }}">
-      <div class="field"><label>Username hoặc Email</label><input type="text" name="login" placeholder="username@example.com" autocomplete="username" autofocus required></div>
-      <div class="field"><label>Mật khẩu</label><input type="password" name="password" placeholder="••••••••" autocomplete="current-password" required></div>
-      <div class="row"><label class="remember"><input type="checkbox" name="remember" value="1"> Ghi nhớ đăng nhập</label><span>FB POST PRO</span></div>
-      <button class="submit" type="submit">ĐĂNG NHẬP →</button>
+
+      <div class="field-group">
+        <label class="field-label" for="login">Tên đăng nhập hoặc Email</label>
+        <div class="input-box">
+          <span class="lead-icon">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+          </span>
+          <input id="login" type="text" name="login"
+            placeholder="username hoặc email..."
+            required autofocus autocomplete="username">
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="password">Mật khẩu</label>
+        <div class="input-box">
+          <span class="lead-icon">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </span>
+          <input id="password" type="password" name="password"
+            placeholder="••••••••" required autocomplete="current-password">
+          <button type="button" id="togglePassword" class="toggle-pwd-btn"
+            title="Hiện/Ẩn mật khẩu" aria-label="Hiện hoặc ẩn mật khẩu">
+            <svg id="eyeShow" width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+            <svg id="eyeHide" width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="display:none">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="action-row">
+        <label class="custom-checkbox">
+          <input type="checkbox" name="remember" value="1" checked>
+          <span>Ghi nhớ đăng nhập</span>
+        </label>
+      </div>
+
+      <button class="btn-login" type="submit">
+        <span>Đăng nhập hệ thống</span>
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+        </svg>
+      </button>
     </form>
-    <div class="register-link">Chưa có tài khoản? <a href="{{ url_for('register') }}">Tạo tài khoản</a></div>
-    <div class="security">🔒 Mật khẩu FB POST PRO được lưu dưới dạng hash.</div>
+
+    <div class="register-hint">
+      Chưa có tài khoản? <a href="{{ url_for('register') }}">Đăng ký ngay</a>
+    </div>
   </section>
-</div>
+</main>
+
+<script>
+// Toggle password
+const togglePwd = document.getElementById('togglePassword');
+const pwdInput  = document.getElementById('password');
+const eyeShow   = document.getElementById('eyeShow');
+const eyeHide   = document.getElementById('eyeHide');
+
+togglePwd?.addEventListener('click', function() {
+  if (pwdInput.type === 'password') {
+    pwdInput.type = 'text';
+    eyeShow.style.display = 'none';
+    eyeHide.style.display = 'block';
+  } else {
+    pwdInput.type = 'password';
+    eyeShow.style.display = 'block';
+    eyeHide.style.display = 'none';
+  }
+});
+
+// Animated progress bar in mockup
+setTimeout(() => {
+  const bar = document.getElementById('mockProgBar');
+  const pct = document.getElementById('mockProgPct');
+  if (bar) {
+    bar.style.width = '74%';
+    if (pct) pct.textContent = '74%';
+  }
+}, 200);
+</script>
+
 </body>
 </html>

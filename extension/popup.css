@@ -1,1 +1,54 @@
-*{box-sizing:border-box}body{margin:0;width:360px;background:#080b14;color:#f8fafc;font:13px Inter,system-ui,-apple-system,"Segoe UI",sans-serif}.app{padding:18px}.brand{display:flex;align-items:center;gap:10px;margin-bottom:16px}.logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:900;background:linear-gradient(135deg,#7c3aed,#2563eb)}.brand strong{display:block;font-size:15px}.brand small{display:block;color:#8b98ad;margin-top:2px}.status{display:flex;gap:10px;align-items:center;border:1px solid #20283a;background:#101625;padding:12px;border-radius:14px;margin-bottom:15px}.status>span{width:10px;height:10px;border-radius:50%;background:#f59e0b}.status.online>span{background:#22c55e;box-shadow:0 0 0 5px rgba(34,197,94,.10)}.status strong{display:block;font-size:12px}.status small{display:block;color:#8b98ad;font-size:10px;margin-top:3px}label{display:block;color:#aab4c5;font-size:10px;font-weight:800;margin:10px 0 6px}input{width:100%;padding:11px 12px;border-radius:11px;border:1px solid #20283a;background:#0c111d;color:#fff;outline:none}input:focus{border-color:#7c3aed}button{border:1px solid #252d40;background:#121827;color:#e5e7eb;border-radius:11px;padding:10px 11px;font-weight:800;font-size:10px;cursor:pointer}.primary{width:100%;margin-top:12px;border:0;color:#fff;background:linear-gradient(135deg,#7c3aed,#2563eb)}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.danger{width:100%;margin-top:8px;color:#fca5a5;background:rgba(239,68,68,.07);border-color:rgba(239,68,68,.2)}.note{font-size:9px;line-height:1.5;color:#7f8ca2;margin-top:12px;padding:10px;border:1px solid #20283a;border-radius:10px}.message{font-size:10px;color:#c4b5fd;margin-top:10px;min-height:14px}
+/* Standalone extension skin: local tokens keep the package independent of Flask.
+   Values match the web design system; no remote imports or manifest changes. */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  color-scheme: dark;
+  --bg: #080c14; --surface: #101725; --surface2: #182235; --hover: #263550;
+  --border: #2a3850; --border2: #364760;
+  --text: #f3f6fc; --text2: #b5c0d3; --muted: #98a7c0;
+  --accent: #565ad8; --accent-h: #484cc4; --accent-tint: rgb(99 102 241 / 12%);
+  --focus: #a5b4fc; --green: #34d399; --green-tint: rgb(52 211 153 / 10%);
+  --amber: #fbbf24; --amber-tint: rgb(251 191 36 / 10%); --red: #fb7185;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+  --font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', SFMono-Regular, Menlo, monospace;
+}
+body { width: 360px; max-width: 100vw; background: var(--bg); color: var(--text); font: 13px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+.app { padding: 20px; background: radial-gradient(ellipse at 100% 0, var(--accent-tint), transparent 60%); animation: popup-enter 220ms ease-out; }
+.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.logo { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: var(--r-md); background: linear-gradient(135deg, #6366f1, #3b82f6); color: white; font-weight: 800; box-shadow: 0 4px 16px rgb(99 102 241 / 18%); }
+.brand strong { display: block; font-size: 16px; letter-spacing: -.03em; }
+.brand small { display: block; font-size: 12px; color: var(--muted); }
+.status { display: flex; align-items: center; gap: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--border2); border-radius: var(--r-md); background: var(--surface); }
+.status > span { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 4px var(--amber-tint); }
+.status.online { border-color: rgb(52 211 153 / 32%); background: var(--green-tint); }
+.status.online > span { background: var(--green); box-shadow: 0 0 0 4px var(--green-tint); }
+.status > div { min-width: 0; overflow-wrap: anywhere; }
+.status strong { display: block; font-size: 13px; font-weight: 600; }
+.status small { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
+label { display: block; color: var(--text2); font-size: 12px; font-weight: 600; margin: 14px 0 8px; }
+input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border-radius: var(--r-sm); border: 1px solid var(--border2); background: var(--surface2); color: var(--text); font: 14px var(--font); transition: border-color 140ms, background-color 140ms; }
+input::placeholder { color: var(--muted); opacity: 1; }
+input#code { font-family: var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+input:focus { border-color: var(--focus); background: var(--surface); }
+:is(input, button):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+button { min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border2); border-radius: var(--r-sm); background: var(--surface2); color: var(--text); font: 600 12px/1.5 var(--font); cursor: pointer; overflow-wrap: anywhere; transition: background-color 140ms, border-color 140ms, transform 140ms, opacity 140ms; }
+button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+.primary { width: 100%; margin-top: 16px; border-color: transparent; background: var(--accent); color: white; }
+.row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.danger { width: 100%; margin-top: 8px; color: var(--red); border-color: rgb(251 113 133 / 32%); background: rgb(251 113 133 / 10%); font-size: 11px; }
+.note { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--muted); font-size: 11px; line-height: 1.7; }
+.message { min-height: 20px; margin-top: 12px; color: var(--focus); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.message:not(:empty) { padding: 10px 12px; border-left: 2px solid var(--focus); background: var(--accent-tint); border-radius: var(--r-sm); }
+@media (hover: hover) and (pointer: fine) {
+  button:hover:not(:disabled) { background: var(--hover); border-color: var(--focus); transform: translateY(-1px); }
+  .primary:hover:not(:disabled) { background: var(--accent-h); }
+  .danger:hover:not(:disabled) { background: #be123c; color: white; border-color: transparent; }
+}
+button:active:not(:disabled) { transform: scale(.985); }
+@keyframes popup-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 340px) { .app { padding: 16px; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  button:hover, button:active { transform: none !important; }
+}

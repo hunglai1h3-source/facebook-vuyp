@@ -1,0 +1,175 @@
+/* Shared presentation tokens. Existing names are retained for all Jinja pages.
+   Layout dimensions intentionally preserve the Phase 1 application shell. */
+:root {
+  color-scheme: dark;
+
+  --bg: #080c14;
+  --bg2: #0c1220;
+  --surface: #101725;
+  --surface2: #182235;
+  --surface3: #202d43;
+  --hover: #263550;
+  --hover2: #30415e;
+  --border: #2a3850;
+  --border2: #364760;
+  --border3: #526480;
+  --text: #f3f6fc;
+  --text2: #b5c0d3;
+  --text3: #98a7c0;
+  --muted: #8795ae;
+
+  --accent: #6366f1;
+  --accent-h: #818cf8;
+  --accent-tint: rgb(99 102 241 / 12%);
+  --accent-tint2: rgb(99 102 241 / 20%);
+  --accent-glow: rgb(99 102 241 / 20%);
+  --accent-border: rgb(129 140 248 / 45%);
+  --accent-light: #67e8f9;
+  /* Solid action colors keep white labels readable in both themes. */
+  --action-bg: #565ad8;
+  --action-hover: #484cc4;
+  --on-action: #ffffff;
+  --danger-solid: #be123c;
+  --danger-hover: #9f1239;
+  --focus-ring: #a5b4fc;
+  --border-focus: var(--focus-ring);
+  --border-glow: var(--accent-tint2);
+
+  --green: #34d399;
+  --green-tint: rgb(52 211 153 / 10%);
+  --green-border: rgb(52 211 153 / 32%);
+  --amber: #fbbf24;
+  --amber-tint: rgb(251 191 36 / 10%);
+  --amber-border: rgb(251 191 36 / 32%);
+  --red: #fb7185;
+  --red-tint: rgb(251 113 133 / 10%);
+  --red-border: rgb(251 113 133 / 32%);
+  --blue: #93c5fd;
+  --blue-tint: rgb(147 197 253 / 10%);
+  --blue-border: rgb(147 197 253 / 32%);
+
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --r-2xl: 32px;
+  --r-full: 9999px;
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 16%);
+  --shadow-sm: 0 3px 10px rgb(0 0 0 / 18%);
+  --shadow: 0 8px 24px rgb(0 0 0 / 22%);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 30%);
+  --shadow-xl: 0 24px 64px rgb(0 0 0 / 38%);
+  --shadow-focus: 0 0 0 3px var(--accent-tint2);
+
+  --font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', SFMono-Regular, Menlo, monospace;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 15px;
+  --text-input: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --control-height: 44px;
+  --control-height-sm: 36px;
+  --control-height-lg: 48px;
+
+  --sidebar-w: 248px;
+  --topbar-h: 54px;
+  --page-max: 1440px;
+  --z-dialog: 1000;
+  --z-toast: 9999;
+  --duration-fast: 140ms;
+  --duration-normal: 180ms;
+  --duration-enter: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: color var(--duration-fast) ease, background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease,
+    opacity var(--duration-fast) ease, transform var(--duration-fast) var(--ease-out);
+  --t-normal: color var(--duration-normal) ease, background-color var(--duration-normal) ease,
+    border-color var(--duration-normal) ease, box-shadow var(--duration-normal) ease,
+    opacity var(--duration-normal) ease, transform var(--duration-normal) var(--ease-out);
+  --t-slow: opacity var(--duration-enter) ease, transform var(--duration-enter) var(--ease-out);
+
+  /* Compatibility aliases: do not rename existing template variables. */
+  --primary: var(--accent);
+  --primary-hover: var(--accent-h);
+  --primary-glow: var(--accent-glow);
+  --panel: var(--surface);
+  --panel2: var(--surface2);
+  --panel-hover: var(--hover);
+  --line: var(--border);
+  --line-strong: var(--border2);
+  --text-secondary: var(--text2);
+  --input-bg: var(--surface2);
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --shadow-md: var(--shadow);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f7fc;
+  --bg2: #edf2f9;
+  --surface: #ffffff;
+  --surface2: #f0f4fa;
+  --surface3: #e7edf6;
+  --hover: #e3eaf5;
+  --hover2: #d5dfed;
+  --border: #cbd5e3;
+  --border2: #b5c2d6;
+  --border3: #8a9bb6;
+  --text: #172033;
+  --text2: #455571;
+  --text3: #596b85;
+  --muted: #60708a;
+  --accent: #4f46e5;
+  --accent-h: #4338ca;
+  --accent-tint: rgb(79 70 229 / 7%);
+  --accent-tint2: rgb(79 70 229 / 14%);
+  --accent-glow: rgb(79 70 229 / 14%);
+  --accent-border: rgb(79 70 229 / 32%);
+  --accent-light: #087f8c;
+  --focus-ring: #4f46e5;
+  --green: #047857;
+  --green-tint: rgb(4 120 87 / 7%);
+  --green-border: rgb(4 120 87 / 30%);
+  --amber: #92400e;
+  --amber-tint: rgb(146 64 14 / 7%);
+  --amber-border: rgb(146 64 14 / 30%);
+  --red: #be123c;
+  --red-tint: rgb(190 18 60 / 7%);
+  --red-border: rgb(190 18 60 / 30%);
+  --blue: #1d4ed8;
+  --blue-tint: rgb(29 78 216 / 7%);
+  --blue-border: rgb(29 78 216 / 30%);
+  --shadow-xs: 0 1px 2px rgb(23 32 51 / 5%);
+  --shadow-sm: 0 3px 10px rgb(23 32 51 / 7%);
+  --shadow: 0 8px 24px rgb(23 32 51 / 9%);
+  --shadow-lg: 0 16px 40px rgb(23 32 51 / 12%);
+  --shadow-xl: 0 24px 64px rgb(23 32 51 / 16%);
+}

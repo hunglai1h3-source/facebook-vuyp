@@ -1,605 +1,355 @@
 {% extends "base.html" %}
 
-{% block title %}
-Tạo chiến dịch
-{% endblock %}
+{% block title %}Soạn bài & Đăng • FB POST PRO{% endblock %}
+{% block page_title %}Soạn bài & Đăng{% endblock %}
 
-{% block page_title %}
-Tạo chiến dịch
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/compose.css') }}">
 {% endblock %}
-
-{% block page_subtitle %}
-Soạn nội dung, chọn nhiều ảnh và đăng lên các Group Facebook.
-{% endblock %}
-
 
 {% block content %}
-
-<section class="compose-grid">
-
-    <!-- ================================================= -->
-    <!-- LEFT -->
-    <!-- ================================================= -->
-
-    <form
-        class="panel compose-panel"
-        method="post"
-        action="{{ url_for('save_post') }}"
-        enctype="multipart/form-data"
-    >
-
-        <div class="form-group">
-
-            <label>
-                Tên chiến dịch
-            </label>
-
-            <input
-                type="text"
-                name="campaign_name"
-                value="{{ settings.campaign_name }}"
-                placeholder="Ví dụ: Chiến dịch sản phẩm mới"
-            >
-
-        </div>
-
-
-        <!-- ================================================= -->
-        <!-- CONTENT -->
-        <!-- ================================================= -->
-
-        <div class="form-group">
-
-            <label>
-                Nội dung bài đăng
-            </label>
-
-            <textarea
-                name="content"
-                rows="12"
-                placeholder="Nhập nội dung bài đăng..."
-            >{{ post_content }}</textarea>
-
-        </div>
-
-
-        <!-- ================================================= -->
-        <!-- MULTIPLE IMAGES -->
-        <!-- ================================================= -->
-
-        <div class="form-group">
-
-            <label>
-                Ảnh bài đăng
-            </label>
-
-            <input
-                type="file"
-                id="images"
-                name="images"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
-                style="display: none;"
-            >
-
-
-            <button
-                type="button"
-                class="btn secondary"
-                onclick="document.getElementById('images').click()"
-            >
-                📷 Chọn nhiều ảnh
-            </button>
-
-
-            <span
-                id="selectedImageCount"
-                style="
-                    margin-left: 10px;
-                    opacity: .8;
-                "
-            >
-                Chưa chọn ảnh mới
-            </span>
-
-
-            <!-- PREVIEW ẢNH VỪA CHỌN -->
-
-            <div
-                id="newImagePreview"
-                style="
-                    display: grid;
-                    grid-template-columns:
-                        repeat(auto-fill, minmax(120px, 1fr));
-                    gap: 12px;
-                    margin-top: 15px;
-                "
-            >
-            </div>
-
-        </div>
-
-
-        <!-- ================================================= -->
-        <!-- ẢNH ĐÃ LƯU -->
-        <!-- ================================================= -->
-
-        {% if post_images %}
-
-        <div class="form-group">
-
-            <div
-                style="
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 15px;
-                    margin-bottom: 12px;
-                "
-            >
-
-                <label
-                    style="margin: 0;"
-                >
-                    Ảnh hiện tại
-                    ({{ post_images|length }} ảnh)
-                </label>
-
-
-                <button
-                    type="submit"
-                    form="delete-all-images-form"
-                    class="btn danger"
-                >
-                    Xóa tất cả
-                </button>
-
-            </div>
-
-
-            <div
-                style="
-                    display: grid;
-                    grid-template-columns:
-                        repeat(auto-fill, minmax(130px, 1fr));
-                    gap: 14px;
-                "
-            >
-
-                {% for image in post_images %}
-
-                <div
-                    style="
-                        position: relative;
-                        border: 1px solid rgba(255,255,255,.1);
-                        border-radius: 12px;
-                        overflow: hidden;
-                        padding: 7px;
-                    "
-                >
-
-                    <img
-                        src="{{ url_for('customer_image', filename=image) }}"
-                        alt="Ảnh bài đăng"
-                        style="
-                            display: block;
-                            width: 100%;
-                            height: 130px;
-                            object-fit: cover;
-                            border-radius: 8px;
-                        "
-                    >
-
-
-                    <form
-                        method="post"
-                        action="{{ url_for('delete_post_image', filename=image) }}"
-                        style="margin-top: 7px;"
-                    >
-
-                        <button
-                            type="submit"
-                            class="btn danger"
-                            style="
-                                width: 100%;
-                                padding: 7px;
-                            "
-                        >
-                            ✕ Xóa
-                        </button>
-
-                    </form>
-
-                </div>
-
-                {% endfor %}
-
-            </div>
-
-        </div>
-
-        {% endif %}
-
-
-        <!-- ================================================= -->
-        <!-- DELAY -->
-        <!-- ================================================= -->
-
-        <div class="delay-grid">
-
-            <div class="form-group">
-
-                <label>
-                    Delay tối thiểu
-                </label>
-
-                <input
-                    type="number"
-                    name="min_delay"
-                    min="0"
-                    value="{{ settings.min_delay }}"
-                >
-
-            </div>
-
-
-            <div class="form-group">
-
-                <label>
-                    Delay tối đa
-                </label>
-
-                <input
-                    type="number"
-                    name="max_delay"
-                    min="0"
-                    value="{{ settings.max_delay }}"
-                >
-
-            </div>
-
-        </div>
-
-
-        <button
-            type="submit"
-            class="btn primary"
-            style="
-                width: 100%;
-                margin-top: 10px;
-            "
+<section class="compose-layout">
+  <!-- LEFT: COMPOSER FORM -->
+  <form
+    class="panel card-pad-lg composer-form"
+    method="post"
+    action="{{ url_for('save_post') }}"
+    enctype="multipart/form-data"
+  >
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Cấu hình bài đăng</span>
+        <h3 class="section-title">Nội dung & Hình ảnh</h3>
+      </div>
+      <span class="badge blue">Chiến dịch sẵn sàng</span>
+    </div>
+
+    <!-- CAMPAIGN NAME -->
+    <div class="form-group">
+      <label for="campaign_name">Tên chiến dịch</label>
+      <div class="input-icon-group">
+        <span class="icon-slot">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
+          </svg>
+        </span>
+        <input
+          id="campaign_name"
+          type="text"
+          name="campaign_name"
+          value="{{ settings.campaign_name }}"
+          placeholder="Ví dụ: Giới thiệu sản phẩm mới..."
+          required
         >
-            💾 LƯU CHIẾN DỊCH
-        </button>
+      </div>
+    </div>
 
-    </form>
+    <!-- CONTENT TEXTAREA -->
+    <div class="form-group">
+      <div class="label-split">
+        <label for="postContent">Nội dung bài đăng Facebook</label>
+        <span class="label-hint">Hỗ trợ icon, hashtag, link và văn bản tự do</span>
+      </div>
+      <textarea
+        id="postContent"
+        name="content"
+        rows="9"
+        placeholder="Nhập nội dung bạn muốn chia sẻ lên các Group Facebook..."
+      >{{ post_content }}</textarea>
+    </div>
 
-
-    <!-- Form xóa toàn bộ ảnh -->
-
-    <form
-        id="delete-all-images-form"
-        method="post"
-        action="{{ url_for('delete_all_post_images') }}"
+    <!-- MULTIPLE IMAGES UPLOAD -->
+    <div class="form-group">
+      <label>Đính kèm hình ảnh</label>
+      <input
+        type="file"
+        id="images"
+        name="images"
+        accept="image/jpeg,image/png,image/webp"
+        multiple
         style="display: none;"
-    >
+      >
+
+      <div class="dropzone" onclick="document.getElementById('images').click()">
+        <div class="dropzone-icon">
+          <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+        </div>
+        <div class="dropzone-text">
+          <strong>Bấm để tải ảnh lên</strong>
+          <p>Hỗ trợ JPG, PNG, WEBP. Cho phép chọn cùng lúc nhiều file.</p>
+        </div>
+        <button type="button" class="btn secondary sm" style="pointer-events:none">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+          </svg>
+          Chọn ảnh
+        </button>
+      </div>
+
+      <div class="selected-status-bar">
+        <span id="selectedImageCount" class="selected-pill">Chưa chọn ảnh mới</span>
+      </div>
+
+      <!-- PREVIEW CỦA ẢNH MỚI CHỌN -->
+      <div id="newImagePreview" class="gallery-grid"></div>
+    </div>
+
+    <!-- SAVED IMAGES GALLERY -->
+    {% if post_images %}
+    <div class="form-group saved-gallery-wrap">
+      <div class="label-split" style="margin-bottom:12px">
+        <label style="margin:0">
+          Ảnh đã lưu trong chiến dịch
+          <span class="badge muted" style="margin-left:6px">{{ post_images|length }}</span>
+        </label>
+        <button
+          type="submit"
+          form="delete-all-images-form"
+          class="btn danger sm"
+          onclick="return confirm('Bạn có chắc chắn muốn xóa toàn bộ ảnh đã lưu?')"
+        >
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          </svg>
+          Xóa tất cả
+        </button>
+      </div>
+
+      <div class="gallery-grid">
+        {% for image in post_images %}
+        <div class="gallery-card">
+          <img
+            src="{{ url_for('customer_image', filename=image) }}"
+            alt="Ảnh bài đăng"
+            loading="lazy"
+            decoding="async"
+          >
+          <button
+            type="submit"
+            form="delete-image-form-{{ loop.index0 }}"
+            class="del-single-btn"
+            title="Xóa ảnh này"
+            aria-label="Xóa ảnh"
+          >
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- DELAY SETTINGS -->
+    <div class="delay-section">
+      <div class="delay-intro">
+        <span class="eyebrow">Thời gian giãn cách</span>
+        <h4 class="delay-title">Khoảng delay giữa các bài đăng</h4>
+      </div>
+      <div class="grid2">
+        <div class="form-group" style="margin-bottom:0">
+          <label for="min_delay">Delay tối thiểu (phút)</label>
+          <input
+            id="min_delay"
+            type="number"
+            name="min_delay"
+            min="0"
+            value="{{ settings.min_delay }}"
+            required
+          >
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="max_delay">Delay tối đa (phút)</label>
+          <input
+            id="max_delay"
+            type="number"
+            name="max_delay"
+            min="0"
+            value="{{ settings.max_delay }}"
+            required
+          >
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn primary lg w-full" style="margin-top:10px">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+      </svg>
+      LƯU CHIẾN DỊCH
+    </button>
+  </form>
+
+  <!-- FORM XÓA ẢNH ĐỘC LẬP: tránh lồng form vào form lưu chiến dịch -->
+  {% for image in post_images %}
+  <form
+    id="delete-image-form-{{ loop.index0 }}"
+    method="post"
+    action="{{ url_for('delete_post_image', filename=image) }}"
+    hidden
+  ></form>
+  {% endfor %}
+
+  <!-- FORM XÓA TOÀN BỘ ẢNH (GIỮ NGUYÊN FORM ĐỘC LẬP) -->
+  <form
+    id="delete-all-images-form"
+    method="post"
+    action="{{ url_for('delete_all_post_images') }}"
+    style="display: none;"
+  ></form>
+
+  <!-- RIGHT: SUMMARY & RUN CONTROLS -->
+  <aside class="panel card-pad-lg campaign-sidebar">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Tổng quan</span>
+        <h3 class="section-title">Chiến dịch</h3>
+      </div>
+      {% if campaign_state and campaign_state.running %}
+      <span class="badge blue"><span class="pulse pulsing"></span> ĐANG CHẠY</span>
+      {% else %}
+      <span class="badge muted">SẴN SÀNG</span>
+      {% endif %}
+    </div>
+
+    <div class="summary-list">
+      <div class="summary-item">
+        <span>Nhóm đăng (Groups)</span>
+        <strong>{{ groups|length }} nhóm</strong>
+      </div>
+      <div class="summary-item">
+        <span>Ảnh đính kèm</span>
+        <strong>{{ post_images|length }} ảnh</strong>
+      </div>
+      <div class="summary-item">
+        <span>Thời gian chờ (Delay)</span>
+        <strong>{{ settings.min_delay }} – {{ settings.max_delay }} phút</strong>
+      </div>
+    </div>
+
+    <!-- THUMBNAIL STRIP -->
+    {% if post_images %}
+    <div class="thumb-strip-wrap">
+      <span class="thumb-strip-title">Xem trước ảnh:</span>
+      <div class="thumb-strip">
+        {% for image in post_images[:6] %}
+        <div class="thumb-box">
+          <img
+            src="{{ url_for('customer_image', filename=image) }}"
+            alt="Thumbnail"
+            loading="lazy"
+            decoding="async"
+          >
+        </div>
+        {% endfor %}
+      </div>
+      {% if post_images|length > 6 %}
+      <div class="thumb-more-note">
+        + {{ post_images|length - 6 }} ảnh khác
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- CONNECTOR STATUS BOX -->
+    <div class="aside-connector-box">
+      <div class="aside-connector-icon">
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+      </div>
+      <div>
+        <strong>FB POST PRO Connector</strong>
+        <p>{{ (campaign_state.message if campaign_state and campaign_state.message else 'Chưa có tác vụ nào đang chạy.') }}</p>
+      </div>
+    </div>
+
+    <!-- ACTION BUTTONS -->
+    <form method="post" action="{{ url_for('run_campaign') }}" style="margin-top:16px">
+      <button type="submit" class="btn primary lg w-full" {% if campaign_state and campaign_state.running %}disabled{% endif %}>
+        <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        CHẠY CHIẾN DỊCH
+      </button>
     </form>
 
+    {% if campaign_state and campaign_state.running %}
+    <form method="post" action="{{ url_for('stop_campaign') }}" style="margin-top:8px">
+      <button type="submit" class="btn danger w-full">
+        <svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M6 6h12v12H6z"/>
+        </svg>
+        DỪNG CHIẾN DỊCH
+      </button>
+    </form>
+    {% endif %}
 
-    <!-- ================================================= -->
-    <!-- RIGHT -->
-    <!-- ================================================= -->
-
-    <aside class="panel campaign-preview">
-
-        <h3>
-            Tổng quan chiến dịch
-        </h3>
-
-
-        <div class="preview-row">
-
-            <span>
-                Groups
-            </span>
-
-            <strong>
-                {{ groups|length }}
-            </strong>
-
-        </div>
-
-
-        <div class="preview-row">
-
-            <span>
-                Ảnh
-            </span>
-
-            <strong>
-                {{ post_images|length }}
-            </strong>
-
-        </div>
-
-
-        <div class="preview-row">
-
-            <span>
-                Delay
-            </span>
-
-            <strong>
-                {{ settings.min_delay }}
-                -
-                {{ settings.max_delay }}
-                phút
-            </strong>
-
-        </div>
-
-
-        <!-- ================================================= -->
-        <!-- IMAGE PREVIEW -->
-        <!-- ================================================= -->
-
-        {% if post_images %}
-
-        <div
-            style="
-                display: grid;
-                grid-template-columns:
-                    repeat(3, 1fr);
-                gap: 7px;
-                margin-top: 15px;
-            "
-        >
-
-            {% for image in post_images[:6] %}
-
-            <img
-                src="{{ url_for('customer_image', filename=image) }}"
-                style="
-                    width: 100%;
-                    aspect-ratio: 1;
-                    object-fit: cover;
-                    border-radius: 8px;
-                "
-            >
-
-            {% endfor %}
-
-        </div>
-
-
-        {% if post_images|length > 6 %}
-
-        <div
-            style="
-                margin-top: 8px;
-                font-size: 13px;
-                opacity: .7;
-            "
-        >
-            + {{ post_images|length - 6 }} ảnh khác
-        </div>
-
-        {% endif %}
-
-        {% endif %}
-
-
-        <!-- ================================================= -->
-        <!-- AGENT -->
-        <!-- ================================================= -->
-
-        <div
-            class="agent-box"
-            style="
-                margin-top: 20px;
-            "
-        >
-
-            <strong>
-                FB POST PRO Connector
-            </strong>
-
-            <div>
-                {{ campaign_state.message }}
-            </div>
-
-        </div>
-
-
-        <!-- ================================================= -->
-        <!-- RUN -->
-        <!-- ================================================= -->
-
-        <form
-            method="post"
-            action="{{ url_for('run_campaign') }}"
-            style="
-                margin-top: 16px;
-            "
-        >
-
-            <button
-                type="submit"
-                class="btn primary"
-                style="
-                    width: 100%;
-                "
-            >
-                ▶ CHẠY CHIẾN DỊCH
-            </button>
-
-        </form>
-
-
-        {% if campaign_state.running %}
-
-        <form
-            method="post"
-            action="{{ url_for('stop_campaign') }}"
-            style="
-                margin-top: 10px;
-            "
-        >
-
-            <button
-                type="submit"
-                class="btn danger"
-                style="
-                    width: 100%;
-                "
-            >
-                ■ DỪNG CHIẾN DỊCH
-            </button>
-
-        </form>
-
-        {% endif %}
-
-
-        <p
-            style="
-                margin-top: 15px;
-                font-size: 13px;
-                opacity: .65;
-            "
-        >
-            Hãy bấm <strong>Lưu chiến dịch</strong> trước khi chạy. Connector sẽ dùng Facebook đang đăng nhập trên Chrome của bạn.
-        </p>
-
-    </aside>
-
+    <div class="info-note">
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <span>Vui lòng bấm <strong>Lưu chiến dịch</strong> trước khi chạy. Connector sẽ sử dụng trực tiếp tài khoản Facebook đang mở trên Chrome của bạn.</span>
+    </div>
+  </aside>
 </section>
 
 
-<!-- ===================================================== -->
-<!-- JAVASCRIPT MULTIPLE IMAGE PREVIEW -->
-<!-- ===================================================== -->
 
+<!-- CLIENT-SIDE MULTIPLE IMAGE PREVIEW SCRIPT -->
 <script>
+const imageInput = document.getElementById("images");
+const imageCount = document.getElementById("selectedImageCount");
+const previewContainer = document.getElementById("newImagePreview");
 
-const imageInput =
-    document.getElementById("images");
+imageInput?.addEventListener("change", function () {
+  previewContainer.innerHTML = "";
+  const files = Array.from(this.files || []);
 
-const imageCount =
-    document.getElementById(
-        "selectedImageCount"
-    );
+  if (files.length === 0) {
+    imageCount.textContent = "Chưa chọn ảnh mới";
+    imageCount.classList.remove("has-files");
+    return;
+  }
 
-const previewContainer =
-    document.getElementById(
-        "newImagePreview"
-    );
+  imageCount.textContent = `Đã chọn ${files.length} ảnh mới chuẩn bị tải lên`;
+  imageCount.classList.add("has-files");
 
+  files.forEach(function (file) {
+    if (!file.type.startsWith("image/")) return;
 
-imageInput.addEventListener(
-    "change",
-    function () {
+    const reader = new FileReader();
+    reader.onload = function (event) {
+      const card = document.createElement("div");
+      card.className = "gallery-card new-preview-item";
 
-        previewContainer.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = event.target.result;
+      img.alt = file.name;
+      img.decoding = "async";
 
-        const files = Array.from(
-            this.files
-        );
+      const badge = document.createElement("span");
+      badge.textContent = "Mới";
+      badge.style.position = "absolute";
+      badge.style.top = "6px";
+      badge.style.left = "6px";
+      badge.style.fontSize = "10px";
+      badge.style.fontWeight = "700";
+      badge.style.padding = "2px 6px";
+      badge.style.borderRadius = "4px";
+      badge.style.background = "rgba(99, 102, 241, 0.9)";
+      badge.style.color = "#fff";
 
-
-        if (files.length === 0) {
-
-            imageCount.textContent =
-                "Chưa chọn ảnh mới";
-
-            return;
-        }
-
-
-        imageCount.textContent =
-            `Đã chọn ${files.length} ảnh`;
-
-
-        files.forEach(
-            function (file) {
-
-                if (
-                    !file.type.startsWith(
-                        "image/"
-                    )
-                ) {
-                    return;
-                }
-
-
-                const reader =
-                    new FileReader();
-
-
-                reader.onload =
-                    function (event) {
-
-                        const wrapper =
-                            document.createElement(
-                                "div"
-                            );
-
-
-                        wrapper.style.border =
-                            "1px solid rgba(255,255,255,.1)";
-
-                        wrapper.style.borderRadius =
-                            "12px";
-
-                        wrapper.style.padding =
-                            "6px";
-
-
-                        const img =
-                            document.createElement(
-                                "img"
-                            );
-
-
-                        img.src =
-                            event.target.result;
-
-
-                        img.style.width =
-                            "100%";
-
-                        img.style.height =
-                            "120px";
-
-                        img.style.objectFit =
-                            "cover";
-
-                        img.style.borderRadius =
-                            "8px";
-
-
-                        wrapper.appendChild(
-                            img
-                        );
-
-
-                        previewContainer.appendChild(
-                            wrapper
-                        );
-
-                    };
-
-
-                reader.readAsDataURL(
-                    file
-                );
-
-            }
-        );
-
-    }
-);
-
+      card.appendChild(img);
+      card.appendChild(badge);
+      previewContainer.appendChild(card);
+    };
+    reader.readAsDataURL(file);
+  });
+});
 </script>
-
 {% endblock %}

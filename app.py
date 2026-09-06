@@ -41,7 +41,7 @@ import threading
 import time
 import random
 import uuid
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 
 # ============================================================
@@ -209,6 +209,27 @@ ALLOWED_IMAGE_EXTENSIONS = {
     ".jpeg",
     ".png",
     ".webp",
+}
+
+MAX_DELAY_MINUTES = 1440
+MAX_CAMPAIGN_NAME_LENGTH = 120
+MAX_POST_CONTENT_LENGTH = 100000
+MAX_GROUPS_PER_CAMPAIGN = 1000
+
+AGENT_TERMINAL_STATUSES = {
+    "finished",
+    "finished_with_errors",
+    "error",
+    "stopped",
+    "needs_facebook_login",
+    "facebook_checkpoint",
+}
+
+AGENT_ALLOWED_STATUSES = AGENT_TERMINAL_STATUSES | {
+    "running",
+    "posting",
+    "delay",
+    "success",
 }
 
 
@@ -1132,7 +1153,13 @@ def require_customer_login():
     ):
         return None
 
-    if not session.get("user_id"):
+    user_id = sanitize_customer_id(session.get("user_id", ""))
+    user = find_user_by_id(user_id) if user_id else None
+
+    if not user or not user.get("is_active", True):
+        session.pop("user_id", None)
+        session.pop("username", None)
+        session.pop("customer_id", None)
         next_url = request.full_path if request.query_string else request.path
         return redirect(
             url_for(
@@ -1373,6 +1400,30 @@ def normalize_group_url(url):
     url = url.rstrip("/")
 
     return url
+
+
+def valid_facebook_group_url(url):
+    """Accept only an HTTPS Facebook Group page, without changing stored URLs."""
+    try:
+        parsed = urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+
+    host = (parsed.hostname or "").lower()
+    allowed_hosts = {
+        "facebook.com",
+        "www.facebook.com",
+        "m.facebook.com",
+        "web.facebook.com",
+    }
+    parts = [part for part in parsed.path.split("/") if part]
+    return (
+        parsed.scheme.lower() == "https"
+        and host in allowed_hosts
+        and len(parts) >= 2
+        and parts[0].lower() == "groups"
+        and bool(parts[1].strip())
+    )
 
 
 def load_groups(customer_id):
@@ -1708,6 +1759,11 @@ def add_history(
 
         "time":
             now_text(),
+
+        # Keep the legacy display field above while adding an unambiguous value
+        # for ordering, recovery and future migrations.
+        "created_at":
+            now_iso(),
     })
 
     write_json(
@@ -3869,166 +3925,83 @@ def customer_image(
     methods=["POST"],
 )
 def save_post():
+    customer_id = get_customer_id()
+    content = request.form.get("content", "").strip()
+    campaign_name = request.form.get("campaign_name", "").strip()
+    images = request.files.getlist("images")
 
-    customer_id = (
-        get_customer_id()
-    )
+    if len(content) > MAX_POST_CONTENT_LENGTH:
+        flash("Nội dung bài đăng quá dài.", "warning")
+        return redirect(url_for("compose"))
 
-    settings = (
-        load_settings(
-            customer_id
-        )
-    )
-
-    content = (
-        request.form.get(
-            "content",
-            "",
-        ).strip()
-    )
-
-    campaign_name = (
-        request.form.get(
-            "campaign_name",
-            "",
-        ).strip()
-    )
-
-    images = (
-        request.files.getlist(
-            "images"
-        )
-    )
+    if len(campaign_name) > MAX_CAMPAIGN_NAME_LENGTH:
+        flash("Tên chiến dịch không được vượt quá 120 ký tự.", "warning")
+        return redirect(url_for("compose"))
 
     valid_images = []
-
     for image in images:
-
-        if (
-            not image
-            or not image.filename
-        ):
-
+        if not image or not image.filename:
             continue
+        if not allowed_image(image.filename):
+            flash("Ảnh không hợp lệ: " + image.filename, "warning")
+            return redirect(url_for("compose"))
+        valid_images.append(image)
 
-        if not allowed_image(
-            image.filename
-        ):
+    with FILE_LOCK:
+        settings = load_settings(customer_id)
+        old_settings = dict(settings)
+        old_settings["post_images"] = list(settings.get("post_images", []))
+        old_content = load_post(customer_id)
 
-            flash(
-                (
-                    "Ảnh không hợp lệ: "
-                    + image.filename
-                ),
-                "warning",
-            )
+        try:
+            minimum = int(request.form.get("min_delay", settings["min_delay"]))
+            maximum = int(request.form.get("max_delay", settings["max_delay"]))
+        except (TypeError, ValueError):
+            flash("Delay phải là số.", "warning")
+            return redirect(url_for("compose"))
 
-            return redirect(
-                url_for(
-                    "compose"
-                )
-            )
+        if minimum < 0 or maximum < 0:
+            flash("Delay không được nhỏ hơn 0.", "warning")
+            return redirect(url_for("compose"))
+        if minimum > MAX_DELAY_MINUTES or maximum > MAX_DELAY_MINUTES:
+            flash("Delay không được vượt quá 1440 phút.", "warning")
+            return redirect(url_for("compose"))
+        minimum, maximum = sorted((minimum, maximum))
 
-        valid_images.append(
-            image
-        )
+        next_settings = dict(settings)
+        next_settings["post_images"] = list(settings.get("post_images", []))
+        next_settings["min_delay"] = minimum
+        next_settings["max_delay"] = maximum
+        if campaign_name:
+            next_settings["campaign_name"] = campaign_name
 
-    if valid_images:
+        new_files = []
+        try:
+            if valid_images:
+                new_files = save_uploaded_images(customer_id, valid_images)
+                if len(new_files) != len(valid_images):
+                    raise RuntimeError("Không lưu được đầy đủ ảnh đã chọn.")
+                next_settings["post_images"] = new_files
 
-        for filename in (
-            settings.get(
-                "post_images",
-                [],
-            )
-        ):
+            save_settings(customer_id, next_settings)
+            save_post_content(customer_id, content)
+        except Exception:
+            for filename in new_files:
+                delete_image_file(customer_id, filename)
+            try:
+                save_settings(customer_id, old_settings)
+                save_post_content(customer_id, old_content)
+            except Exception:
+                pass
+            flash("Không thể lưu chiến dịch. Dữ liệu cũ đã được giữ lại.", "error")
+            return redirect(url_for("compose"))
 
-            delete_image_file(
-                customer_id,
-                filename,
-            )
+        if valid_images:
+            for filename in old_settings.get("post_images", []):
+                if filename not in new_files:
+                    delete_image_file(customer_id, filename)
 
-        settings[
-            "post_images"
-        ] = save_uploaded_images(
-            customer_id,
-            valid_images,
-        )
-
-    if campaign_name:
-
-        settings[
-            "campaign_name"
-        ] = campaign_name
-
-    try:
-
-        settings[
-            "min_delay"
-        ] = int(
-            request.form.get(
-                "min_delay",
-                settings[
-                    "min_delay"
-                ],
-            )
-        )
-
-        settings[
-            "max_delay"
-        ] = int(
-            request.form.get(
-                "max_delay",
-                settings[
-                    "max_delay"
-                ],
-            )
-        )
-
-    except ValueError:
-
-        flash(
-            "Delay phải là số.",
-            "warning",
-        )
-
-        return redirect(
-            url_for(
-                "compose"
-            )
-        )
-
-    if (
-        settings[
-            "min_delay"
-        ] < 0
-        or settings[
-            "max_delay"
-        ] < 0
-    ):
-
-        flash(
-            (
-                "Delay không được "
-                "nhỏ hơn 0."
-            ),
-            "warning",
-        )
-
-        return redirect(
-            url_for(
-                "compose"
-            )
-        )
-
-    save_settings(
-        customer_id,
-        settings,
-    )
-
-    save_post_content(
-        customer_id,
-        content,
-    )
+        settings = next_settings
 
     add_history(
         customer_id,

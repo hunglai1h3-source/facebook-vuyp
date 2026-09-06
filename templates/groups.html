@@ -1,3 +1,99 @@
 {% extends "base.html" %}
-{% block title %}Groups • FB POST PRO{% endblock %}{% block page_title %}Quản lý Groups{% endblock %}{% block page_subtitle %}Danh sách Group Facebook dùng cho chiến dịch.{% endblock %}
-{% block content %}<section style="display:grid;gap:18px"><article class="panel" style="padding:20px"><h3 style="margin-top:0">Thêm Group</h3><form method="post" action="{{ url_for('add_group') }}" style="display:flex;gap:10px;flex-wrap:wrap"><input style="flex:1;min-width:250px" type="url" name="group_url" placeholder="https://www.facebook.com/groups/..." required><button class="btn primary" type="submit">＋ THÊM GROUP</button></form></article><article class="panel" style="padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h3 style="margin:0">Danh sách Groups</h3><span style="font-size:11px;color:var(--muted)">{{ groups|length }} Group</span></div>{% if groups %}<div style="display:grid;margin-top:15px">{% for group in groups %}<div style="display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)"><div style="width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:rgba(59,130,246,.13)">f</div><a href="{{ group }}" target="_blank" style="color:var(--text);text-decoration:none;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ group }}</a><form method="post" action="{{ url_for('delete_group', index=loop.index0) }}" onsubmit="return confirm('Xóa Group này?')"><button class="btn danger" type="submit">Xóa</button></form></div>{% endfor %}</div>{% else %}<div class="empty-state" style="margin-top:15px">Chưa có Group nào.</div>{% endif %}</article></section>{% endblock %}
+
+{% block title %}Quản lý Groups • FB POST PRO{% endblock %}
+{% block page_title %}Quản lý Groups{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/groups.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="groups-shell">
+  <!-- ADD GROUP CARD -->
+  <article class="panel card-pad-lg">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Thêm nhóm mới</span>
+        <h3 class="section-title">Thêm Group Facebook mục tiêu</h3>
+      </div>
+    </div>
+    <p class="section-desc" style="margin-bottom:18px">Nhập liên kết đầy đủ của Group Facebook công khai hoặc nhóm kín mà tài khoản của bạn đã tham gia.</p>
+
+    <form method="post" action="{{ url_for('add_group') }}" class="add-group-form">
+      <div class="group-input-box">
+        <span class="fb-icon-slot">
+          <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+          </svg>
+        </span>
+        <input
+          type="url"
+          name="group_url"
+          placeholder="https://www.facebook.com/groups/ten-nhom-hoac-id"
+          required
+        >
+      </div>
+      <button class="btn primary btn-add" type="submit">
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+        </svg>
+        THÊM GROUP
+      </button>
+    </form>
+  </article>
+
+  <!-- GROUPS LIST CARD -->
+  <article class="panel card-pad-lg">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Danh sách nhóm</span>
+        <h3 class="section-title">Các Group đang quản lý</h3>
+      </div>
+      <span class="badge blue">{{ groups|length }} Group</span>
+    </div>
+
+    {% if groups %}
+    <div class="groups-table">
+      {% for group in groups %}
+      <div class="group-row">
+        <span class="group-index">#{{ loop.index }}</span>
+        <div class="group-fb-badge">
+          <svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+          </svg>
+        </div>
+        <div class="group-url-col">
+          <a href="{{ group }}" target="_blank" rel="noopener noreferrer" class="group-url-link" title="{{ group }}">
+            <span class="truncate-text">{{ group }}</span>
+            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+            </svg>
+          </a>
+        </div>
+        <div class="group-actions-col">
+          <form method="post" action="{{ url_for('delete_group', index=loop.index0) }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa Group này khỏi danh sách?')">
+            <button class="btn danger sm" type="submit" title="Xóa Group">
+              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+              </svg>
+              <span>Xóa</span>
+            </button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+      </svg>
+      <p>Chưa có Group nào trong danh sách. Hãy dán link Group vào ô phía trên để bắt đầu.</p>
+    </div>
+    {% endif %}
+  </article>
+</section>
+
+
+{% endblock %}

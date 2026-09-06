@@ -1,0 +1,10 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FB POST PRO Connector</title><link rel="stylesheet" href="popup.css"></head><body>
+<div class="app"><div class="brand"><div class="logo">FB</div><div><strong>FB POST PRO</strong><small>Connector</small></div></div>
+<div id="status" class="status offline"><span></span><div><strong>Chưa liên kết</strong><small>Nhập URL server và mã liên kết</small></div></div>
+<label>Website FB POST PRO</label><input id="server" placeholder="https://fb-post-pro.onrender.com">
+<label>Mã liên kết</label><input id="code" placeholder="VD: A7K9M2QX" maxlength="12" autocomplete="off">
+<button id="connect" class="primary">LIÊN KẾT</button>
+<div class="row"><button id="check">KIỂM TRA NGAY</button><button id="facebook">MỞ FACEBOOK</button></div>
+<button id="disconnect" class="danger">NGẮT LIÊN KẾT TRÊN CHROME NÀY</button>
+<div class="note">🔒 Connector không gửi mật khẩu hoặc giá trị cookie Facebook lên server. Server chỉ nhận trạng thái đã đăng nhập / chưa đăng nhập.</div>
+<div id="message" class="message"></div></div><script src="popup.js"></script></body></html>

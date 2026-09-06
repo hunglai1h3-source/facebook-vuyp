@@ -1,0 +1,64 @@
+/* Presentation only: saved content, upload handlers and form ownership stay intact. */
+.compose-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr); gap: 24px; align-items: start; }
+.composer-form { display: flex; flex-direction: column; min-width: 0; }
+.compose-layout > .composer-form { grid-column: 1; grid-row: 1; }
+.compose-layout > .campaign-sidebar { grid-column: 2; grid-row: 1; }
+.compose-layout .section-header { margin-bottom: 28px; }
+.compose-layout .form-group { margin-bottom: 24px; }
+.input-icon-group { position: relative; display: flex; align-items: center; min-width: 0; }
+.input-icon-group .icon-slot { position: absolute; left: 16px; color: var(--text3); display: flex; pointer-events: none; }
+.composer-form .input-icon-group input { padding-left: 46px; min-height: 48px; }
+.composer-form textarea { min-height: 260px; padding: 16px; }
+.label-split { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 6px; }
+.label-hint { font-size: 12px; color: var(--text3); }
+.dropzone { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 24px; border: 1px dashed var(--accent-border); border-radius: var(--r-md); background: var(--accent-tint); cursor: pointer; transition: border-color var(--duration-fast), background-color var(--duration-fast); }
+.dropzone:hover, .dropzone:focus-within { border-color: var(--focus-ring); background: var(--accent-tint2); }
+.dropzone-icon { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: var(--r-md); border: 1px solid var(--accent-border); color: var(--accent-h); background: var(--surface); }
+.dropzone-text { flex: 1 1 180px; min-width: 0; }
+.dropzone-text strong { display: block; font-size: 14px; }
+.dropzone-text p { font-size: 12px; color: var(--text3); line-height: 1.6; margin-top: 4px; }
+.selected-status-bar { margin-top: 8px; }
+.selected-pill { display: inline-block; font-size: 12px; color: var(--text3); }
+.selected-pill.has-files { padding: 4px 10px; border-radius: var(--r-full); color: var(--accent-h); background: var(--accent-tint); }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+.gallery-grid:empty { margin-top: 0; }
+.gallery-card { position: relative; aspect-ratio: 1; min-width: 0; overflow: hidden; border: 1px solid var(--border2); border-radius: var(--r-md); background: var(--surface2); }
+.gallery-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-card > .del-single-btn { position: absolute; top: 6px; right: 6px; }
+/* Keep removal controls visible on touch and keyboard as well as hover. */
+.del-single-btn { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid rgb(255 255 255 / 25%); border-radius: var(--r-sm); background: rgb(8 12 20 / 90%); color: white; cursor: pointer; }
+.del-single-btn:hover { background: var(--danger-solid); }
+.delay-section { padding: 20px; margin-block: 12px 24px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface2); }
+.delay-intro { margin-bottom: 16px; }
+.delay-title { font-size: 15px; font-weight: 600; color: var(--text); margin-top: 6px; }
+.compose-layout .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.campaign-sidebar { min-width: 0; }
+/* Sticky only when a tall desktop viewport can accommodate the controls. */
+@media (min-width: 1201px) and (min-height: 1000px) { .campaign-sidebar { position: sticky; top: calc(var(--topbar-h) + 24px); } }
+.summary-list { display: grid; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.summary-item { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; padding-block: 10px; font-size: 14px; }
+.summary-item span { color: var(--text2); }
+.summary-item strong { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.thumb-strip-wrap { padding-block: 20px; border-bottom: 1px solid var(--border); }
+.thumb-strip-title { display: block; font-size: 12px; color: var(--text3); margin-bottom: 12px; }
+.thumb-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.thumb-box { width: 48px; height: 48px; border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--border); }
+.thumb-box img { width: 100%; height: 100%; object-fit: cover; }
+.thumb-more-note { font-size: 12px; color: var(--text3); margin-top: 8px; }
+.aside-connector-box { display: flex; align-items: flex-start; gap: 12px; padding: 16px; margin-top: 20px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface2); }
+.aside-connector-box > div { min-width: 0; }
+.aside-connector-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: var(--r-sm); color: var(--accent-h); background: var(--accent-tint2); }
+.aside-connector-box strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.aside-connector-box p { margin-top: 6px; font-size: 12px; color: var(--text3); line-height: 1.6; overflow-wrap: anywhere; }
+.info-note { display: flex; align-items: flex-start; gap: 10px; padding: 16px; margin-top: 20px; border-radius: var(--r-md); border: 1px solid var(--accent-border); background: var(--accent-tint); font-size: 12px; line-height: 1.7; color: var(--text2); }
+@media (max-width: 1200px) {
+  .compose-layout { grid-template-columns: minmax(0, 1fr); }
+  .compose-layout > .campaign-sidebar { grid-column: 1; grid-row: auto; }
+}
+@media (max-width: 600px) {
+  .dropzone { padding: 16px; gap: 12px; }
+  .dropzone .btn { width: 100%; min-height: 44px; }
+  .delay-section { padding: 16px; }
+  .compose-layout .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .del-single-btn { width: 44px; height: 44px; }
+}

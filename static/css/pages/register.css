@@ -1,0 +1,17 @@
+.feature-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 32px; }
+.feature-card { padding: 20px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface); transition: border-color var(--duration-fast), transform var(--duration-fast) var(--ease-out); }
+.fc-icon { display: grid; place-items: center; width: 36px; height: 36px; margin-bottom: 16px; border: 1px solid var(--accent-border); border-radius: var(--r-sm); background: var(--accent-tint); font-size: 18px; }
+.feature-card strong { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.feature-card p { font-size: 12px; line-height: 1.7; color: var(--text3); }
+.form-pane .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
+.grid2 > * { min-width: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .feature-card:hover { border-color: var(--accent-border); transform: translateY(-2px); }
+}
+@media (min-width: 961px) and (max-width: 1200px), (max-width: 480px) {
+  .form-pane .grid2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .feature-card { transition: none; }
+  .feature-card:hover { transform: none; }
+}

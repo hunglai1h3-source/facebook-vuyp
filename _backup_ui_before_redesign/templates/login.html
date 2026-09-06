@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Đăng nhập • FB POST PRO</title>
+<style>
+*{box-sizing:border-box}:root{--bg:#070a12;--panel:#101727;--line:rgba(255,255,255,.09);--text:#f8fafc;--muted:#94a3b8;--violet:#7c3aed;--blue:#2563eb;--red:#ef4444}body{margin:0;min-height:100vh;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text);background:radial-gradient(circle at 13% 9%,rgba(124,58,237,.25),transparent 30%),radial-gradient(circle at 88% 88%,rgba(37,99,235,.18),transparent 32%),var(--bg);display:grid;place-items:center;padding:24px}.shell{width:min(1040px,100%);min-height:610px;display:grid;grid-template-columns:1.08fr .92fr;border:1px solid var(--line);border-radius:30px;overflow:hidden;background:rgba(8,12,23,.89);box-shadow:0 38px 110px rgba(0,0,0,.48);backdrop-filter:blur(18px)}.visual{padding:55px;position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(124,58,237,.22),rgba(37,99,235,.07))}.visual:before,.visual:after{content:"";position:absolute;border-radius:50%;filter:blur(4px)}.visual:before{width:300px;height:300px;right:-120px;top:-90px;background:rgba(59,130,246,.15)}.visual:after{width:280px;height:280px;left:-130px;bottom:-120px;background:rgba(139,92,246,.16)}.brand{position:relative;z-index:2;display:flex;align-items:center;gap:13px}.logo{width:51px;height:51px;border-radius:16px;display:grid;place-items:center;font-weight:950;background:linear-gradient(135deg,#8b5cf6,#2563eb);box-shadow:0 14px 36px rgba(99,102,241,.32)}.brand strong{font-size:18px}.brand small{display:block;color:#a5b4fc;font-size:11px;margin-top:3px}.visual-copy{position:relative;z-index:2;margin-top:100px}.eyebrow{font-size:10px;letter-spacing:.18em;font-weight:850;color:#a78bfa}.visual h1{font-size:47px;line-height:1.02;letter-spacing:-1.8px;margin:14px 0 18px;max-width:520px}.visual p{font-size:14px;line-height:1.75;color:#cbd5e1;max-width:490px}.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:28px}.chip{font-size:11px;padding:8px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);color:#dbeafe}.login{padding:52px 48px;display:flex;flex-direction:column;justify-content:center}.login .eyebrow{margin-bottom:7px}.login h2{font-size:29px;margin:0 0 8px;letter-spacing:-.5px}.sub{font-size:13px;line-height:1.65;color:var(--muted);margin-bottom:24px}.error{padding:11px 13px;border-radius:12px;border:1px solid rgba(239,68,68,.23);background:rgba(239,68,68,.07);color:#fecaca;font-size:12px;margin-bottom:13px}.field{margin-bottom:14px}.field label{display:block;font-size:11px;color:#cbd5e1;font-weight:750;margin-bottom:8px}.field input[type="text"],.field input[type="password"]{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:13px;background:#090f1d;color:#fff;outline:none;font-size:14px}.field input:focus{border-color:rgba(124,58,237,.65);box-shadow:0 0 0 4px rgba(124,58,237,.1)}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 15px;font-size:11px;color:var(--muted)}.remember{display:flex;align-items:center;gap:8px}.remember input{accent-color:#7c3aed}.submit{width:100%;border:0;border-radius:13px;padding:14px 15px;color:white;font-weight:850;cursor:pointer;background:linear-gradient(135deg,#7c3aed,#2563eb);box-shadow:0 14px 34px rgba(99,102,241,.27)}.register-link{text-align:center;margin-top:18px;color:var(--muted);font-size:12px}.register-link a{color:#c4b5fd;text-decoration:none;font-weight:800}.security{text-align:center;color:#5f6d86;font-size:10px;margin-top:20px}.next{display:none}@media(max-width:800px){.shell{grid-template-columns:1fr;min-height:auto}.visual{display:none}.login{padding:38px 26px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <section class="visual">
+    <div class="brand"><div class="logo">FB</div><div><strong>FB POST PRO</strong><small>Local Chrome</small></div></div>
+    <div class="visual-copy"><div class="eyebrow">MULTI-USER AUTOMATION</div><h1>Quản lý chiến dịch Facebook trong một nơi.</h1><p>Đăng nhập để quản lý Groups, nội dung, lịch sử chiến dịch và Chrome profile Facebook riêng cho tài khoản của bạn.</p><div class="chips"><span class="chip">🌐 Chrome</span><span class="chip">◉ PostgreSQL</span><span class="chip">⚡ Local</span></div></div>
+  </section>
+  <section class="login">
+    <div class="eyebrow">WELCOME BACK</div><h2>Đăng nhập</h2><div class="sub">Tiếp tục vào FB POST PRO bằng username hoặc email.</div>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="post">
+      <input class="next" type="hidden" name="next" value="{{ next_url }}">
+      <div class="field"><label>Username hoặc Email</label><input type="text" name="login" placeholder="username@example.com" autocomplete="username" autofocus required></div>
+      <div class="field"><label>Mật khẩu</label><input type="password" name="password" placeholder="••••••••" autocomplete="current-password" required></div>
+      <div class="row"><label class="remember"><input type="checkbox" name="remember" value="1"> Ghi nhớ đăng nhập</label><span>FB POST PRO</span></div>
+      <button class="submit" type="submit">ĐĂNG NHẬP →</button>
+    </form>
+    <div class="register-link">Chưa có tài khoản? <a href="{{ url_for('register') }}">Tạo tài khoản</a></div>
+    <div class="security">🔒 Mật khẩu FB POST PRO được lưu dưới dạng hash.</div>
+  </section>
+</div>
+</body>
+</html>

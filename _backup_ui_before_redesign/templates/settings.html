@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Cài đặt • FB POST PRO{% endblock %}
+{% block page_title %}Cài đặt{% endblock %}
+{% block page_subtitle %}Liên kết Facebook đang dùng trên Chrome bằng FB POST PRO Connector.{% endblock %}
+{% block content %}
+<section class="connector-settings">
+  <div class="hero-card connector-hero">
+    <div>
+      <div class="hero-eyebrow">CHROME EXTENSION MODE</div>
+      <h2>Dùng Facebook đang đăng nhập trên Chrome</h2>
+      <p>Khách không nhập mật khẩu Facebook vào FB POST PRO. Connector chỉ kiểm tra trạng thái đăng nhập và thao tác trên facebook.com khi chính khách bấm chạy chiến dịch.</p>
+    </div>
+    <div class="hero-badges"><span class="mini-badge">🔒 Không lưu mật khẩu</span><span class="mini-badge">🌐 Chrome thật</span><span class="mini-badge">🇻🇳 Dùng máy khách</span></div>
+  </div>
+
+  <div class="settings-grid">
+    <article class="panel settings-panel">
+      <div class="panel-head"><div><span class="eyebrow">CHIẾN DỊCH</span><h3>Cài đặt chung</h3></div></div>
+      <form method="post" action="{{ url_for('settings') }}">
+        <div class="form-group"><label>Tên chiến dịch mặc định</label><input type="text" name="campaign_name" value="{{ settings.campaign_name }}"></div>
+        <div class="delay-grid">
+          <div class="form-group"><label>Delay tối thiểu (phút)</label><input type="number" name="min_delay" min="0" value="{{ settings.min_delay }}"></div>
+          <div class="form-group"><label>Delay tối đa (phút)</label><input type="number" name="max_delay" min="0" value="{{ settings.max_delay }}"></div>
+        </div>
+        <div class="form-group"><label>Giao diện</label><select name="theme"><option value="dark" {% if settings.theme=='dark' %}selected{% endif %}>Tối</option><option value="light" {% if settings.theme=='light' %}selected{% endif %}>Sáng</option></select></div>
+        <button class="btn primary" type="submit">LƯU CÀI ĐẶT</button>
+      </form>
+    </article>
+
+    <article class="panel settings-panel">
+      <div class="panel-head">
+        <div><span class="eyebrow">FB POST PRO CONNECTOR</span><h3>Liên kết Chrome</h3></div>
+        {% if connector_online %}<span class="status-badge online">CONNECTOR ONLINE</span>{% else %}<span class="status-badge offline">CHƯA LIÊN KẾT</span>{% endif %}
+      </div>
+
+      <div class="connector-card {% if connector_online %}is-online{% endif %}">
+        <div class="connector-icon">🧩</div>
+        <div>
+          {% if connector_online %}
+          <strong>{{ connector_device.name if connector_device else 'FB POST PRO Connector' }}</strong>
+          <p>Extension đang online. Facebook: {% if facebook.status == 'connected' %}<b class="ok">đã đăng nhập</b>{% elif facebook.status == 'needs_login' %}<b class="warn">cần đăng nhập</b>{% else %}<b>đang kiểm tra</b>{% endif %}.</p>
+          {% else %}
+          <strong>Chưa liên kết Chrome</strong>
+          <p>Cài extension FB POST PRO Connector, tạo mã bên dưới rồi nhập mã đó vào popup của extension.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="steps">
+        <div><span>1</span><p>Cài <strong>FB POST PRO Connector</strong> vào Chrome.</p></div>
+        <div><span>2</span><p>Đăng nhập Facebook bình thường trên <strong>facebook.com</strong>.</p></div>
+        <div><span>3</span><p>Bấm <strong>LIÊN KẾT CHROME NÀY</strong>. Nếu extension đã cài, website sẽ tự kết nối; mã 8 ký tự là phương án dự phòng.</p></div>
+      </div>
+
+      <button id="pairBtn" class="btn primary wide" type="button">🔗 LIÊN KẾT CHROME NÀY</button>
+      <div id="pairBox" class="pair-box" hidden>
+        <span>Mã dùng trong 10 phút</span>
+        <strong id="pairCode">--------</strong>
+        <button id="copyPair" type="button" class="copy-btn">SAO CHÉP</button>
+      </div>
+
+      {% if connector_online %}
+      <form method="post" action="{{ url_for('connector_disconnect') }}" onsubmit="return confirm('Ngắt Connector khỏi tài khoản này?')" style="margin-top:10px"><button class="btn danger wide" type="submit">NGẮT CONNECTOR</button></form>
+      {% endif %}
+
+      <div class="safe-note">🔒 FB POST PRO không yêu cầu mật khẩu Facebook. Extension chỉ gửi trạng thái <strong>đã đăng nhập / chưa đăng nhập</strong>; giá trị cookie Facebook không được gửi lên server.</div>
+    </article>
+  </div>
+</section>
+
+<script>
+const pairBtn = document.getElementById('pairBtn');
+const pairBox = document.getElementById('pairBox');
+const pairCode = document.getElementById('pairCode');
+const copyPair = document.getElementById('copyPair');
+pairBtn?.addEventListener('click', async () => {
+  pairBtn.disabled = true; pairBtn.textContent = 'ĐANG TẠO MÃ...';
+  try {
+    const r = await fetch('{{ url_for("extension_pair_code") }}', {method:'POST', headers:{'Accept':'application/json'}});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Không tạo được mã.');
+    pairCode.textContent = data.code;
+    pairBox.hidden = false;
+    pairBtn.textContent = '↻ LIÊN KẾT LẠI';
+    window.postMessage({source:'FBPOST_WEB',type:'PAIR_CONNECTOR',code:data.code}, location.origin);
+  } catch (e) {
+    alert(e.message || e);
+    pairBtn.textContent = '🔗 LIÊN KẾT CHROME NÀY';
+  } finally { pairBtn.disabled = false; }
+});
+window.addEventListener('message', (event) => {
+  if (event.source !== window || event.origin !== location.origin) return;
+  const data = event.data || {};
+  if (data.source !== 'FBPOST_EXTENSION' || data.type !== 'PAIR_RESULT') return;
+  if (data.result?.ok) {
+    pairBtn.textContent = '✓ ĐÃ LIÊN KẾT';
+    setTimeout(() => location.reload(), 900);
+  } else if (data.result?.error) {
+    pairBox.hidden = false;
+    alert('Chưa tự liên kết được. Mở popup FB POST PRO Connector và nhập mã đang hiển thị.\n\n' + data.result.error);
+  }
+});
+copyPair?.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(pairCode.textContent.trim());
+  copyPair.textContent = 'ĐÃ SAO CHÉP';
+  setTimeout(()=>copyPair.textContent='SAO CHÉP',1200);
+});
+</script>
+<style>
+.connector-settings{display:grid;gap:18px}.connector-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:25px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(135deg,rgba(124,58,237,.14),rgba(37,99,235,.08)),var(--panel);box-shadow:var(--shadow)}.connector-hero h2{margin:7px 0;font-size:24px}.connector-hero p{margin:0;color:var(--muted);font-size:12px;line-height:1.65;max-width:760px}.hero-eyebrow,.eyebrow{font-size:9px;letter-spacing:.16em;font-weight:850;color:#a78bfa}.hero-badges{display:flex;gap:7px;flex-wrap:wrap}.mini-badge{padding:7px 10px;border:1px solid var(--line);border-radius:999px;font-size:10px;font-weight:800}.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.settings-panel{padding:20px}.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}.panel-head h3{margin:5px 0 0}.delay-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.connector-card{display:flex;gap:13px;padding:16px;border:1px solid rgba(245,158,11,.16);border-radius:15px;background:rgba(245,158,11,.045)}.connector-card.is-online{border-color:rgba(34,197,94,.18);background:rgba(34,197,94,.05)}.connector-icon{width:45px;height:45px;display:grid;place-items:center;border-radius:14px;background:rgba(124,58,237,.14);font-size:21px}.connector-card strong{font-size:13px}.connector-card p{margin:5px 0 0;color:var(--muted);font-size:10px;line-height:1.6}.ok{color:#86efac}.warn{color:#fcd34d}.steps{display:grid;gap:8px;margin:14px 0}.steps>div{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border:1px solid var(--line);border-radius:12px}.steps span{width:22px;height:22px;flex:0 0 22px;border-radius:7px;display:grid;place-items:center;background:rgba(124,58,237,.15);color:#c4b5fd;font-size:10px;font-weight:900}.steps p{margin:2px 0 0;font-size:10px;color:var(--muted);line-height:1.55}.wide{width:100%;justify-content:center}.pair-box{margin-top:10px;padding:14px;border:1px solid rgba(124,58,237,.25);border-radius:14px;background:rgba(124,58,237,.07);text-align:center}.pair-box span{display:block;font-size:9px;color:var(--muted)}.pair-box strong{display:block;font-size:28px;letter-spacing:.18em;margin:8px 0;color:#ddd6fe}.copy-btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:8px 11px;border-radius:9px;font-size:9px;font-weight:900;cursor:pointer}.safe-note{margin-top:13px;padding:12px 13px;border:1px solid var(--line);border-radius:12px;font-size:10px;color:var(--muted);line-height:1.6}.status-badge{font-size:9px;font-weight:900;padding:6px 9px;border-radius:999px}.status-badge.online{background:rgba(34,197,94,.13);color:#86efac}.status-badge.offline{background:rgba(245,158,11,.12);color:#fcd34d}@media(max-width:900px){.settings-grid{grid-template-columns:1fr}.connector-hero{align-items:flex-start;flex-direction:column}}@media(max-width:560px){.delay-grid{grid-template-columns:1fr}}
+</style>
+{% endblock %}

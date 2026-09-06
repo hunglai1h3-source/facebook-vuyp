@@ -1,0 +1,29 @@
+.history-shell { min-height: 480px; }
+.history-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.history-timeline { display: grid; gap: var(--space-4); position: relative; margin-top: 32px; }
+.history-timeline::before { content: ''; position: absolute; left: 19px; top: 20px; bottom: 20px; width: 1px; background: var(--border2); pointer-events: none; }
+.timeline-entry { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: start; gap: 20px; position: relative; }
+.timeline-indicator { position: relative; padding-block: 16px; }
+.indicator-icon { width: 40px; height: 40px; border-radius: var(--r-md); display: grid; place-items: center; border: 1px solid var(--border2); background: var(--surface); box-shadow: 0 0 0 5px var(--surface); }
+.icon-success { color: var(--green); border-color: var(--green-border); }
+.icon-error { color: var(--red); border-color: var(--red-border); }
+.icon-warning { color: var(--amber); border-color: var(--amber-border); }
+.icon-info { color: var(--blue); border-color: var(--blue-border); }
+.timeline-body { min-width: 0; padding: 20px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-md); transition: border-color var(--duration-fast); }
+.timeline-body:hover { border-color: var(--border3); }
+.timeline-header-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; }
+.timeline-msg { font-size: 14px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.timeline-timestamp { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--font-mono); color: var(--text3); }
+.timeline-timestamp svg { flex-shrink: 0; }
+.timeline-detail-box { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font: 13px/1.7 var(--font-mono); color: var(--text2); overflow-wrap: anywhere; }
+.history-shell .empty-state { padding-block: 72px; }
+@media (max-width: 600px) {
+  .history-timeline { gap: 12px; margin-top: 24px; }
+  .timeline-entry { grid-template-columns: 28px minmax(0, 1fr); gap: 12px; }
+  .indicator-icon { width: 28px; height: 28px; border-radius: var(--r-sm); box-shadow: 0 0 0 3px var(--surface); }
+  .history-timeline::before { left: 13px; }
+  .timeline-body { padding: 14px; }
+  .timeline-header-row { flex-direction: column; align-items: flex-start; }
+  .timeline-timestamp { font-size: 11px; }
+  .history-actions .btn { min-height: 44px; }
+}

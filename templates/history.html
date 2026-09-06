@@ -1,3 +1,97 @@
 {% extends "base.html" %}
-{% block title %}Lịch sử • FB POST PRO{% endblock %}{% block page_title %}Lịch sử{% endblock %}{% block page_subtitle %}Theo dõi kết quả đăng bài và lỗi chiến dịch.{% endblock %}
-{% block content %}<article class="panel" style="padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h3 style="margin:0">Hoạt động gần đây</h3><form method="post" action="{{ url_for('clear_history') }}" onsubmit="return confirm('Xóa toàn bộ lịch sử?')"><button class="btn danger" type="submit">Xóa lịch sử</button></form></div>{% if history %}<div style="display:grid;margin-top:14px">{% for item in history %}<div style="display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:11px;align-items:start;padding:12px 0;border-bottom:1px solid var(--line)"><span style="width:8px;height:8px;border-radius:50%;margin-top:4px;background:{% if item.status=='success' %}#22c55e{% elif item.status=='error' %}#ef4444{% elif item.status=='warning' %}#f59e0b{% else %}#3b82f6{% endif %}"></span><div><strong style="font-size:11px">{{ item.message }}</strong>{% if item.detail %}<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-word">{{ item.detail }}</div>{% endif %}</div><time style="font-size:9px;color:var(--muted);white-space:nowrap">{{ item.time }}</time></div>{% endfor %}</div>{% else %}<div class="empty-state" style="margin-top:15px">Chưa có lịch sử.</div>{% endif %}</article>{% endblock %}
+
+{% block title %}Lịch sử hoạt động • FB POST PRO{% endblock %}
+{% block page_title %}Lịch sử hoạt động{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/history.css') }}">
+{% endblock %}
+
+{% block content %}
+<article class="panel card-pad-lg history-shell">
+  <div class="section-header">
+    <div>
+      <span class="eyebrow">Nhật ký hệ thống</span>
+      <h3 class="section-title">Hoạt động gần đây</h3>
+      <p class="section-desc">Ghi nhận theo thời gian thực từ FB POST PRO và Chrome Connector.</p>
+    </div>
+    <div class="history-actions">
+      {% if history %}
+      <span class="badge blue">{{ history|length }} sự kiện</span>
+      <form method="post" action="{{ url_for('clear_history') }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa toàn bộ lịch sử hoạt động?')">
+        <button class="btn danger sm" type="submit">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          </svg>
+          Xóa toàn bộ
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if history %}
+  <div class="history-timeline timeline-container">
+    {% for item in history %}
+    <div class="timeline-entry status-{{ item.status or 'info' }}">
+      <div class="timeline-indicator">
+        {% if item.status == 'success' %}
+        <span class="indicator-icon icon-success">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+          </svg>
+        </span>
+        {% elif item.status == 'error' %}
+        <span class="indicator-icon icon-error">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </span>
+        {% elif item.status == 'warning' %}
+        <span class="indicator-icon icon-warning">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+        </span>
+        {% else %}
+        <span class="indicator-icon icon-info">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </span>
+        {% endif %}
+      </div>
+
+      <div class="timeline-body">
+        <div class="timeline-header-row">
+          <strong class="timeline-msg">{{ item.message }}</strong>
+          <time class="timeline-timestamp">
+            <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            {{ item.time }}
+          </time>
+        </div>
+
+        {% if item.detail %}
+        <div class="timeline-detail-box">
+          {{ item.detail }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state" style="margin-top:24px">
+    <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <p>Chưa có nhật ký hoạt động nào. Khi bạn chạy chiến dịch hoặc thêm group, lịch sử sẽ xuất hiện tại đây.</p>
+  </div>
+  {% endif %}
+</article>
+
+
+{% endblock %}

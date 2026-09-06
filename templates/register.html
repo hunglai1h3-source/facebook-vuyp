@@ -4,25 +4,149 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Đăng ký • FB POST PRO</title>
-<style>
-*{box-sizing:border-box}:root{--bg:#070a12;--line:rgba(255,255,255,.09);--text:#f8fafc;--muted:#94a3b8;--violet:#7c3aed;--blue:#2563eb;--red:#ef4444}body{margin:0;min-height:100vh;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text);background:radial-gradient(circle at 14% 8%,rgba(37,99,235,.21),transparent 30%),radial-gradient(circle at 90% 90%,rgba(124,58,237,.22),transparent 32%),var(--bg);display:grid;place-items:center;padding:24px}.shell{width:min(1100px,100%);display:grid;grid-template-columns:.88fr 1.12fr;border:1px solid var(--line);border-radius:30px;overflow:hidden;background:rgba(8,12,23,.9);box-shadow:0 38px 110px rgba(0,0,0,.48);backdrop-filter:blur(18px)}.visual{padding:52px;background:linear-gradient(150deg,rgba(37,99,235,.16),rgba(124,58,237,.12));position:relative;overflow:hidden}.brand{display:flex;align-items:center;gap:13px;position:relative;z-index:2}.logo{width:50px;height:50px;border-radius:16px;display:grid;place-items:center;font-weight:950;background:linear-gradient(135deg,#8b5cf6,#2563eb);box-shadow:0 14px 36px rgba(99,102,241,.3)}.brand strong{font-size:18px}.brand small{display:block;color:#a5b4fc;font-size:11px;margin-top:3px}.copy{margin-top:92px;position:relative;z-index:2}.eyebrow{font-size:10px;letter-spacing:.18em;font-weight:850;color:#a78bfa}.visual h1{font-size:43px;line-height:1.04;letter-spacing:-1.5px;margin:14px 0 18px}.visual p{font-size:13px;color:#cbd5e1;line-height:1.75}.benefits{display:grid;gap:10px;margin-top:28px}.benefit{display:flex;gap:9px;align-items:flex-start;font-size:12px;color:#dbeafe}.form-side{padding:44px 50px}.form-side h2{font-size:28px;margin:8px 0}.sub{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:23px}.error{padding:11px 13px;border-radius:12px;border:1px solid rgba(239,68,68,.23);background:rgba(239,68,68,.07);color:#fecaca;font-size:12px;margin-bottom:13px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{margin-bottom:13px}.field.full{grid-column:1/-1}.field label{display:block;font-size:11px;color:#cbd5e1;font-weight:750;margin-bottom:8px}.field input{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:13px;background:#090f1d;color:#fff;outline:none;font-size:14px}.field input:focus{border-color:rgba(124,58,237,.65);box-shadow:0 0 0 4px rgba(124,58,237,.1)}.hint{font-size:10px;color:#64748b;margin-top:6px;line-height:1.5}.submit{width:100%;margin-top:4px;border:0;border-radius:13px;padding:14px;color:white;font-weight:850;cursor:pointer;background:linear-gradient(135deg,#7c3aed,#2563eb);box-shadow:0 14px 34px rgba(99,102,241,.27)}.login-link{text-align:center;font-size:12px;color:var(--muted);margin-top:17px}.login-link a{color:#c4b5fd;text-decoration:none;font-weight:800}@media(max-width:820px){.shell{grid-template-columns:1fr}.visual{display:none}.form-side{padding:34px 24px}}@media(max-width:560px){.grid{grid-template-columns:1fr}.field.full{grid-column:auto}}
-</style>
+<title>Đăng ký tài khoản • FB POST PRO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/auth.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/register.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/motion.css') }}">
+<script defer src="{{ url_for('static', filename='js/ui-motion.js') }}"></script>
 </head>
 <body>
-<div class="shell">
-  <section class="visual"><div class="brand"><div class="logo">FB</div><div><strong>FB POST PRO</strong><small>Local Chrome</small></div></div><div class="copy"><div class="eyebrow">CREATE WORKSPACE</div><h1>Mỗi tài khoản một Chrome profile Facebook riêng.</h1><p>Tạo tài khoản FB POST PRO để tách dữ liệu, chiến dịch và Chrome profile theo từng User ID.</p><div class="benefits"><div class="benefit">✓ Dữ liệu tài khoản dùng PostgreSQL</div><div class="benefit">✓ Chrome profile tách riêng theo người dùng</div><div class="benefit">✓ Có thể quản lý và đăng xuất độc lập</div></div></div></section>
-  <section class="form-side"><div class="eyebrow">NEW ACCOUNT</div><h2>Tạo tài khoản</h2><div class="sub">Điền thông tin bên dưới. Sau khi đăng ký bạn sẽ được đăng nhập ngay vào FB POST PRO.</div>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
-    <form method="post"><div class="grid">
-      <div class="field full"><label>Tên hiển thị</label><input type="text" name="display_name" placeholder="Nguyễn Văn A" autocomplete="name" required></div>
-      <div class="field"><label>Username</label><input type="text" name="username" placeholder="nguyenvana" autocomplete="username" required><div class="hint">3–32 ký tự: chữ thường, số, ., _ hoặc -</div></div>
-      <div class="field"><label>Email</label><input type="email" name="email" placeholder="name@example.com" autocomplete="email" required></div>
-      <div class="field"><label>Mật khẩu</label><input type="password" name="password" placeholder="Tối thiểu 8 ký tự" autocomplete="new-password" required></div>
-      <div class="field"><label>Nhập lại mật khẩu</label><input type="password" name="confirm_password" placeholder="Nhập lại mật khẩu" autocomplete="new-password" required></div>
-    </div><button class="submit" type="submit">TẠO TÀI KHOẢN →</button></form>
-    <div class="login-link">Đã có tài khoản? <a href="{{ url_for('login') }}">Đăng nhập</a></div>
+
+<main class="auth-wrapper">
+  <!-- LEFT SHOWCASE -->
+  <section class="showcase-pane">
+    <div class="brand-top">
+      <div class="brand-icon">FB</div>
+      <div class="brand-meta">
+        <strong>FB POST PRO</strong>
+        <small>Automation Suite &amp; Connector</small>
+      </div>
+    </div>
+
+    <div class="showcase-body">
+      <div class="hero-tag">BẮT ĐẦU NGAY HÔM NAY</div>
+      <h1 class="showcase-title">
+        Tạo tài khoản &amp;<br>
+        <span class="gradient-text">trải nghiệm tự động hóa</span>
+      </h1>
+      <p class="showcase-desc">
+        Quản lý hàng trăm Group Facebook trong một giao diện duy nhất. Đồng bộ với Chrome Extension Connector ngay sau khi đăng ký.
+      </p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <span class="fc-icon">⚡</span>
+          <strong>Kết nối tức thì</strong>
+          <p>Ghép nối Extension qua mã bảo mật 8 ký tự chỉ trong 5 giây.</p>
+        </div>
+        <div class="feature-card">
+          <span class="fc-icon">🔒</span>
+          <strong>An toàn tài khoản</strong>
+          <p>Không lưu mật khẩu FB, giữ nguyên bảo mật 2FA của bạn.</p>
+        </div>
+        <div class="feature-card">
+          <span class="fc-icon">🕒</span>
+          <strong>Delay thông minh</strong>
+          <p>Khoảng chờ ngẫu nhiên tránh checkpoint Facebook tự động.</p>
+        </div>
+        <div class="feature-card">
+          <span class="fc-icon">📊</span>
+          <strong>Báo cáo thực</strong>
+          <p>Theo dõi tiến độ bài đăng và tỷ lệ thành công trực quan.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="showcase-footer">
+      <span>© FB POST PRO — Nền tảng Automation Facebook chuyên nghiệp</span>
+    </div>
   </section>
-</div>
+
+  <!-- RIGHT FORM -->
+  <section class="form-pane">
+    <div class="form-header">
+      <p class="form-eyebrow">Create account</p>
+      <h2>Đăng ký tài khoản 🚀</h2>
+      <p>Khởi tạo tài khoản quản trị FB POST PRO của bạn</p>
+    </div>
+
+    {% if error %}
+    <div class="error-box">
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+      <span>{{ error }}</span>
+    </div>
+    {% endif %}
+
+    <form method="post">
+      <div class="field-group">
+        <label class="field-label" for="display_name">Tên hiển thị</label>
+        <div class="input-box">
+          <span class="lead-icon">
+            <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </span>
+          <input id="display_name" type="text" name="display_name" placeholder="Nguyễn Văn A" required autofocus>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div>
+          <label class="field-label" for="username">Tên đăng nhập</label>
+          <div class="input-box">
+            <span class="lead-icon">
+              <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+            </span>
+            <input id="username" type="text" name="username" placeholder="user123" required>
+          </div>
+        </div>
+        <div>
+          <label class="field-label" for="email">Địa chỉ Email</label>
+          <div class="input-box">
+            <span class="lead-icon">
+              <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            </span>
+            <input id="email" type="email" name="email" placeholder="name@example.com" required>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="password">Mật khẩu</label>
+        <div class="input-box">
+          <span class="lead-icon">
+            <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </span>
+          <input id="password" type="password" name="password" placeholder="••••••••" required>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="confirm_password">Xác nhận mật khẩu</label>
+        <div class="input-box">
+          <span class="lead-icon">
+            <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          </span>
+          <input id="confirm_password" type="password" name="confirm_password" placeholder="••••••••" required>
+        </div>
+      </div>
+
+      <button class="btn-login" type="submit">
+        <span>Đăng ký ngay</span>
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+        </svg>
+      </button>
+    </form>
+
+    <div class="register-hint">
+      Đã có tài khoản? <a href="{{ url_for('login') }}">Đăng nhập ngay</a>
+    </div>
+  </section>
+</main>
+
 </body>
 </html>
