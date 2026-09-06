@@ -343,9 +343,9 @@ def browser_checks(output, comparison=None, screen=None):
                 assert context.request.post(origin + "/api/agent/heartbeat", headers=auth,
                                             data={"facebook_logged_in": True}).ok
                 page.goto(origin + "/compose")
-                page.locator('form[action="/run-campaign"] button').click()
+                page.locator('form[action="/run-campaign"] button[value="run"]').click()
                 page.wait_for_load_state()
-                assert page.locator('form[action="/run-campaign"] button').is_disabled()
+                assert page.locator('form[action="/run-campaign"] button[value="run"]').is_disabled()
                 job = context.request.get(origin + "/api/agent/job", headers=auth).json()
                 assert job["has_job"] and job["job"]["content"].startswith("Nội dung")
                 page.locator('form[action="/stop-campaign"] button').click()
