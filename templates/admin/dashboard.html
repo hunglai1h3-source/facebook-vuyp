@@ -1,0 +1,15 @@
+{% extends 'admin/base.html' %}
+{% block title %}Tổng quan{% endblock %}{% block heading %}Operations overview{% endblock %}{% block subheading %}Sức khỏe người dùng, campaign và desktop worker theo dữ liệu persistent.{% endblock %}
+{% block content %}
+<section class="metrics">
+  <article class="metric"><span>Tổng user</span><strong>{{ metrics.users }}</strong><small class="muted">{{ metrics.active_users }} đang active</small></article>
+  <article class="metric"><span>Facebook account</span><strong>{{ metrics.accounts }}</strong></article>
+  <article class="metric"><span>Groups</span><strong>{{ metrics.groups }}</strong></article>
+  <article class="metric"><span>Campaigns</span><strong>{{ metrics.campaigns }}</strong></article>
+  <article class="metric" style="--glow:rgba(52,211,153,.2)"><span>Worker online</span><strong>{{ metrics.devices_online }}</strong><small class="muted">{{ metrics.devices_offline }} offline</small></article>
+  <article class="metric" style="--glow:rgba(52,211,153,.2)"><span>Task thành công</span><strong>{{ metrics.task_success }}</strong></article>
+  <article class="metric" style="--glow:rgba(251,113,133,.2)"><span>Task thất bại</span><strong>{{ metrics.task_failed }}</strong></article>
+  <article class="metric"><span>User bị khóa</span><strong>{{ metrics.users - metrics.active_users }}</strong></article>
+</section>
+<section class="admin-card"><h2>Campaign lifecycle</h2><div class="status-grid">{% for status, count in metrics.campaign_status.items() %}<div class="status-tile"><strong>{{ count }}</strong><span>{{ status }}</span></div>{% endfor %}</div></section>
+{% endblock %}

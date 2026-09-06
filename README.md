@@ -1,5 +1,7 @@
 # FB POST PRO — Render + Chrome Extension
 
+Production deployment, backup, restore and incident procedures are documented in [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md). Production uses PostgreSQL as the durable source of truth; local JSON files are development/recovery fallback only.
+
 ## Kiến trúc
 
 - **Render Web Service**: Flask UI/API, tài khoản FB POST PRO, chiến dịch, lịch sử, pairing.

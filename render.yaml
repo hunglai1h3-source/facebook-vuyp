@@ -6,19 +6,41 @@ services:
     plan: free
 
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120 --access-logfile - --error-logfile - --max-requests 2000 --max-requests-jitter 200
 
-    healthCheckPath: /health
+    healthCheckPath: /ready
     autoDeployTrigger: commit
 
     envVars:
       - key: SECRET_KEY
         generateValue: true
 
+      - key: APP_ENV
+        value: production
+
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+
+      - key: ENABLE_LEGACY_ADMIN_AUTH
+        value: "false"
+
       - key: ADMIN_PASSWORD
         sync: false
 
+      - key: SESSION_LIFETIME_HOURS
+        value: "12"
+
+      - key: OPERATIONAL_LOG_RETENTION_DAYS
+        value: "30"
+
+      - key: AUDIT_LOG_RETENTION_DAYS
+        value: "365"
+
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
       - key: DATA_ROOT
+        # Transient cache/local recovery only. Durable production data is PostgreSQL.
         value: /tmp/fbpostpro
 
       - key: DATABASE_URL

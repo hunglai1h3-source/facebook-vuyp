@@ -9,7 +9,10 @@ from flask import (
     jsonify,
     session,
     send_file,
+    g,
+    has_request_context,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -44,6 +47,9 @@ import threading
 import time
 import random
 import uuid
+import importlib.util
+import hashlib
+import logging
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 
@@ -68,14 +74,29 @@ LIVEVIEW_TAB_FIX_2026_08_18 = True
 
 app = Flask(__name__)
 
-app.secret_key = os.environ.get(
-    "SECRET_KEY",
-    "change-this-secret-key",
-)
+APP_ENV = os.environ.get("APP_ENV", "development").strip().lower()
+IS_PRODUCTION = APP_ENV in {"production", "prod"}
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()
+WEAK_SECRET_KEYS = {"", "change-this-secret-key", "change-me", "dev", "secret"}
+if IS_PRODUCTION and (SECRET_KEY in WEAK_SECRET_KEYS or len(SECRET_KEY) < 32):
+    raise RuntimeError("Production requires a strong SECRET_KEY environment variable (at least 32 characters).")
+app.secret_key = SECRET_KEY or "development-only-secret-key"
 
-app.permanent_session_lifetime = timedelta(
-    days=3650
+try:
+    session_hours = min(720, max(1, int(os.environ.get("SESSION_LIFETIME_HOURS", "12" if IS_PRODUCTION else "87600"))))
+except ValueError:
+    session_hours = 12 if IS_PRODUCTION else 87600
+app.permanent_session_lifetime = timedelta(hours=session_hours)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=IS_PRODUCTION,
+    SESSION_COOKIE_SAMESITE="Lax",
 )
+if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+trusted_hosts = [item.strip() for item in os.environ.get("ALLOWED_HOSTS", "").split(",") if item.strip()]
+if trusted_hosts:
+    app.config["TRUSTED_HOSTS"] = trusted_hosts
 
 app.config["MAX_CONTENT_LENGTH"] = (
     50 * 1024 * 1024
@@ -112,6 +133,8 @@ USERS_FILE = Path(
         str(DATA_ROOT / "users.json"),
     )
 )
+OPERATIONAL_LOGS_FILE = DATA_ROOT / "operational_logs.json"
+ADMIN_AUDIT_LOGS_FILE = DATA_ROOT / "admin_audit_logs.json"
 
 # Production: đặt DATABASE_URL bằng Internal Database URL của Render Postgres.
 # Local: nếu chưa có DATABASE_URL, hệ thống vẫn dùng users.json để bạn test.
@@ -119,6 +142,9 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "",
 ).strip()
+
+if IS_PRODUCTION and not DATABASE_URL:
+    raise RuntimeError("Production requires DATABASE_URL; local JSON storage is development/recovery only.")
 
 USER_STORE = (
     "postgres"
@@ -134,6 +160,57 @@ CUSTOMERS_ROOT.mkdir(
 FILE_LOCK = threading.RLock()
 PERSISTENCE_INIT_LOCK = threading.RLock()
 PERSISTENCE_TABLES_READY = False
+MAX_JSON_REQUEST_BYTES = 2 * 1024 * 1024
+try:
+    OPERATIONAL_LOG_RETENTION_DAYS = min(3650, max(1, int(os.environ.get("OPERATIONAL_LOG_RETENTION_DAYS", "30"))))
+    AUDIT_LOG_RETENTION_DAYS = min(3650, max(30, int(os.environ.get("AUDIT_LOG_RETENTION_DAYS", "365"))))
+except ValueError:
+    OPERATIONAL_LOG_RETENTION_DAYS, AUDIT_LOG_RETENTION_DAYS = 30, 365
+LOG_CLEANUP_LOCK = threading.Lock()
+LOG_CLEANUP_NEXT_AT = 0.0
+
+
+@app.before_request
+def production_request_guard():
+    incoming_request_id = str(request.headers.get("X-Request-ID", ""))[:80]
+    g.request_id = incoming_request_id if re.fullmatch(r"[A-Za-z0-9_.:-]{8,80}", incoming_request_id) else "req_" + uuid.uuid4().hex[:24]
+    if IS_PRODUCTION:
+        try:
+            maybe_cleanup_expired_logs()
+        except Exception:
+            app.logger.exception("log_retention_cleanup_failed request_id=%s", g.request_id)
+
+    if request.is_json and (request.content_length or 0) > MAX_JSON_REQUEST_BYTES:
+        return jsonify({"error": "JSON payload too large.", "request_id": g.request_id}), 413
+
+    if not IS_PRODUCTION or request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    token_api_prefixes = ("/api/agent/", "/api/cloud/")
+    token_api_paths = {"/api/extension/pair", "/api/connect/register", "/api/connect/status"}
+    if request.path.startswith(token_api_prefixes) or request.path in token_api_paths:
+        return None
+    source = request.headers.get("Origin") or request.headers.get("Referer")
+    if not source:
+        return jsonify({"error": "Same-origin request required.", "request_id": g.request_id}), 403
+    source_parts = urlsplit(source)
+    expected_parts = urlsplit(request.host_url)
+    if (source_parts.scheme, source_parts.netloc.lower()) != (expected_parts.scheme, expected_parts.netloc.lower()):
+        return jsonify({"error": "Cross-origin request rejected.", "request_id": g.request_id}), 403
+    return None
+
+
+@app.after_request
+def production_response_headers(response):
+    response.headers["X-Request-ID"] = getattr(g, "request_id", "") or "req_unknown"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if request.path.startswith("/admin") or request.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 def synchronized_state(function):
@@ -172,6 +249,12 @@ ADMIN_PASSWORD = os.environ.get(
     "ADMIN_PASSWORD",
     "",
 ).strip()
+LEGACY_ADMIN_AUTH_ENABLED = os.environ.get(
+    "ENABLE_LEGACY_ADMIN_AUTH",
+    "true" if not IS_PRODUCTION else "false",
+).strip().lower() in {"1", "true", "yes"}
+if IS_PRODUCTION and LEGACY_ADMIN_AUTH_ENABLED and len(ADMIN_PASSWORD) < 16:
+    raise RuntimeError("Legacy admin auth requires ADMIN_PASSWORD with at least 16 characters in production.")
 
 # Cloud Worker dùng token riêng để nhận job từ Web Service.
 # Trên Render, đặt cùng một CLOUD_WORKER_TOKEN cho Web + Worker.
@@ -670,6 +753,9 @@ def init_users_table():
                     max_facebook_accounts INTEGER NOT NULL DEFAULT 1,
                     max_groups INTEGER NOT NULL DEFAULT 500,
                     max_campaigns INTEGER NOT NULL DEFAULT 100,
+                    max_devices INTEGER NOT NULL DEFAULT 3,
+                    max_active_campaigns INTEGER NOT NULL DEFAULT 1,
+                    max_tasks_per_campaign INTEGER NOT NULL DEFAULT 1000,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     last_login_at TIMESTAMPTZ
                 )
@@ -679,6 +765,9 @@ def init_users_table():
             cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_facebook_accounts INTEGER NOT NULL DEFAULT 1")
             cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_groups INTEGER NOT NULL DEFAULT 500")
             cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_campaigns INTEGER NOT NULL DEFAULT 100")
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_devices INTEGER NOT NULL DEFAULT 3")
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_active_campaigns INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_tasks_per_campaign INTEGER NOT NULL DEFAULT 1000")
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_fbpostpro_users_username
@@ -707,6 +796,15 @@ def init_persistence_tables():
             return
         with postgres_connect() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_schema_migrations (
+                        migration_id VARCHAR(100) PRIMARY KEY,
+                        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        description TEXT NOT NULL DEFAULT ''
+                    )
+                    """
+                )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS fbpostpro_customer_data (
@@ -889,6 +987,66 @@ def init_persistence_tables():
                     WHERE device_id <> ''
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_operational_logs (
+                        log_id VARCHAR(64) PRIMARY KEY,
+                        customer_id VARCHAR(40) NOT NULL DEFAULT '',
+                        campaign_id VARCHAR(64) NOT NULL DEFAULT '',
+                        task_id VARCHAR(80) NOT NULL DEFAULT '',
+                        account_id VARCHAR(64) NOT NULL DEFAULT '',
+                        group_id VARCHAR(80) NOT NULL DEFAULT '',
+                        device_id VARCHAR(100) NOT NULL DEFAULT '',
+                        request_id VARCHAR(80) NOT NULL DEFAULT '',
+                        event_type VARCHAR(80) NOT NULL,
+                        severity VARCHAR(16) NOT NULL DEFAULT 'info',
+                        message TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_logs_created ON fbpostpro_operational_logs (created_at DESC)"
+                )
+                cur.execute("ALTER TABLE fbpostpro_operational_logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(80) NOT NULL DEFAULT ''")
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_logs_filter ON fbpostpro_operational_logs (customer_id, campaign_id, device_id, severity, created_at DESC)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_admin_audit_logs (
+                        audit_id VARCHAR(64) PRIMARY KEY,
+                        admin_id VARCHAR(40) NOT NULL,
+                        action VARCHAR(80) NOT NULL,
+                        target_type VARCHAR(40) NOT NULL,
+                        target_id VARCHAR(80) NOT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_audit_created ON fbpostpro_admin_audit_logs (created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_audit_target ON fbpostpro_admin_audit_logs (target_type, target_id, created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_customer_data_key ON fbpostpro_customer_data (data_key)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_tasks_account_status ON fbpostpro_campaign_tasks (customer_id, account_id, status, created_at DESC)"
+                )
+                cur.execute(
+                    """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
+                       VALUES ('phase09_admin_operations_v1', 'Admin quota, operational log and audit log schema')
+                       ON CONFLICT (migration_id) DO NOTHING"""
+                )
+                cur.execute(
+                    """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
+                       VALUES ('phase10_production_hardening_v1', 'Request IDs, retention support and production indexes')
+                       ON CONFLICT (migration_id) DO NOTHING"""
+                )
             conn.commit()
         PERSISTENCE_TABLES_READY = True
 
@@ -973,6 +1131,9 @@ def _postgres_row_to_user(row):
         "max_facebook_accounts": int(row.get("max_facebook_accounts", 1) or 1),
         "max_groups": int(row.get("max_groups", 500) or 500),
         "max_campaigns": int(row.get("max_campaigns", 100) or 100),
+        "max_devices": int(row.get("max_devices", 3) or 3),
+        "max_active_campaigns": int(row.get("max_active_campaigns", 1) or 1),
+        "max_tasks_per_campaign": int(row.get("max_tasks_per_campaign", 1000) or 1000),
         "created_at": _serialize_dt(row.get("created_at")),
         "last_login_at": _serialize_dt(row.get("last_login_at")),
     }
@@ -1005,6 +1166,9 @@ def load_users():
                     max_facebook_accounts,
                     max_groups,
                     max_campaigns,
+                    max_devices,
+                    max_active_campaigns,
+                    max_tasks_per_campaign,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -1055,11 +1219,14 @@ def save_users(users):
                         max_facebook_accounts,
                         max_groups,
                         max_campaigns,
+                        max_devices,
+                        max_active_campaigns,
+                        max_tasks_per_campaign,
                         created_at,
                         last_login_at
                     )
                     VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         COALESCE(%s::timestamptz, NOW()),
                         %s::timestamptz
                     )
@@ -1074,6 +1241,9 @@ def save_users(users):
                         max_facebook_accounts = EXCLUDED.max_facebook_accounts,
                         max_groups = EXCLUDED.max_groups,
                         max_campaigns = EXCLUDED.max_campaigns,
+                        max_devices = EXCLUDED.max_devices,
+                        max_active_campaigns = EXCLUDED.max_active_campaigns,
+                        max_tasks_per_campaign = EXCLUDED.max_tasks_per_campaign,
                         last_login_at = EXCLUDED.last_login_at
                     """,
                     (
@@ -1087,6 +1257,9 @@ def save_users(users):
                         max(1, int(user.get("max_facebook_accounts", 1) or 1)),
                         max(1, int(user.get("max_groups", 500) or 500)),
                         max(1, int(user.get("max_campaigns", 100) or 100)),
+                        max(1, int(user.get("max_devices", 3) or 3)),
+                        max(1, int(user.get("max_active_campaigns", 1) or 1)),
+                        max(1, int(user.get("max_tasks_per_campaign", 1000) or 1000)),
                         user.get("created_at") or None,
                         user.get("last_login_at") or None,
                     ),
@@ -1133,6 +1306,9 @@ def find_user_by_login(login_value):
                     max_facebook_accounts,
                     max_groups,
                     max_campaigns,
+                    max_devices,
+                    max_active_campaigns,
+                    max_tasks_per_campaign,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -1179,6 +1355,9 @@ def find_user_by_id(user_id):
                     max_facebook_accounts,
                     max_groups,
                     max_campaigns,
+                    max_devices,
+                    max_active_campaigns,
+                    max_tasks_per_campaign,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -1267,6 +1446,9 @@ def create_user_account(
             "max_facebook_accounts": 1,
             "max_groups": 500,
             "max_campaigns": 100,
+            "max_devices": 3,
+            "max_active_campaigns": 1,
+            "max_tasks_per_campaign": 1000,
             "created_at": now_iso(),
             "last_login_at": now_iso(),
         }
@@ -1290,10 +1472,13 @@ def create_user_account(
                     max_facebook_accounts,
                     max_groups,
                     max_campaigns,
+                    max_devices,
+                    max_active_campaigns,
+                    max_tasks_per_campaign,
                     created_at,
                     last_login_at
                 )
-                VALUES (%s, %s, %s, %s, %s, TRUE, 'user', 1, 500, 100, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, TRUE, 'user', 1, 500, 100, 3, 1, 1000, NOW(), NOW())
                 """,
                 (
                     user_id,
@@ -1388,11 +1573,14 @@ def migrate_json_users_to_postgres():
                             max_facebook_accounts,
                             max_groups,
                             max_campaigns,
+                            max_devices,
+                            max_active_campaigns,
+                            max_tasks_per_campaign,
                             created_at,
                             last_login_at
                         )
                         VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             COALESCE(%s::timestamptz, NOW()),
                             %s::timestamptz
                         )
@@ -1409,6 +1597,9 @@ def migrate_json_users_to_postgres():
                             max(1, int(user.get("max_facebook_accounts", 1) or 1)),
                             max(1, int(user.get("max_groups", 500) or 500)),
                             max(1, int(user.get("max_campaigns", 100) or 100)),
+                            max(1, int(user.get("max_devices", 3) or 3)),
+                            max(1, int(user.get("max_active_campaigns", 1) or 1)),
+                            max(1, int(user.get("max_tasks_per_campaign", 1000) or 1000)),
                             user.get("created_at") or None,
                             user.get("last_login_at") or None,
                         ),
@@ -1491,6 +1682,7 @@ def require_customer_login():
     if (
         path.startswith("/static/")
         or path.startswith("/admin")
+        or path.startswith("/api/admin/")
         or path.startswith("/api/cloud/")
         or path.startswith("/api/agent/")
         or path == "/api/extension/pair"
@@ -2076,11 +2268,7 @@ def create_facebook_account(customer_id, display_name, facebook_user_id=""):
 
     accounts = load_facebook_accounts(customer_id)
     user = find_user_by_id(customer_id) or {}
-    # Phase 7 requires at least two assignment accounts; higher admin quotas remain effective.
-    account_limit = max(
-        MIN_MULTI_ACCOUNT_CAPACITY,
-        int(user.get("max_facebook_accounts", MIN_MULTI_ACCOUNT_CAPACITY) or MIN_MULTI_ACCOUNT_CAPACITY),
-    )
+    account_limit = max(1, int(user.get("max_facebook_accounts", 1) or 1))
     if len(accounts) >= account_limit:
         raise ValueError(f"Tài khoản đã đạt giới hạn {account_limit} Facebook account.")
     if any(item.get("display_name", "").casefold() == display_name.casefold() for item in accounts):
@@ -3010,7 +3198,19 @@ def update_engine_task_from_agent(customer_id, device_id, job, status, message="
             customer_id, task_id, status=final_status, last_error=message[:4000],
             finished_at=now_iso(), lease_token="", lease_expires_at="",
         )
-    return sync_engine_campaign_state(customer_id, campaign_id, job)
+    campaign = sync_engine_campaign_state(customer_id, campaign_id, job)
+    record_operational_log(
+        customer_id,
+        event_type="worker_task_status",
+        severity="error" if status in {"error", "finished_with_errors", "needs_facebook_login", "facebook_checkpoint"} else "info",
+        message=message or f"Worker cập nhật task: {status}",
+        campaign_id=campaign_id,
+        task_id=task_id,
+        account_id=task.get("account_id", ""),
+        group_id=task.get("group_id", ""),
+        device_id=device_id,
+    )
+    return campaign
 
 
 def mark_engine_task_interrupted(customer_id, device_id, job, reason):
@@ -3172,6 +3372,243 @@ def load_history(
     )
 
 
+SENSITIVE_LOG_KEYS = {"password", "password_hash", "token", "cookie", "cookies", "secret", "session_secret", "agent_token"}
+
+
+def _safe_log_value(value):
+    """Return JSON-safe audit metadata while dropping credentials and browser secrets."""
+    if isinstance(value, dict):
+        return {
+            str(key)[:80]: _safe_log_value(item)
+            for key, item in value.items()
+            if str(key).strip().lower() not in SENSITIVE_LOG_KEYS
+        }
+    if isinstance(value, list):
+        return [_safe_log_value(item) for item in value[:100]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    text = str(value)[:1000]
+    return re.sub(
+        r"(?i)(password|token|cookie|secret)\s*[:=]\s*[^\s,;]+",
+        r"\1=[REDACTED]",
+        text,
+    )
+
+
+def record_operational_log(
+    customer_id="", event_type="system", severity="info", message="", *,
+    campaign_id="", task_id="", account_id="", group_id="", device_id="",
+):
+    severity = str(severity or "info").lower()
+    if severity not in {"debug", "info", "success", "warning", "error", "critical"}:
+        severity = "info"
+    item = {
+        "log_id": "log_" + uuid.uuid4().hex[:24],
+        "customer_id": sanitize_customer_id(customer_id),
+        "campaign_id": str(campaign_id or "")[:64],
+        "task_id": str(task_id or "")[:80],
+        "account_id": str(account_id or "")[:64],
+        "group_id": str(group_id or "")[:80],
+        "device_id": sanitize_device_id(device_id),
+        "request_id": getattr(g, "request_id", "")[:80] if has_request_context() else "",
+        "event_type": str(event_type or "system")[:80],
+        "severity": severity,
+        "message": str(_safe_log_value(message or ""))[:4000],
+        "created_at": now_iso(),
+    }
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_operational_logs (
+                        log_id, customer_id, campaign_id, task_id, account_id,
+                        group_id, device_id, request_id, event_type, severity, message, created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                    """,
+                    tuple(item[key] for key in (
+                        "log_id", "customer_id", "campaign_id", "task_id", "account_id",
+                        "group_id", "device_id", "request_id", "event_type", "severity", "message",
+                    )),
+                )
+            conn.commit()
+        return item
+    with FILE_LOCK:
+        rows = read_json(OPERATIONAL_LOGS_FILE, [])
+        rows = rows if isinstance(rows, list) else []
+        rows.append(item)
+        write_json(OPERATIONAL_LOGS_FILE, rows[-50000:])
+    return item
+
+
+def load_operational_logs(filters=None, page=1, per_page=50):
+    filters = filters or {}
+    page = max(1, int(page or 1))
+    per_page = min(200, max(1, int(per_page or 50)))
+    normalized = {
+        "customer_id": sanitize_customer_id(filters.get("customer_id", "")),
+        "campaign_id": str(filters.get("campaign_id", ""))[:64],
+        "device_id": sanitize_device_id(filters.get("device_id", "")),
+        "severity": str(filters.get("severity", "")).lower()[:16],
+        "query": str(filters.get("query", "")).strip()[:200],
+        "date_from": str(filters.get("date_from", ""))[:32],
+        "date_to": str(filters.get("date_to", ""))[:32],
+    }
+    if postgres_enabled():
+        init_persistence_tables()
+        clauses, params = ["1=1"], []
+        for field in ("customer_id", "campaign_id", "device_id", "severity"):
+            if normalized[field]:
+                clauses.append(f"{field} = %s")
+                params.append(normalized[field])
+        if normalized["query"]:
+            clauses.append("(message ILIKE %s OR event_type ILIKE %s)")
+            params.extend([f"%{normalized['query']}%", f"%{normalized['query']}%"])
+        if normalized["date_from"]:
+            clauses.append("created_at >= %s::timestamptz")
+            params.append(normalized["date_from"])
+        if normalized["date_to"]:
+            clauses.append("created_at < (%s::date + INTERVAL '1 day')")
+            params.append(normalized["date_to"])
+        where = " AND ".join(clauses)
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) AS total FROM fbpostpro_operational_logs WHERE {where}", params)
+                total = int((cur.fetchone() or {}).get("total", 0))
+                cur.execute(
+                    f"SELECT * FROM fbpostpro_operational_logs WHERE {where} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    params + [per_page, (page - 1) * per_page],
+                )
+                rows = cur.fetchall()
+        return [{**row, "created_at": _serialize_dt(row.get("created_at"))} for row in rows], total
+
+    rows = read_json(OPERATIONAL_LOGS_FILE, [])
+    rows = rows if isinstance(rows, list) else []
+    result = []
+    for item in rows:
+        if any(normalized[key] and str(item.get(key, "")) != normalized[key] for key in ("customer_id", "campaign_id", "device_id", "severity")):
+            continue
+        if normalized["query"] and normalized["query"].casefold() not in f"{item.get('event_type','')} {item.get('message','')}".casefold():
+            continue
+        created = str(item.get("created_at", ""))
+        if normalized["date_from"] and created[:10] < normalized["date_from"][:10]:
+            continue
+        if normalized["date_to"] and created[:10] > normalized["date_to"][:10]:
+            continue
+        result.append(item)
+    result.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    total = len(result)
+    start = (page - 1) * per_page
+    return result[start:start + per_page], total
+
+
+def record_admin_audit(admin_id, action, target_type, target_id, metadata=None):
+    item = {
+        "audit_id": "audit_" + uuid.uuid4().hex[:24],
+        "admin_id": sanitize_customer_id(admin_id) or "system_admin",
+        "action": str(action or "")[:80],
+        "target_type": str(target_type or "")[:40],
+        "target_id": str(target_id or "")[:80],
+        "metadata": _safe_log_value(metadata or {}),
+        "created_at": now_iso(),
+    }
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_admin_audit_logs (
+                        audit_id, admin_id, action, target_type, target_id, metadata, created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s::jsonb,NOW())
+                    """,
+                    (item["audit_id"], item["admin_id"], item["action"], item["target_type"], item["target_id"], json.dumps(item["metadata"], ensure_ascii=False)),
+                )
+            conn.commit()
+        return item
+    with FILE_LOCK:
+        rows = read_json(ADMIN_AUDIT_LOGS_FILE, [])
+        rows = rows if isinstance(rows, list) else []
+        rows.append(item)
+        write_json(ADMIN_AUDIT_LOGS_FILE, rows[-20000:])
+    return item
+
+
+def load_admin_audit_logs(page=1, per_page=50):
+    page = max(1, int(page or 1))
+    per_page = min(200, max(1, int(per_page or 50)))
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS total FROM fbpostpro_admin_audit_logs")
+                total = int((cur.fetchone() or {}).get("total", 0))
+                cur.execute("SELECT * FROM fbpostpro_admin_audit_logs ORDER BY created_at DESC LIMIT %s OFFSET %s", (per_page, (page - 1) * per_page))
+                rows = cur.fetchall()
+        return [{**row, "created_at": _serialize_dt(row.get("created_at"))} for row in rows], total
+    rows = read_json(ADMIN_AUDIT_LOGS_FILE, [])
+    rows = rows if isinstance(rows, list) else []
+    rows.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    total = len(rows)
+    start = (page - 1) * per_page
+    return rows[start:start + per_page], total
+
+
+def cleanup_expired_logs(now=None):
+    """Delete only expired operational/audit rows; campaign and task data are untouched."""
+    now = now or utc_now()
+    operational_cutoff = now - timedelta(days=OPERATIONAL_LOG_RETENTION_DAYS)
+    audit_cutoff = now - timedelta(days=AUDIT_LOG_RETENTION_DAYS)
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM fbpostpro_operational_logs WHERE created_at < %s", (operational_cutoff,))
+                operational_deleted = max(0, cur.rowcount)
+                cur.execute("DELETE FROM fbpostpro_admin_audit_logs WHERE created_at < %s", (audit_cutoff,))
+                audit_deleted = max(0, cur.rowcount)
+            conn.commit()
+        return {"operational_deleted": operational_deleted, "audit_deleted": audit_deleted}
+
+    with FILE_LOCK:
+        operational = read_json(OPERATIONAL_LOGS_FILE, [])
+        operational = operational if isinstance(operational, list) else []
+        kept_operational = [
+            item for item in operational
+            if (parse_iso(item.get("created_at", "")) or now) >= operational_cutoff
+        ]
+        audit = read_json(ADMIN_AUDIT_LOGS_FILE, [])
+        audit = audit if isinstance(audit, list) else []
+        kept_audit = [
+            item for item in audit
+            if (parse_iso(item.get("created_at", "")) or now) >= audit_cutoff
+        ]
+        if len(kept_operational) != len(operational):
+            write_json(OPERATIONAL_LOGS_FILE, kept_operational)
+        if len(kept_audit) != len(audit):
+            write_json(ADMIN_AUDIT_LOGS_FILE, kept_audit)
+    return {
+        "operational_deleted": len(operational) - len(kept_operational),
+        "audit_deleted": len(audit) - len(kept_audit),
+    }
+
+
+def maybe_cleanup_expired_logs():
+    global LOG_CLEANUP_NEXT_AT
+    current = time.monotonic()
+    if current < LOG_CLEANUP_NEXT_AT or not LOG_CLEANUP_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if current < LOG_CLEANUP_NEXT_AT:
+            return None
+        LOG_CLEANUP_NEXT_AT = current + 6 * 60 * 60
+        result = cleanup_expired_logs()
+        return result
+    finally:
+        LOG_CLEANUP_LOCK.release()
+
+
 def add_history(
     customer_id,
     status,
@@ -3207,6 +3644,12 @@ def add_history(
         postgres_customer_data_set(customer_id, "history", history)
     else:
         write_json(customer_history_file(customer_id), history)
+    record_operational_log(
+        customer_id,
+        event_type="history",
+        severity=status,
+        message=f"{message} — {detail}" if detail else message,
+    )
 
 
 # ============================================================
@@ -4928,6 +5371,13 @@ def queue_device_command(
         commands = load_command_log(customer_id)
         commands.append(dict(current, device_id=device_id))
         save_command_log(customer_id, commands)
+    record_operational_log(
+        customer_id,
+        event_type="worker_command_queued",
+        severity="warning" if command_type in {"stop", "cancel"} else "info",
+        message=f"Command {command_type} đã được xếp hàng.",
+        device_id=device_id,
+    )
     return current
 
 
@@ -5181,16 +5631,20 @@ def admin_required(
         **kwargs,
     ):
 
-        if not session.get(
-            "admin_logged_in"
-        ):
+        user = get_current_user()
+        role_admin = bool(
+            user
+            and user.get("is_active", True)
+            and user.get("role") == "admin"
+        )
+        legacy_admin = bool(LEGACY_ADMIN_AUTH_ENABLED and session.get("admin_logged_in"))
 
-            return redirect(
-                url_for(
-                    "admin_login",
-                    next=request.path,
-                )
-            )
+        if not role_admin and not legacy_admin:
+            if request.path.startswith("/api/admin/"):
+                return jsonify({"error": "Admin access required."}), (403 if user else 401)
+            if user:
+                return "Forbidden", 403
+            return redirect(url_for("admin_login", next=request.path))
 
         return view(
             *args,
@@ -5198,6 +5652,13 @@ def admin_required(
         )
 
     return wrapped
+
+
+def get_admin_actor_id():
+    user = get_current_user()
+    if user and user.get("role") == "admin" and user.get("is_active", True):
+        return sanitize_customer_id(user.get("user_id", ""))
+    return "system_admin" if LEGACY_ADMIN_AUTH_ENABLED and session.get("admin_logged_in") else ""
 
 
 # ============================================================
@@ -5336,6 +5797,21 @@ const q=document.getElementById('searchBox');if(q){q.addEventListener('input',()
 # AGENT AUTH
 # ============================================================
 
+def hash_device_token(token):
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _device_token_matches(device, supplied_token):
+    if not supplied_token or not isinstance(device, dict):
+        return False
+    if device.get("revoked_at") or device.get("status") == "revoked":
+        return False
+    stored_hash = str(device.get("token_hash", ""))
+    if stored_hash:
+        return secrets.compare_digest(hash_device_token(supplied_token), stored_hash)
+    legacy_token = str(device.get("token", ""))
+    return bool(legacy_token and secrets.compare_digest(supplied_token, legacy_token))
+
 def find_agent(
     device_id,
     token,
@@ -5357,27 +5833,22 @@ def find_agent(
             None,
         )
 
-    try:
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT customer_id, data FROM fbpostpro_customer_data WHERE data_key='devices'"
+                )
+                owner_rows = cur.fetchall()
+        customer_ids = [row.get("customer_id", "") for row in owner_rows if isinstance(row.get("data"), dict) and device_id in row.get("data", {})]
+    else:
+        try:
+            customer_ids = [path.name for path in CUSTOMERS_ROOT.iterdir() if path.is_dir()]
+        except Exception:
+            return (None, None)
 
-        customer_dirs = [
-            path
-            for path
-            in CUSTOMERS_ROOT.iterdir()
-            if path.is_dir()
-        ]
-
-    except Exception:
-
-        return (
-            None,
-            None,
-        )
-
-    for root in customer_dirs:
-
-        customer_id = (
-            root.name
-        )
+    for customer_id in customer_ids:
 
         devices = (
             load_devices(
@@ -5393,20 +5864,12 @@ def find_agent(
 
             continue
 
-        stored_token = (
-            device.get(
-                "token",
-                "",
-            )
-        )
-
-        if (
-            stored_token
-            and secrets.compare_digest(
-                token,
-                stored_token,
-            )
-        ):
+        if _device_token_matches(device, token):
+            if device.get("token") and not device.get("token_hash"):
+                devices[device_id] = {**device, "token_hash": hash_device_token(token)}
+                devices[device_id].pop("token", None)
+                save_devices(customer_id, devices)
+                device = devices[device_id]
 
             return (
                 customer_id,
@@ -6356,9 +6819,15 @@ def extension_pair():
     device_id = sanitize_device_id("ext_" + uuid.uuid4().hex[:16])
     token = secrets.token_urlsafe(40)
     devices = load_devices(customer_id)
+    user = find_user_by_id(customer_id) or {}
+    device_limit = max(1, int(user.get("max_devices", 3) or 3))
+    if len(devices) >= device_limit:
+        return jsonify({
+            "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
+        }), 409
     devices[device_id] = {
         "name": device_name,
-        "token": token,
+        "token_hash": hash_device_token(token),
         "mode": "chrome_extension",
         "paired_at": now_iso(),
         "last_seen": "",
@@ -6787,6 +7256,10 @@ def api_connect_status():
 )
 def admin_login():
 
+    if not LEGACY_ADMIN_AUTH_ENABLED:
+        flash("Hãy đăng nhập bằng tài khoản có role admin.", "info")
+        return redirect(url_for("login", next=request.args.get("next", "/admin")))
+
     if request.method == "GET":
 
         next_url = (
@@ -6834,13 +7307,14 @@ def admin_login():
             session[
                 "admin_logged_in"
             ] = True
+            session["admin_id"] = "system_admin"
 
             session.permanent = True
 
             return redirect(
                 next_url
                 or url_for(
-                    "admin_devices"
+                    "admin_ops.admin_dashboard"
                 )
             )
 
@@ -6868,6 +7342,7 @@ def admin_logout():
         "admin_logged_in",
         None,
     )
+    session.pop("admin_id", None)
 
     return redirect(
         url_for(
@@ -7061,14 +7536,20 @@ def admin_approve_device(
         customer_id
     )
 
+    user = find_user_by_id(customer_id) or {}
+    device_limit = max(1, int(user.get("max_devices", 3) or 3))
+    if device_id not in devices and len(devices) >= device_limit:
+        flash(f"Tài khoản đã đạt giới hạn {device_limit} worker/device.", "warning")
+        return redirect(url_for("admin_devices"))
+
     devices[
         device_id
     ] = {
         "name":
             device_name,
 
-        "token":
-            cloud_token,
+        "token_hash":
+            hash_device_token(cloud_token),
 
         "mode":
             "cloud",
@@ -7143,6 +7624,11 @@ def admin_approve_device(
         requests_data
     )
 
+    record_admin_audit(
+        get_admin_actor_id(), "approve_device", "device", device_id,
+        {"customer_id": customer_id, "request_id": request_id},
+    )
+
     flash(
         "✅ Đã cấp quyền Cloud cho khách.",
         "success",
@@ -7198,6 +7684,11 @@ def admin_reject_device(
             requests_data
         )
 
+        record_admin_audit(
+            get_admin_actor_id(), "reject_device", "device_request", request_id,
+            {"customer_id": item.get("customer_id", "")},
+        )
+
     return redirect(
         url_for(
             "admin_devices"
@@ -7237,7 +7728,7 @@ def admin_disconnect_device(
         )
     )
 
-    devices.pop(
+    removed_device = devices.pop(
         device_id,
         None,
     )
@@ -7266,6 +7757,16 @@ def admin_disconnect_device(
         save_settings(
             customer_id,
             settings_data,
+        )
+
+    if removed_device is not None:
+        record_admin_audit(
+            get_admin_actor_id(), "disconnect_device", "device", device_id,
+            {"customer_id": customer_id},
+        )
+        record_operational_log(
+            customer_id, "device_disconnected_by_admin", "warning",
+            "Admin đã ngắt desktop worker.", device_id=device_id,
         )
 
     return redirect(
@@ -7344,6 +7845,18 @@ def run_campaign():
 
             user = find_user_by_id(customer_id) or {}
             campaign_limit = max(1, int(user.get("max_campaigns", 100) or 100))
+            task_limit = max(1, int(user.get("max_tasks_per_campaign", MAX_GROUPS_PER_CAMPAIGN) or MAX_GROUPS_PER_CAMPAIGN))
+            if len(groups_list) > task_limit:
+                flash(f"Campaign vượt quota {task_limit} task.", "warning")
+                return redirect(url_for("compose"))
+            active_limit = max(1, int(user.get("max_active_campaigns", 1) or 1))
+            active_count = sum(
+                item.get("lifecycle") in {"scheduled", "queued", "running", "paused"}
+                for item in load_engine_campaigns(customer_id)
+            )
+            if lifecycle != "draft" and active_count >= active_limit:
+                flash(f"Tài khoản đã đạt giới hạn {active_limit} campaign đang hoạt động.", "warning")
+                return redirect(url_for("compose"))
             campaign_count = len(load_campaign_records(customer_id, limit=campaign_limit + 1))
             campaign_count += len(load_engine_campaigns(customer_id))
             if campaign_count >= campaign_limit:
@@ -7387,6 +7900,13 @@ def run_campaign():
                 customer_id, "info", "Đã tạo campaign đa account",
                 f"{campaign['campaign_name']} • {campaign['total']} Groups • {lifecycle}",
             )
+            record_operational_log(
+                customer_id,
+                event_type="campaign_created",
+                severity="info",
+                message=f"Campaign {campaign['campaign_name']} được tạo ở trạng thái {lifecycle}.",
+                campaign_id=campaign["campaign_id"],
+            )
             flash(
                 "Đã lưu lịch campaign." if lifecycle == "scheduled"
                 else "Đã lưu campaign nháp." if lifecycle == "draft"
@@ -7424,6 +7944,10 @@ def run_campaign():
             return redirect(url_for("compose"))
 
         user = find_user_by_id(customer_id) or {}
+        task_limit = max(1, int(user.get("max_tasks_per_campaign", MAX_GROUPS_PER_CAMPAIGN) or MAX_GROUPS_PER_CAMPAIGN))
+        if len(groups_list) > task_limit:
+            flash(f"Campaign vượt quota {task_limit} task.", "warning")
+            return redirect(url_for("compose"))
         campaign_limit = max(1, int(user.get("max_campaigns", 100) or 100))
         if len(load_campaign_records(customer_id, limit=campaign_limit + 1)) >= campaign_limit:
             flash(f"Tài khoản đã đạt giới hạn {campaign_limit} chiến dịch.", "warning")
@@ -8689,9 +9213,29 @@ def health():
         "mode": "chrome_extension",
         "requires_local_agent": False,
         "requires_browserbase": False,
-        "chrome_profile_root": str(CHROME_PROFILES_ROOT),
         "user_store": USER_STORE,
+        "environment": APP_ENV,
     })
+
+
+@app.route("/ready")
+def ready():
+    if not postgres_enabled():
+        return jsonify({
+            "status": "ready" if not IS_PRODUCTION else "not_ready",
+            "database": "not_configured",
+            "storage": "development_json",
+        }), (200 if not IS_PRODUCTION else 503)
+    try:
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 AS ok")
+                ok = bool((cur.fetchone() or {}).get("ok"))
+        if not ok:
+            raise RuntimeError("database readiness query failed")
+    except Exception:
+        return jsonify({"status": "not_ready", "database": "unavailable"}), 503
+    return jsonify({"status": "ready", "database": "connected", "storage": "postgres"})
 
 
 # ============================================================
@@ -8718,9 +9262,58 @@ def file_too_large(
     )
 
 
+@app.errorhandler(500)
+def internal_server_error(error):
+    request_id = getattr(g, "request_id", "") or "req_unknown"
+    app.logger.error("unhandled_request_error request_id=%s", request_id)
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Internal server error.", "request_id": request_id}), 500
+    return f"Internal server error. Request ID: {request_id}", 500
+
+
 # ============================================================
 # START
 # ============================================================
+
+_admin_ops_spec = importlib.util.spec_from_file_location("fbpostpro_admin_ops", BASE_DIR / "admin_ops.py")
+_admin_ops_module = importlib.util.module_from_spec(_admin_ops_spec)
+_admin_ops_spec.loader.exec_module(_admin_ops_module)
+register_admin_ops = _admin_ops_module.register_admin_ops
+
+if postgres_enabled():
+    init_persistence_tables()
+    init_groups_table()
+
+register_admin_ops(app, {
+    "admin_required": admin_required,
+    "synchronized_state": synchronized_state,
+    "get_admin_actor_id": get_admin_actor_id,
+    "load_users": load_users,
+    "save_users": save_users,
+    "find_user_by_id": find_user_by_id,
+    "sanitize_customer_id": sanitize_customer_id,
+    "postgres_enabled": postgres_enabled,
+    "postgres_connect": postgres_connect,
+    "init_persistence_tables": init_persistence_tables,
+    "init_groups_table": init_groups_table,
+    "load_devices": load_devices,
+    "device_is_online": device_is_online,
+    "load_facebook_accounts": load_facebook_accounts,
+    "load_groups": load_groups,
+    "load_group_assignments": load_group_assignments,
+    "load_engine_campaigns": load_engine_campaigns,
+    "load_engine_tasks": load_engine_tasks,
+    "load_campaign_records": load_campaign_records,
+    "load_jobs": load_jobs,
+    "queue_device_command": queue_device_command,
+    "engine_campaign_active_devices": engine_campaign_active_devices,
+    "cancel_engine_campaign": cancel_engine_campaign,
+    "record_operational_log": record_operational_log,
+    "safe_log_value": _safe_log_value,
+    "load_operational_logs": load_operational_logs,
+    "record_admin_audit": record_admin_audit,
+    "load_admin_audit_logs": load_admin_audit_logs,
+})
 
 if __name__ == "__main__":
 

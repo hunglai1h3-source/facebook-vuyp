@@ -33,6 +33,14 @@ EXPECTED_ROUTES = {
     ('GET', '/admin/devices'), ('POST', '/admin/devices/<request_id>/approve'),
     ('POST', '/admin/devices/<request_id>/reject'),
     ('POST', '/admin/device/<customer_id>/<device_id>/disconnect'),
+    ('GET', '/admin'), ('GET', '/api/admin/dashboard'), ('GET', '/admin/users'),
+    ('GET', '/admin/users/<user_id>'),
+    ('POST', '/api/admin/users/<user_id>/status'),
+    ('POST', '/api/admin/users/<user_id>/quota'),
+    ('GET', '/admin/accounts'), ('GET', '/admin/groups'),
+    ('GET', '/admin/campaigns'), ('GET', '/admin/campaigns/<campaign_id>'),
+    ('POST', '/api/admin/campaigns/<campaign_id>/cancel'),
+    ('GET', '/admin/workers'), ('GET', '/admin/logs'), ('GET', '/admin/audit'),
     ('POST', '/run-campaign'), ('POST', '/stop-campaign'),
     ('POST', '/pause-campaign'), ('POST', '/resume-campaign'),
     ('GET', '/campaign-status'), ('GET', '/agent-status'),
@@ -187,7 +195,7 @@ def route_and_api_checks(module):
     assert module.load_connect_requests()[rejected]['status'] == 'rejected'
     assert_status(client.post(f'/admin/device/{user_id}/{cloud_device}/disconnect'), 302, 'admin disconnect')
     assert_status(client.get('/admin/logout'), 302, 'admin logout')
-    assert_status(client.get('/admin/devices'), 302, 'admin protected after logout')
+    assert_status(client.get('/admin/devices'), 403, 'regular user forbidden after admin logout')
 
     # Fix verification: save and delete must work while saved images are rendered.
     save_again = client.post('/save-post', data={
