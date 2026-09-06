@@ -30,10 +30,11 @@ try:
 except ImportError:
     sync_playwright = None
 from pathlib import Path
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
+import csv
 import mimetypes
 import os
 import re
@@ -43,7 +44,7 @@ import threading
 import time
 import random
 import uuid
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 
 # ============================================================
@@ -228,6 +229,9 @@ MAX_DELAY_MINUTES = 1440
 MAX_CAMPAIGN_NAME_LENGTH = 120
 MAX_POST_CONTENT_LENGTH = 100000
 MAX_GROUPS_PER_CAMPAIGN = 1000
+MAX_GROUP_IMPORT_BYTES = 2 * 1024 * 1024
+GROUPS_PER_PAGE = 100
+MIN_MULTI_ACCOUNT_CAPACITY = 2
 
 AGENT_TERMINAL_STATUSES = {
     "finished",
@@ -477,6 +481,14 @@ def customer_jobs_file(
 
 def customer_campaigns_file(customer_id):
     return customer_data_dir(customer_id) / "campaigns.json"
+
+
+def customer_accounts_file(customer_id):
+    return customer_data_dir(customer_id) / "facebook_accounts.json"
+
+
+def customer_group_assignments_file(customer_id):
+    return customer_data_dir(customer_id) / "group_assignments.json"
 
 
 def customer_control_file(
@@ -737,6 +749,39 @@ def init_persistence_tables():
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaigns_status ON fbpostpro_campaigns (status)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_accounts (
+                        account_id VARCHAR(64) PRIMARY KEY,
+                        customer_id VARCHAR(40) NOT NULL,
+                        display_name VARCHAR(120) NOT NULL,
+                        facebook_user_id VARCHAR(80) NOT NULL DEFAULT '',
+                        status VARCHAR(32) NOT NULL DEFAULT 'ready',
+                        device_id VARCHAR(100) NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (customer_id, display_name)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_accounts_customer ON fbpostpro_accounts (customer_id, created_at)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_group_assignments (
+                        customer_id VARCHAR(40) NOT NULL,
+                        group_url TEXT NOT NULL,
+                        account_id VARCHAR(64) NOT NULL,
+                        assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (customer_id, group_url)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_group_assignments_account ON fbpostpro_group_assignments (customer_id, account_id)"
                 )
             conn.commit()
         PERSISTENCE_TABLES_READY = True
@@ -1577,28 +1622,16 @@ def normalize_group_url(url):
     if not url:
         return ""
 
-    url = url.replace(
-        "https://facebook.com/",
-        "https://www.facebook.com/",
-    )
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
 
-    url = url.replace(
-        "http://facebook.com/",
-        "https://www.facebook.com/",
-    )
-
-    url = url.replace(
-        "http://www.facebook.com/",
-        "https://www.facebook.com/",
-    )
-
-    # Bỏ query string kiểu ?ref=share...
-    url = url.split("?", 1)[0]
-
-    # Bỏ dấu / cuối
-    url = url.rstrip("/")
-
-    return url
+    host = (parsed.hostname or "").lower()
+    if host in {"facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"}:
+        path = re.sub(r"/{2,}", "/", parsed.path).rstrip("/")
+        return urlunsplit(("https", "www.facebook.com", path, "", ""))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
 def valid_facebook_group_url(url):
@@ -1881,6 +1914,277 @@ def migrate_groups_file_to_postgres(
                 )
 
         conn.commit()
+
+
+# ============================================================
+# FACEBOOK ACCOUNTS + GROUP ASSIGNMENTS
+# ============================================================
+
+def load_facebook_accounts(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return []
+    if not postgres_enabled():
+        data = read_json(customer_accounts_file(customer_id), [])
+        return data if isinstance(data, list) else []
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT account_id, display_name, facebook_user_id, status,
+                       device_id, created_at, updated_at
+                FROM fbpostpro_accounts
+                WHERE customer_id = %s
+                ORDER BY created_at ASC, account_id ASC
+                """,
+                (customer_id,),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "account_id": row.get("account_id", ""),
+            "display_name": row.get("display_name", ""),
+            "facebook_user_id": row.get("facebook_user_id", ""),
+            "status": row.get("status", "ready"),
+            "device_id": row.get("device_id", ""),
+            "created_at": _serialize_dt(row.get("created_at")),
+            "updated_at": _serialize_dt(row.get("updated_at")),
+        }
+        for row in rows
+    ]
+
+
+def create_facebook_account(customer_id, display_name, facebook_user_id=""):
+    customer_id = sanitize_customer_id(customer_id)
+    display_name = str(display_name or "").strip()[:120]
+    facebook_user_id = re.sub(r"[^A-Za-z0-9_.-]", "", str(facebook_user_id or ""))[:80]
+    if not customer_id or len(display_name) < 2:
+        raise ValueError("Tên Facebook account phải có ít nhất 2 ký tự.")
+
+    accounts = load_facebook_accounts(customer_id)
+    user = find_user_by_id(customer_id) or {}
+    # Phase 7 requires at least two assignment accounts; higher admin quotas remain effective.
+    account_limit = max(
+        MIN_MULTI_ACCOUNT_CAPACITY,
+        int(user.get("max_facebook_accounts", MIN_MULTI_ACCOUNT_CAPACITY) or MIN_MULTI_ACCOUNT_CAPACITY),
+    )
+    if len(accounts) >= account_limit:
+        raise ValueError(f"Tài khoản đã đạt giới hạn {account_limit} Facebook account.")
+    if any(item.get("display_name", "").casefold() == display_name.casefold() for item in accounts):
+        raise ValueError("Tên Facebook account đã tồn tại.")
+
+    record = {
+        "account_id": "fba_" + uuid.uuid4().hex[:20],
+        "display_name": display_name,
+        "facebook_user_id": facebook_user_id,
+        "status": "ready",
+        "device_id": "",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    if not postgres_enabled():
+        accounts.append(record)
+        write_json(customer_accounts_file(customer_id), accounts)
+        return record
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO fbpostpro_accounts (
+                    account_id, customer_id, display_name, facebook_user_id,
+                    status, device_id, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'ready', '', NOW(), NOW())
+                """,
+                (record["account_id"], customer_id, display_name, facebook_user_id),
+            )
+        conn.commit()
+    return record
+
+
+def load_group_assignments(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return {}
+    if not postgres_enabled():
+        data = read_json(customer_group_assignments_file(customer_id), {})
+        return data if isinstance(data, dict) else {}
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT group_url, account_id
+                FROM fbpostpro_group_assignments
+                WHERE customer_id = %s
+                """,
+                (customer_id,),
+            )
+            rows = cur.fetchall()
+    return {row["group_url"]: row["account_id"] for row in rows}
+
+
+def save_group_assignments(customer_id, assignment_items):
+    """Apply a partial mapping update and reject cross-account conflicts."""
+    customer_id = sanitize_customer_id(customer_id)
+    groups = set(load_groups(customer_id))
+    account_ids = {item.get("account_id") for item in load_facebook_accounts(customer_id)}
+    clean = {}
+    for item in assignment_items or []:
+        if not isinstance(item, dict):
+            raise ValueError("Dữ liệu phân nhóm không hợp lệ.")
+        group_url = normalize_group_url(item.get("group_url", ""))
+        account_id = str(item.get("account_id", "")).strip()
+        if group_url not in groups:
+            raise ValueError("Group không thuộc tài khoản hiện tại.")
+        if account_id and account_id not in account_ids:
+            raise ValueError("Facebook account không thuộc tài khoản hiện tại.")
+        if group_url in clean and clean[group_url] != account_id:
+            raise ValueError(f"Conflict: một Group đang được gán cho nhiều account: {group_url}")
+        clean[group_url] = account_id
+
+    with FILE_LOCK:
+        if not postgres_enabled():
+            current = load_group_assignments(customer_id)
+            for group_url, account_id in clean.items():
+                if account_id:
+                    current[group_url] = account_id
+                else:
+                    current.pop(group_url, None)
+            write_json(customer_group_assignments_file(customer_id), current)
+            return current
+
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                for group_url, account_id in clean.items():
+                    if not account_id:
+                        cur.execute(
+                            "DELETE FROM fbpostpro_group_assignments WHERE customer_id = %s AND group_url = %s",
+                            (customer_id, group_url),
+                        )
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO fbpostpro_group_assignments (
+                            customer_id, group_url, account_id, assigned_at, updated_at
+                        ) VALUES (%s, %s, %s, NOW(), NOW())
+                        ON CONFLICT (customer_id, group_url)
+                        DO UPDATE SET account_id = EXCLUDED.account_id, updated_at = NOW()
+                        """,
+                        (customer_id, group_url, account_id),
+                    )
+            conn.commit()
+    return load_group_assignments(customer_id)
+
+
+def delete_groups_by_url(customer_id, group_urls):
+    customer_id = sanitize_customer_id(customer_id)
+    targets = {
+        normalize_group_url(url) for url in group_urls or []
+        if normalize_group_url(url)
+    }
+    current_groups = load_groups(customer_id)
+    owned = set(current_groups)
+    targets &= owned
+    if not targets:
+        return 0
+    with FILE_LOCK:
+        if not postgres_enabled():
+            save_groups(customer_id, [url for url in current_groups if url not in targets])
+            mappings = load_group_assignments(customer_id)
+            for url in targets:
+                mappings.pop(url, None)
+            write_json(customer_group_assignments_file(customer_id), mappings)
+            return len(targets)
+        init_groups_table()
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM fbpostpro_group_assignments WHERE customer_id = %s AND group_url = ANY(%s)",
+                    (customer_id, list(targets)),
+                )
+                cur.execute(
+                    "DELETE FROM fbpostpro_groups WHERE customer_id = %s AND group_url = ANY(%s)",
+                    (customer_id, list(targets)),
+                )
+            conn.commit()
+    return len(targets)
+
+
+def import_groups(customer_id, raw_urls):
+    customer_id = sanitize_customer_id(customer_id)
+    existing_list = load_groups(customer_id)
+    existing = set(existing_list)
+    user = find_user_by_id(customer_id) or {}
+    limit = max(1, int(user.get("max_groups", 500) or 500))
+    accepted, invalid, duplicates = [], [], []
+    seen = set()
+    for raw in raw_urls or []:
+        raw = str(raw or "").strip()
+        if not raw:
+            continue
+        normalized = normalize_group_url(raw)
+        if not valid_facebook_group_url(normalized):
+            invalid.append(raw[:300])
+            continue
+        if normalized in seen or normalized in existing:
+            duplicates.append(normalized)
+            continue
+        if len(existing) + len(accepted) >= limit:
+            invalid.append(f"Vượt giới hạn {limit}: {normalized}"[:300])
+            continue
+        seen.add(normalized)
+        accepted.append(normalized)
+
+    if accepted:
+        if not postgres_enabled():
+            save_groups(customer_id, existing_list + accepted)
+        else:
+            init_groups_table()
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    for group_url in accepted:
+                        cur.execute(
+                            """
+                            INSERT INTO fbpostpro_groups (customer_id, group_url)
+                            VALUES (%s, %s)
+                            ON CONFLICT (customer_id, group_url) DO NOTHING
+                            """,
+                            (customer_id, group_url),
+                        )
+                conn.commit()
+    return {"added": accepted, "invalid": invalid, "duplicates": duplicates}
+
+
+def evenly_assign_groups(group_urls, account_ids):
+    account_ids = [str(value) for value in account_ids if str(value)]
+    if not account_ids:
+        return []
+    return [
+        {"group_url": group_url, "account_id": account_ids[index % len(account_ids)]}
+        for index, group_url in enumerate(group_urls)
+    ]
+
+
+def build_account_group_snapshot(customer_id, group_urls):
+    accounts = {item["account_id"]: item for item in load_facebook_accounts(customer_id)}
+    assignments = load_group_assignments(customer_id)
+    buckets = {}
+    for group_url in group_urls:
+        account_id = assignments.get(group_url, "")
+        bucket = buckets.setdefault(account_id, {
+            "account_id": account_id,
+            "account_name": accounts.get(account_id, {}).get("display_name", "Chưa gán account"),
+            "groups": [],
+        })
+        bucket["groups"].append(group_url)
+    return list(buckets.values())
 
 
 # ============================================================
@@ -4643,17 +4947,57 @@ def delete_all_post_images():
 
 @app.route("/groups")
 def groups():
+    customer_id = get_customer_id()
+    all_groups = load_groups(customer_id)
+    assignments = load_group_assignments(customer_id)
+    accounts = load_facebook_accounts(customer_id)
+    account_ids = {item.get("account_id") for item in accounts}
+    query = str(request.args.get("q", "")).strip().casefold()[:200]
+    account_filter = str(request.args.get("account", "")).strip()
+    if account_filter and account_filter not in account_ids and account_filter != "unassigned":
+        account_filter = ""
+    try:
+        page_number = max(1, int(request.args.get("page", 1)))
+    except (TypeError, ValueError):
+        page_number = 1
 
-    customer_id = (
-        get_customer_id()
-    )
+    records = []
+    for original_index, group_url in enumerate(all_groups):
+        account_id = assignments.get(group_url, "")
+        if query and query not in group_url.casefold():
+            continue
+        if account_filter == "unassigned" and account_id:
+            continue
+        if account_filter and account_filter != "unassigned" and account_id != account_filter:
+            continue
+        records.append({
+            "url": group_url,
+            "account_id": account_id,
+            "original_index": original_index,
+        })
 
+    total_filtered = len(records)
+    total_pages = max(1, (total_filtered + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE)
+    page_number = min(page_number, total_pages)
+    start = (page_number - 1) * GROUPS_PER_PAGE
+    page_records = records[start:start + GROUPS_PER_PAGE]
+    import_result = session.pop("group_import_result", None)
     return render_template(
         "groups.html",
         page="groups",
-        groups=load_groups(
-            customer_id
-        ),
+        groups=all_groups,
+        group_records=page_records,
+        accounts=accounts,
+        assignments=assignments,
+        query=request.args.get("q", ""),
+        account_filter=account_filter,
+        import_result=import_result,
+        pagination={
+            "page": page_number,
+            "pages": total_pages,
+            "total_filtered": total_filtered,
+            "per_page": GROUPS_PER_PAGE,
+        },
         settings=load_settings(
             customer_id
         ),
@@ -4662,10 +5006,111 @@ def groups():
     )
 
 
+def parse_group_import_text(text):
+    values = []
+    for row in csv.reader(StringIO(str(text or ""))):
+        for cell in row:
+            values.extend(part for part in re.split(r"[\s;]+", cell.strip()) if part)
+    return values
+
+
+@app.route("/groups/import", methods=["POST"])
+@synchronized_state
+def import_group_list():
+    customer_id = get_customer_id()
+    values = parse_group_import_text(request.form.get("group_urls", ""))
+    upload = request.files.get("group_file")
+    if upload and upload.filename:
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in {".txt", ".csv"}:
+            flash("Chỉ hỗ trợ file TXT hoặc CSV.", "warning")
+            return redirect(url_for("groups"))
+        raw = upload.stream.read(MAX_GROUP_IMPORT_BYTES + 1)
+        if len(raw) > MAX_GROUP_IMPORT_BYTES:
+            flash("File import không được vượt quá 2 MB.", "warning")
+            return redirect(url_for("groups"))
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
+        values.extend(parse_group_import_text(text))
+
+    result = import_groups(customer_id, values)
+    session["group_import_result"] = {
+        "added": len(result["added"]),
+        "duplicates": len(result["duplicates"]),
+        "invalid": len(result["invalid"]),
+        "invalid_samples": [item[:120] for item in result["invalid"][:5]],
+    }
+    if result["added"]:
+        add_history(
+            customer_id,
+            "success",
+            f"Đã import {len(result['added'])} Group",
+            f"Trùng {len(result['duplicates'])} • Không hợp lệ {len(result['invalid'])}",
+        )
+    flash(
+        f"Import hoàn tất: {len(result['added'])} mới, {len(result['duplicates'])} trùng, {len(result['invalid'])} lỗi.",
+        "success" if result["added"] else "warning",
+    )
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/accounts", methods=["POST"])
+@synchronized_state
+def add_facebook_account():
+    customer_id = get_customer_id()
+    try:
+        account = create_facebook_account(
+            customer_id,
+            request.form.get("display_name", ""),
+            request.form.get("facebook_user_id", ""),
+        )
+    except ValueError as exc:
+        flash(str(exc), "warning")
+        return redirect(url_for("groups"))
+    add_history(customer_id, "info", "Đã thêm Facebook account", account["display_name"])
+    flash("Đã thêm Facebook account.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/assign", methods=["POST"])
+@synchronized_state
+def assign_groups_to_accounts():
+    customer_id = get_customer_id()
+    raw = request.form.get("assignments", "[]")
+    if len(raw) > MAX_GROUP_IMPORT_BYTES:
+        flash("Dữ liệu phân nhóm quá lớn.", "warning")
+        return redirect(url_for("groups"))
+    try:
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            raise ValueError("Dữ liệu phân nhóm không hợp lệ.")
+        save_group_assignments(customer_id, items)
+    except (json.JSONDecodeError, ValueError) as exc:
+        flash(str(exc), "warning")
+        return redirect(url_for("groups"))
+    add_history(customer_id, "info", "Đã lưu phân nhóm account", f"{len(items)} Group được cập nhật")
+    flash("Đã lưu phân nhóm Facebook account.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/bulk-delete", methods=["POST"])
+@synchronized_state
+def bulk_delete_groups():
+    customer_id = get_customer_id()
+    deleted = delete_groups_by_url(customer_id, request.form.getlist("group_urls"))
+    if deleted:
+        add_history(customer_id, "warning", f"Đã xóa {deleted} Group", "Xóa hàng loạt")
+    flash(f"Đã xóa {deleted} Group.", "success" if deleted else "warning")
+    return redirect(url_for("groups"))
+
+
 @app.route(
     "/add-group",
     methods=["POST"],
 )
+@synchronized_state
 def add_group():
 
     customer_id = (
@@ -4684,12 +5129,6 @@ def add_group():
     if not valid_facebook_group_url(group_url):
         flash("Link phải là URL HTTPS của một Facebook Group.", "warning")
         return redirect(url_for("groups"))
-
-        return redirect(
-            url_for(
-                "groups"
-            )
-        )
 
     current = (
         load_groups(
@@ -4716,14 +5155,10 @@ def add_group():
         flash(f"Tài khoản đã đạt giới hạn {group_limit} Group.", "warning")
         return redirect(url_for("groups"))
 
-    current.append(
-        group_url
-    )
-
-    save_groups(
-        customer_id,
-        current,
-    )
+    result = import_groups(customer_id, [group_url])
+    if not result["added"]:
+        flash("Không thể thêm Group.", "warning")
+        return redirect(url_for("groups"))
 
     add_history(
         customer_id,
@@ -4743,6 +5178,7 @@ def add_group():
     "/delete-group/<int:index>",
     methods=["POST"],
 )
+@synchronized_state
 def delete_group(
     index
 ):
@@ -4762,16 +5198,8 @@ def delete_group(
         < len(current)
     ):
 
-        deleted = (
-            current.pop(
-                index
-            )
-        )
-
-        save_groups(
-            customer_id,
-            current,
-        )
+        deleted = current[index]
+        delete_groups_by_url(customer_id, [deleted])
 
         add_history(
             customer_id,
@@ -5967,6 +6395,7 @@ def run_campaign():
 
         device_id = device["device_id"]
         job_id = "job_" + uuid.uuid4().hex[:20]
+        account_group_snapshot = build_account_group_snapshot(customer_id, groups_list)
         job = {
             "job_id": job_id,
             "device_id": device_id,
@@ -5975,6 +6404,7 @@ def run_campaign():
             "created_at": now_iso(),
             "campaign_name": settings_data.get("campaign_name", "Chiến dịch mới"),
             "groups": list(groups_list),
+            "account_group_snapshot": account_group_snapshot,
             "content": content,
             "images": [Path(x).name for x in settings_data.get("post_images", [])],
             "min_delay": minimum,

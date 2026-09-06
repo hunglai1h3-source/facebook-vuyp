@@ -1,99 +1,57 @@
 {% extends "base.html" %}
-
 {% block title %}Quản lý Groups • FB POST PRO{% endblock %}
 {% block page_title %}Quản lý Groups{% endblock %}
-
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/pages/groups.css') }}">
 {% endblock %}
-
 {% block content %}
-<section class="groups-shell">
-  <!-- ADD GROUP CARD -->
-  <article class="panel card-pad-lg">
-    <div class="section-header">
-      <div>
-        <span class="eyebrow">Thêm nhóm mới</span>
-        <h3 class="section-title">Thêm Group Facebook mục tiêu</h3>
-      </div>
-    </div>
-    <p class="section-desc" style="margin-bottom:18px">Nhập liên kết đầy đủ của Group Facebook công khai hoặc nhóm kín mà tài khoản của bạn đã tham gia.</p>
-
-    <form method="post" action="{{ url_for('add_group') }}" class="add-group-form">
-      <div class="group-input-box">
-        <span class="fb-icon-slot">
-          <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-          </svg>
-        </span>
-        <input
-          type="url"
-          name="group_url"
-          placeholder="https://www.facebook.com/groups/ten-nhom-hoac-id"
-          required
-        >
-      </div>
-      <button class="btn primary btn-add" type="submit">
-        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
-        </svg>
-        THÊM GROUP
-      </button>
-    </form>
-  </article>
-
-  <!-- GROUPS LIST CARD -->
-  <article class="panel card-pad-lg">
-    <div class="section-header">
-      <div>
-        <span class="eyebrow">Danh sách nhóm</span>
-        <h3 class="section-title">Các Group đang quản lý</h3>
-      </div>
-      <span class="badge blue">{{ groups|length }} Group</span>
-    </div>
-
-    {% if groups %}
-    <div class="groups-table">
-      {% for group in groups %}
-      <div class="group-row">
-        <span class="group-index">#{{ loop.index }}</span>
-        <div class="group-fb-badge">
-          <svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-          </svg>
-        </div>
-        <div class="group-url-col">
-          <a href="{{ group }}" target="_blank" rel="noopener noreferrer" class="group-url-link" title="{{ group }}">
-            <span class="truncate-text">{{ group }}</span>
-            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
-            </svg>
-          </a>
-        </div>
-        <div class="group-actions-col">
-          <form method="post" action="{{ url_for('delete_group', index=loop.index0) }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa Group này khỏi danh sách?')">
-            <button class="btn danger sm" type="submit" title="Xóa Group">
-              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-              </svg>
-              <span>Xóa</span>
-            </button>
-          </form>
-        </div>
+<section class="groups-shell" data-groups-ui>
+  <div class="groups-top-grid">
+    <article class="panel card-pad-lg bulk-import-card">
+      <div class="section-header"><div><span class="eyebrow">Bulk import</span><h3 class="section-title">Thêm nhiều Facebook Group</h3></div><span class="badge blue">Tối đa {{ current_user.max_groups or 500 }}</span></div>
+      <p class="section-desc">Dán mỗi URL trên một dòng, hoặc chọn file TXT/CSV. URL được chuẩn hóa và loại trùng trước khi lưu.</p>
+      <form method="post" action="{{ url_for('import_group_list') }}" enctype="multipart/form-data" class="bulk-import-form">
+        <label for="groupUrls">Danh sách Group URL</label>
+        <textarea id="groupUrls" name="group_urls" rows="7" placeholder="https://www.facebook.com/groups/group-1&#10;https://www.facebook.com/groups/group-2"></textarea>
+        <div class="import-actions"><label class="file-picker" for="groupFile"><span>Chọn TXT/CSV</span><input id="groupFile" type="file" name="group_file" accept=".txt,.csv,text/plain,text/csv"></label><button class="btn primary" type="submit">IMPORT GROUP</button></div>
+      </form>
+      {% if import_result %}
+      <div class="import-result" role="status"><strong>{{ import_result.added }} đã thêm</strong><span>{{ import_result.duplicates }} trùng</span><span>{{ import_result.invalid }} không hợp lệ</span>{% if import_result.invalid_samples %}<details><summary>Xem URL lỗi</summary><ul>{% for item in import_result.invalid_samples %}<li>{{ item }}</li>{% endfor %}</ul></details>{% endif %}</div>
+      {% endif %}
+      <div class="single-add-legacy"><strong>Chỉ thêm một Group</strong><form method="post" action="{{ url_for('add_group') }}" class="add-group-form"><div class="group-input-box"><input type="url" name="group_url" placeholder="https://www.facebook.com/groups/ten-nhom" required></div><button class="btn secondary" type="submit">THÊM</button></form></div>
+    </article>
+    <article class="panel card-pad-lg account-card">
+      <div class="section-header"><div><span class="eyebrow">Facebook accounts</span><h3 class="section-title">Account nhận Group</h3></div><span class="badge muted">{{ accounts|length }} account</span></div>
+      <form method="post" action="{{ url_for('add_facebook_account') }}" class="account-add-form">
+        <div class="form-group"><label for="accountName">Tên hiển thị</label><input id="accountName" name="display_name" maxlength="120" placeholder="Ví dụ: Account A" required></div>
+        <div class="form-group"><label for="facebookUserId">Facebook ID (không bắt buộc)</label><input id="facebookUserId" name="facebook_user_id" maxlength="80" placeholder="UID hoặc tên nhận diện"></div>
+        <button class="btn secondary w-full" type="submit">THÊM FACEBOOK ACCOUNT</button>
+      </form>
+      <div class="account-list">{% for account in accounts %}<div class="account-chip"><span class="account-avatar">{{ account.display_name[:1]|upper }}</span><span><strong>{{ account.display_name }}</strong><small>{{ account.facebook_user_id or 'Chưa có Facebook ID' }}</small></span></div>{% else %}<p class="empty-compact">Thêm account để bắt đầu phân Group.</p>{% endfor %}</div>
+    </article>
+  </div>
+  <article class="panel card-pad-lg group-manager-card">
+    <div class="section-header"><div><span class="eyebrow">Group workspace</span><h3 class="section-title">Phân bổ Group theo account</h3></div><span class="badge blue">{{ groups|length }} Group</span></div>
+    <form method="get" action="{{ url_for('groups') }}" class="group-filter-bar"><input type="search" name="q" value="{{ query }}" placeholder="Tìm theo URL Group..." aria-label="Tìm Group"><select name="account" aria-label="Lọc theo account"><option value="">Tất cả account</option><option value="unassigned" {% if account_filter == 'unassigned' %}selected{% endif %}>Chưa gán</option>{% for account in accounts %}<option value="{{ account.account_id }}" {% if account_filter == account.account_id %}selected{% endif %}>{{ account.display_name }}</option>{% endfor %}</select><button class="btn secondary" type="submit">LỌC</button></form>
+    {% if group_records %}
+    <div class="bulk-toolbar"><label class="select-all"><input type="checkbox" data-select-all><span>Chọn trang này</span></label><select data-bulk-account aria-label="Account gán hàng loạt"><option value="">Chọn account...</option>{% for account in accounts %}<option value="{{ account.account_id }}">{{ account.display_name }}</option>{% endfor %}</select><button class="btn secondary sm" type="button" data-bulk-assign>GÁN ĐÃ CHỌN</button><button class="btn secondary sm" type="button" data-even-distribute>CHIA ĐỀU TRANG NÀY</button><button class="btn danger sm" type="button" data-bulk-delete>XÓA ĐÃ CHỌN</button></div>
+    <div class="groups-table" role="list">
+      {% for group in group_records %}
+      <div class="group-row" role="listitem" data-group-row data-group-url="{{ group.url }}">
+        <input class="group-select" type="checkbox" aria-label="Chọn {{ group.url }}"><span class="group-index">#{{ (pagination.page - 1) * pagination.per_page + loop.index }}</span>
+        <div class="group-url-col"><a href="{{ group.url }}" target="_blank" rel="noopener noreferrer" class="group-url-link" title="{{ group.url }}"><span class="truncate-text">{{ group.url }}</span></a></div>
+        <div class="group-account-col"><select data-account-assignment aria-label="Account cho {{ group.url }}"><option value="">Chưa gán</option>{% for account in accounts %}<option value="{{ account.account_id }}" {% if group.account_id == account.account_id %}selected{% endif %}>{{ account.display_name }}</option>{% endfor %}</select></div>
+        <div class="group-actions-col"><form method="post" action="{{ url_for('delete_group', index=group.original_index) }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa Group này khỏi danh sách?')"><button class="btn danger sm" type="submit">Xóa</button></form></div>
       </div>
       {% endfor %}
     </div>
-    {% else %}
-    <div class="empty-state">
-      <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
-      </svg>
-      <p>Chưa có Group nào trong danh sách. Hãy dán link Group vào ô phía trên để bắt đầu.</p>
-    </div>
-    {% endif %}
+    <div class="manager-footer"><span>Hiển thị {{ group_records|length }}/{{ pagination.total_filtered }} kết quả</span><button class="btn primary" type="button" data-save-assignments>LƯU PHÂN BỔ</button></div>
+    {% if pagination.pages > 1 %}<nav class="pagination" aria-label="Phân trang Group">{% if pagination.page > 1 %}<a class="btn secondary sm" href="{{ url_for('groups', q=query, account=account_filter, page=pagination.page-1) }}">TRƯỚC</a>{% endif %}<span>Trang {{ pagination.page }}/{{ pagination.pages }}</span>{% if pagination.page < pagination.pages %}<a class="btn secondary sm" href="{{ url_for('groups', q=query, account=account_filter, page=pagination.page+1) }}">SAU</a>{% endif %}</nav>{% endif %}
+    {% else %}<div class="empty-state"><p>Không có Group phù hợp. Hãy import danh sách hoặc thay đổi bộ lọc.</p></div>{% endif %}
   </article>
+  <form id="assignmentForm" method="post" action="{{ url_for('assign_groups_to_accounts') }}" hidden><input type="hidden" name="assignments" value="[]"></form>
+  <form id="bulkDeleteForm" method="post" action="{{ url_for('bulk_delete_groups') }}" hidden></form>
 </section>
-
-
 {% endblock %}
+{% block scripts %}<script defer src="{{ url_for('static', filename='js/group-management.js') }}"></script>{% endblock %}

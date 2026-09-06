@@ -44,6 +44,7 @@ def check_contracts():
         if relative in {
             "extension/popup.css", "templates/compose.html",
             "extension/service_worker.js", "extension/web_bridge.js", "app.py",
+            "templates/groups.html",
         }:
             continue
         assert contract(ROOT / relative) == digest, f"Business contract changed: {relative}"
@@ -63,6 +64,7 @@ def check_contracts():
     worker_source = (ROOT / "extension/service_worker.js").read_text(encoding="utf-8")
     bridge_source = (ROOT / "extension/web_bridge.js").read_text(encoding="utf-8")
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    groups_source = (ROOT / "templates/groups.html").read_text(encoding="utf-8")
     for required in [
         "current_job_id", "worker_state", "command_id", "pause_requested",
         "waitForSafeControl", "job_id:",
@@ -75,7 +77,19 @@ def check_contracts():
         'reported_job_id', '"waiting_worker"',
     ]:
         assert required in app_source, f"Phase 6 server contract missing: {required}"
-    print(f"PASS: {len(expected)-5} protected source contracts plus explicit Phase 6 server/Compose/worker/bridge contracts")
+    for required in [
+        "url_for('import_group_list')", "url_for('add_group')",
+        "url_for('add_facebook_account')", "url_for('assign_groups_to_accounts')",
+        "url_for('bulk_delete_groups')", "js/group-management.js",
+        "data-even-distribute", "data-account-assignment",
+    ]:
+        assert required in groups_source, f"Phase 7 Groups contract missing: {required}"
+    for required in [
+        "fbpostpro_group_assignments", "def import_groups(",
+        "def save_group_assignments(", "account_group_snapshot",
+    ]:
+        assert required in app_source, f"Phase 7 server contract missing: {required}"
+    print(f"PASS: {len(expected)-6} protected source contracts plus explicit Phase 6/7 contracts")
 
 
 def screen_checks(module, context, page, origin, screen, output):

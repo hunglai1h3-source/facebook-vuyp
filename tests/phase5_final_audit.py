@@ -19,6 +19,8 @@ EXPECTED_ROUTES = {
     ('GET', '/'), ('GET', '/compose'), ('GET', '/customer-image/<filename>'),
     ('POST', '/save-post'), ('POST', '/delete-post-image/<filename>'),
     ('POST', '/delete-all-post-images'), ('GET', '/groups'), ('POST', '/add-group'),
+    ('POST', '/groups/import'), ('POST', '/groups/accounts'),
+    ('POST', '/groups/assign'), ('POST', '/groups/bulk-delete'),
     ('POST', '/delete-group/<int:index>'), ('GET', '/history'), ('POST', '/clear-history'),
     ('GET', '/settings'), ('POST', '/settings'), ('GET', '/register'), ('POST', '/register'),
     ('GET', '/login'), ('POST', '/login'), ('GET', '/logout'),
