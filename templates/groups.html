@@ -28,7 +28,26 @@
         <div class="form-group"><label for="facebookUserId">Facebook ID (không bắt buộc)</label><input id="facebookUserId" name="facebook_user_id" maxlength="80" placeholder="UID hoặc tên nhận diện"></div>
         <button class="btn secondary w-full" type="submit">THÊM FACEBOOK ACCOUNT</button>
       </form>
-      <div class="account-list">{% for account in accounts %}<div class="account-chip"><span class="account-avatar">{{ account.display_name[:1]|upper }}</span><span><strong>{{ account.display_name }}</strong><small>{{ account.facebook_user_id or 'Chưa có Facebook ID' }}</small></span></div>{% else %}<p class="empty-compact">Thêm account để bắt đầu phân Group.</p>{% endfor %}</div>
+      <div class="account-list">
+        {% for account in accounts %}
+        <div class="account-chip">
+          <span class="account-avatar">{{ account.display_name[:1]|upper }}</span>
+          <div class="account-identity"><strong>{{ account.display_name }}</strong><small>{{ account.facebook_user_id or 'Chưa có Facebook ID' }}</small></div>
+          <form method="post" action="{{ url_for('bind_facebook_account', account_id=account.account_id) }}" class="account-device-form">
+            <label for="device-{{ account.account_id }}">Chrome profile / worker</label>
+            <div class="account-device-control">
+              <select id="device-{{ account.account_id }}" name="device_id" aria-label="Chrome profile cho {{ account.display_name }}">
+                <option value="">Chưa gắn worker</option>
+                {% for device in devices %}
+                <option value="{{ device.device_id }}" {% if account.device_id == device.device_id %}selected{% endif %}>{{ device.name or device.device_id }} • {{ 'online' if device.online else 'offline' }}</option>
+                {% endfor %}
+              </select>
+              <button class="btn secondary sm" type="submit">LƯU</button>
+            </div>
+          </form>
+        </div>
+        {% else %}<p class="empty-compact">Thêm account để bắt đầu phân Group.</p>{% endfor %}
+      </div>
     </article>
   </div>
   <article class="panel card-pad-lg group-manager-card">

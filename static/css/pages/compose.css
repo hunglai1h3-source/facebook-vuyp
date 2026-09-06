@@ -58,6 +58,12 @@
 .campaign-result-row strong { color: var(--text); }
 .campaign-secondary-actions { margin-top: 8px; }
 .campaign-secondary-actions form { margin: 0; }
+.campaign-launch-form { display: grid; gap: 10px; margin-top: 16px; }
+.campaign-schedule-field { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface2); }
+.campaign-schedule-field label { color: var(--text2); font-size: 12px; font-weight: 600; }
+.campaign-schedule-field label span { color: var(--text3); font-weight: 400; }
+.campaign-schedule-field input { width: 100%; min-width: 0; }
+.campaign-launch-secondary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .info-note { display: flex; align-items: flex-start; gap: 10px; padding: 16px; margin-top: 20px; border-radius: var(--r-md); border: 1px solid var(--accent-border); background: var(--accent-tint); font-size: 12px; line-height: 1.7; color: var(--text2); }
 @media (max-width: 1200px) {
   .compose-layout { grid-template-columns: minmax(0, 1fr); }
@@ -69,4 +75,5 @@
   .delay-section { padding: 16px; }
   .compose-layout .grid2 { grid-template-columns: minmax(0, 1fr); }
   .del-single-btn { width: 44px; height: 44px; }
+  .campaign-launch-secondary { grid-template-columns: minmax(0, 1fr); }
 }

@@ -232,6 +232,14 @@ MAX_GROUPS_PER_CAMPAIGN = 1000
 MAX_GROUP_IMPORT_BYTES = 2 * 1024 * 1024
 GROUPS_PER_PAGE = 100
 MIN_MULTI_ACCOUNT_CAPACITY = 2
+CAMPAIGN_LIFECYCLES = {
+    "draft", "scheduled", "queued", "running", "paused",
+    "completed", "partial_failed", "failed", "cancelled",
+}
+TASK_TERMINAL_STATUSES = {"successful", "failed", "skipped", "cancelled"}
+TASK_ACTIVE_STATUSES = {"claimed", "running", "paused"}
+DEFAULT_TASK_RETRY_LIMIT = 1
+TASK_LEASE_SECONDS = 300
 
 AGENT_TERMINAL_STATUSES = {
     "finished",
@@ -489,6 +497,14 @@ def customer_accounts_file(customer_id):
 
 def customer_group_assignments_file(customer_id):
     return customer_data_dir(customer_id) / "group_assignments.json"
+
+
+def customer_engine_campaigns_file(customer_id):
+    return customer_data_dir(customer_id) / "campaign_engine.json"
+
+
+def customer_engine_tasks_file(customer_id):
+    return customer_data_dir(customer_id) / "campaign_tasks.json"
 
 
 def customer_control_file(
@@ -766,6 +782,9 @@ def init_persistence_tables():
                     """
                 )
                 cur.execute(
+                    "ALTER TABLE fbpostpro_accounts ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) NOT NULL DEFAULT ''"
+                )
+                cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_accounts_customer ON fbpostpro_accounts (customer_id, created_at)"
                 )
                 cur.execute(
@@ -782,6 +801,74 @@ def init_persistence_tables():
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_group_assignments_account ON fbpostpro_group_assignments (customer_id, account_id)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_campaign_engine (
+                        campaign_id VARCHAR(64) PRIMARY KEY,
+                        customer_id VARCHAR(40) NOT NULL,
+                        campaign_name VARCHAR(120) NOT NULL DEFAULT '',
+                        lifecycle VARCHAR(32) NOT NULL DEFAULT 'draft',
+                        scheduled_at TIMESTAMPTZ,
+                        account_group_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        total INTEGER NOT NULL DEFAULT 0,
+                        successful INTEGER NOT NULL DEFAULT 0,
+                        failed INTEGER NOT NULL DEFAULT 0,
+                        cancelled INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        started_at TIMESTAMPTZ,
+                        finished_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_engine_due ON fbpostpro_campaign_engine (customer_id, lifecycle, scheduled_at)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_campaign_tasks (
+                        task_id VARCHAR(80) PRIMARY KEY,
+                        campaign_id VARCHAR(64) NOT NULL,
+                        customer_id VARCHAR(40) NOT NULL,
+                        account_id VARCHAR(64) NOT NULL,
+                        device_id VARCHAR(100) NOT NULL,
+                        group_url TEXT NOT NULL,
+                        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                        idempotency_key VARCHAR(180) NOT NULL UNIQUE,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        max_retries INTEGER NOT NULL DEFAULT 1,
+                        last_error TEXT NOT NULL DEFAULT '',
+                        next_retry_at TIMESTAMPTZ,
+                        lease_token VARCHAR(100) NOT NULL DEFAULT '',
+                        lease_expires_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        started_at TIMESTAMPTZ,
+                        finished_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_tasks_dispatch ON fbpostpro_campaign_tasks (customer_id, device_id, status, next_retry_at, created_at)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_tasks_campaign ON fbpostpro_campaign_tasks (campaign_id, status)"
+                )
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_fbpostpro_one_active_account_task
+                    ON fbpostpro_campaign_tasks (customer_id, account_id)
+                    WHERE status IN ('claimed', 'running', 'paused')
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_fbpostpro_one_account_per_device
+                    ON fbpostpro_accounts (customer_id, device_id)
+                    WHERE device_id <> ''
+                    """
                 )
             conn.commit()
         PERSISTENCE_TABLES_READY = True
@@ -2005,6 +2092,48 @@ def create_facebook_account(customer_id, display_name, facebook_user_id=""):
     return record
 
 
+def bind_facebook_account_device(customer_id, account_id, device_id):
+    customer_id = sanitize_customer_id(customer_id)
+    account_id = str(account_id or "").strip()
+    device_id = sanitize_device_id(device_id)
+    accounts = load_facebook_accounts(customer_id)
+    account = next((item for item in accounts if item.get("account_id") == account_id), None)
+    if not account:
+        raise ValueError("Facebook account không thuộc tài khoản hiện tại.")
+    devices = load_devices(customer_id)
+    if device_id and device_id not in devices:
+        raise ValueError("Desktop worker không thuộc tài khoản hiện tại.")
+    if device_id and any(
+        item.get("device_id") == device_id and item.get("account_id") != account_id
+        for item in accounts
+    ):
+        raise ValueError("Desktop worker này đã được gắn với Facebook account khác.")
+
+    if not postgres_enabled():
+        account["device_id"] = device_id
+        account["updated_at"] = now_iso()
+        write_json(customer_accounts_file(customer_id), accounts)
+        return account
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE fbpostpro_accounts
+                SET device_id = %s, updated_at = NOW()
+                WHERE customer_id = %s AND account_id = %s
+                """,
+                (device_id, customer_id, account_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("Facebook account không tồn tại.")
+        conn.commit()
+    account["device_id"] = device_id
+    account["updated_at"] = now_iso()
+    return account
+
+
 def load_group_assignments(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     if not customer_id:
@@ -2185,6 +2314,662 @@ def build_account_group_snapshot(customer_id, group_urls):
         })
         bucket["groups"].append(group_url)
     return list(buckets.values())
+
+
+# ============================================================
+# PHASE 8 CAMPAIGN ENGINE
+# ============================================================
+
+def parse_utc_datetime(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Ngày giờ hẹn chạy không hợp lệ.") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _engine_campaign_from_row(row):
+    item = dict(row)
+    for key in ("scheduled_at", "created_at", "started_at", "finished_at", "updated_at"):
+        item[key] = _serialize_dt(item.get(key))
+    return item
+
+
+def _engine_task_from_row(row):
+    item = dict(row)
+    for key in ("next_retry_at", "lease_expires_at", "created_at", "started_at", "finished_at", "updated_at"):
+        item[key] = _serialize_dt(item.get(key))
+    return item
+
+
+def load_engine_campaigns(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    if not postgres_enabled():
+        data = read_json(customer_engine_campaigns_file(customer_id), [])
+        return data if isinstance(data, list) else []
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM fbpostpro_campaign_engine WHERE customer_id = %s ORDER BY created_at DESC",
+                (customer_id,),
+            )
+            rows = cur.fetchall()
+    return [_engine_campaign_from_row(row) for row in rows]
+
+
+def load_engine_tasks(customer_id, campaign_id=""):
+    customer_id = sanitize_customer_id(customer_id)
+    campaign_id = str(campaign_id or "").strip()
+    if not postgres_enabled():
+        data = read_json(customer_engine_tasks_file(customer_id), [])
+        tasks = data if isinstance(data, list) else []
+        return [task for task in tasks if not campaign_id or task.get("campaign_id") == campaign_id]
+    init_persistence_tables()
+    query = "SELECT * FROM fbpostpro_campaign_tasks WHERE customer_id = %s"
+    params = [customer_id]
+    if campaign_id:
+        query += " AND campaign_id = %s"
+        params.append(campaign_id)
+    query += " ORDER BY created_at ASC, task_id ASC"
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+    return [_engine_task_from_row(row) for row in rows]
+
+
+def _save_local_engine(customer_id, campaigns=None, tasks=None):
+    if campaigns is not None:
+        write_json(customer_engine_campaigns_file(customer_id), campaigns)
+    if tasks is not None:
+        write_json(customer_engine_tasks_file(customer_id), tasks)
+
+
+def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecycle, scheduled_at=None):
+    customer_id = sanitize_customer_id(customer_id)
+    if lifecycle not in {"draft", "scheduled", "queued"}:
+        raise ValueError("Trạng thái campaign khởi tạo không hợp lệ.")
+    scheduled = parse_utc_datetime(scheduled_at) if scheduled_at else None
+    if lifecycle == "scheduled" and not scheduled:
+        raise ValueError("Bạn chưa chọn ngày giờ hẹn chạy.")
+    accounts = {item["account_id"]: item for item in load_facebook_accounts(customer_id)}
+    devices = load_devices(customer_id)
+    normalized_snapshot = []
+    seen_groups = set()
+    for bucket in snapshot:
+        account_id = str(bucket.get("account_id", ""))
+        account = accounts.get(account_id)
+        if not account:
+            raise ValueError("Mọi Group phải được gán cho Facebook account hợp lệ trước khi tạo campaign.")
+        device_id = sanitize_device_id(account.get("device_id", ""))
+        if not device_id or device_id not in devices:
+            raise ValueError(f"{account.get('display_name', account_id)} chưa được gắn với desktop worker/Chrome profile.")
+        group_list = []
+        for group_url in bucket.get("groups", []):
+            group_url = normalize_group_url(group_url)
+            if group_url in seen_groups:
+                raise ValueError(f"Conflict: Group xuất hiện ở nhiều account: {group_url}")
+            seen_groups.add(group_url)
+            group_list.append(group_url)
+        normalized_snapshot.append({
+            "account_id": account_id,
+            "account_name": account.get("display_name", account_id),
+            "device_id": device_id,
+            "groups": group_list,
+        })
+    if not seen_groups:
+        raise ValueError("Campaign không có Group.")
+
+    # One account/profile cannot overlap another active campaign.
+    active_campaigns = {
+        task.get("account_id") for task in load_engine_tasks(customer_id)
+        if task.get("status") not in TASK_TERMINAL_STATUSES | {"draft"}
+    }
+    overlap = active_campaigns & set(accounts_for_bucket["account_id"] for accounts_for_bucket in normalized_snapshot)
+    if overlap:
+        raise ValueError("Một Facebook account đang có campaign khác chưa kết thúc.")
+
+    campaign_id = "cmp_" + uuid.uuid4().hex[:20]
+    now = now_iso()
+    campaign = {
+        "campaign_id": campaign_id,
+        "customer_id": customer_id,
+        "campaign_name": str(campaign_name or "Chiến dịch mới")[:MAX_CAMPAIGN_NAME_LENGTH],
+        "lifecycle": lifecycle,
+        "scheduled_at": scheduled.isoformat(timespec="seconds") if scheduled else "",
+        "account_group_snapshot": normalized_snapshot,
+        "payload": dict(payload),
+        "total": len(seen_groups), "successful": 0, "failed": 0, "cancelled": 0,
+        "created_at": now, "started_at": "", "finished_at": "", "updated_at": now,
+    }
+    task_status = "draft" if lifecycle == "draft" else ("scheduled" if lifecycle == "scheduled" else "pending")
+    tasks = []
+    for bucket in normalized_snapshot:
+        for index, group_url in enumerate(bucket["groups"]):
+            digest = secrets.token_hex(6)
+            tasks.append({
+                "task_id": "tsk_" + uuid.uuid4().hex[:24],
+                "campaign_id": campaign_id, "customer_id": customer_id,
+                "account_id": bucket["account_id"], "device_id": bucket["device_id"],
+                "group_url": group_url, "status": task_status,
+                "idempotency_key": f"{campaign_id}:{bucket['account_id']}:{index}:{digest}",
+                "retry_count": 0, "max_retries": DEFAULT_TASK_RETRY_LIMIT,
+                "last_error": "", "next_retry_at": "", "lease_token": "",
+                "lease_expires_at": "", "created_at": now, "started_at": "",
+                "finished_at": "", "updated_at": now,
+            })
+
+    if not postgres_enabled():
+        campaigns = load_engine_campaigns(customer_id)
+        existing_tasks = load_engine_tasks(customer_id)
+        campaigns.append(campaign)
+        existing_tasks.extend(tasks)
+        _save_local_engine(customer_id, campaigns, existing_tasks)
+        return campaign
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            for account_id in sorted(bucket["account_id"] for bucket in normalized_snapshot):
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"{customer_id}:{account_id}",),
+                )
+                cur.execute(
+                    """
+                    SELECT 1 FROM fbpostpro_campaign_tasks
+                    WHERE customer_id=%s AND account_id=%s
+                      AND status NOT IN ('successful','failed','skipped','cancelled','draft')
+                    LIMIT 1
+                    """,
+                    (customer_id, account_id),
+                )
+                if cur.fetchone():
+                    raise ValueError("Một Facebook account đang có campaign khác chưa kết thúc.")
+            cur.execute(
+                """
+                INSERT INTO fbpostpro_campaign_engine (
+                    campaign_id, customer_id, campaign_name, lifecycle, scheduled_at,
+                    account_group_snapshot, payload, total, successful, failed,
+                    cancelled, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, 0, 0, 0, NOW(), NOW())
+                """,
+                (campaign_id, customer_id, campaign["campaign_name"], lifecycle, scheduled,
+                 json.dumps(normalized_snapshot, ensure_ascii=False),
+                 json.dumps(payload, ensure_ascii=False), campaign["total"]),
+            )
+            for task in tasks:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_campaign_tasks (
+                        task_id, campaign_id, customer_id, account_id, device_id,
+                        group_url, status, idempotency_key, retry_count, max_retries,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s, NOW(), NOW())
+                    """,
+                    (task["task_id"], campaign_id, customer_id, task["account_id"],
+                     task["device_id"], task["group_url"], task_status,
+                     task["idempotency_key"], DEFAULT_TASK_RETRY_LIMIT),
+                )
+        conn.commit()
+    return campaign
+
+
+def activate_due_campaigns(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    now = utc_now()
+    if not postgres_enabled():
+        campaigns = load_engine_campaigns(customer_id)
+        tasks = load_engine_tasks(customer_id)
+        changed = False
+        for campaign in campaigns:
+            if campaign.get("lifecycle") != "scheduled":
+                continue
+            due = parse_utc_datetime(campaign.get("scheduled_at"))
+            if due and due <= now:
+                campaign["lifecycle"] = "queued"
+                campaign["updated_at"] = now_iso()
+                for task in tasks:
+                    if task.get("campaign_id") == campaign.get("campaign_id") and task.get("status") == "scheduled":
+                        task["status"] = "pending"
+                        task["updated_at"] = now_iso()
+                changed = True
+        if changed:
+            _save_local_engine(customer_id, campaigns, tasks)
+        return
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE fbpostpro_campaign_engine
+                SET lifecycle = 'queued', updated_at = NOW()
+                WHERE customer_id = %s AND lifecycle = 'scheduled' AND scheduled_at <= NOW()
+                RETURNING campaign_id
+                """,
+                (customer_id,),
+            )
+            due_ids = [row["campaign_id"] for row in cur.fetchall()]
+            if due_ids:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_campaign_tasks SET status = 'pending', updated_at = NOW()
+                    WHERE customer_id = %s AND campaign_id = ANY(%s) AND status = 'scheduled'
+                    """,
+                    (customer_id, due_ids),
+                )
+        conn.commit()
+
+
+def get_engine_campaign(customer_id, campaign_id):
+    return next(
+        (item for item in load_engine_campaigns(customer_id) if item.get("campaign_id") == campaign_id),
+        None,
+    )
+
+
+def sync_engine_campaign(customer_id, campaign_id):
+    campaign = get_engine_campaign(customer_id, campaign_id)
+    if not campaign:
+        return None
+    tasks = load_engine_tasks(customer_id, campaign_id)
+    counts = {status: sum(task.get("status") == status for task in tasks) for status in {
+        "draft", "scheduled", "pending", "retry_wait", "claimed", "running", "paused",
+        "successful", "failed", "skipped", "cancelled",
+    }}
+    successful = counts["successful"]
+    failed = counts["failed"]
+    cancelled = counts["cancelled"] + counts["skipped"]
+    active = counts["claimed"] + counts["running"] + counts["paused"]
+    pending = counts["draft"] + counts["scheduled"] + counts["pending"] + counts["retry_wait"]
+    lifecycle = campaign.get("lifecycle", "draft")
+    if lifecycle != "cancelled":
+        if counts["paused"] or lifecycle == "paused":
+            lifecycle = "paused"
+        elif successful + failed + cancelled == len(tasks) and tasks:
+            if successful == len(tasks):
+                lifecycle = "completed"
+            elif successful:
+                lifecycle = "partial_failed"
+            else:
+                lifecycle = "failed" if failed else "cancelled"
+        elif active:
+            lifecycle = "running"
+        elif lifecycle not in {"draft", "scheduled"}:
+            lifecycle = "queued"
+    changes = {
+        "lifecycle": lifecycle, "successful": successful, "failed": failed,
+        "cancelled": cancelled, "updated_at": now_iso(),
+    }
+    if lifecycle == "running" and not campaign.get("started_at"):
+        changes["started_at"] = now_iso()
+    if lifecycle in {"completed", "partial_failed", "failed", "cancelled"}:
+        changes["finished_at"] = campaign.get("finished_at") or now_iso()
+
+    if not postgres_enabled():
+        campaigns = load_engine_campaigns(customer_id)
+        for item in campaigns:
+            if item.get("campaign_id") == campaign_id:
+                item.update(changes)
+                campaign = item
+                break
+        _save_local_engine(customer_id, campaigns=campaigns)
+    else:
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_campaign_engine SET lifecycle=%s, successful=%s,
+                    failed=%s, cancelled=%s,
+                    started_at=COALESCE(%s::timestamptz, started_at),
+                    finished_at=COALESCE(%s::timestamptz, finished_at), updated_at=NOW()
+                    WHERE customer_id=%s AND campaign_id=%s
+                    """,
+                    (lifecycle, successful, failed, cancelled, changes.get("started_at") or None,
+                     changes.get("finished_at") or None, customer_id, campaign_id),
+                )
+            conn.commit()
+        campaign.update(changes)
+    campaign["progress"] = {
+        "total": len(tasks), "pending": pending, "running": active,
+        "successful": successful, "failed": failed,
+        "skipped": counts["skipped"], "cancelled": counts["cancelled"],
+    }
+    return campaign
+
+
+def _update_engine_task(customer_id, task_id, **changes):
+    allowed = {
+        "status", "retry_count", "last_error", "next_retry_at", "lease_token",
+        "lease_expires_at", "started_at", "finished_at",
+    }
+    clean = {key: value for key, value in changes.items() if key in allowed}
+    clean["updated_at"] = now_iso()
+    if not postgres_enabled():
+        tasks = load_engine_tasks(customer_id)
+        result = None
+        for task in tasks:
+            if task.get("task_id") == task_id:
+                task.update(clean)
+                result = task
+                break
+        _save_local_engine(customer_id, tasks=tasks)
+        return result
+    if not clean:
+        return None
+    columns = []
+    params = []
+    timestamp_fields = {"next_retry_at", "lease_expires_at", "started_at", "finished_at"}
+    for key, value in clean.items():
+        if key == "updated_at":
+            continue
+        columns.append(f"{key} = %s::timestamptz" if key in timestamp_fields else f"{key} = %s")
+        params.append(value or None if key in timestamp_fields else value)
+    columns.append("updated_at = NOW()")
+    params.extend([sanitize_customer_id(customer_id), task_id])
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE fbpostpro_campaign_tasks SET {', '.join(columns)} WHERE customer_id = %s AND task_id = %s RETURNING *",
+                tuple(params),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return _engine_task_from_row(row) if row else None
+
+
+def claim_next_engine_task(customer_id, device_id):
+    customer_id = sanitize_customer_id(customer_id)
+    device_id = sanitize_device_id(device_id)
+    activate_due_campaigns(customer_id)
+    accounts = load_facebook_accounts(customer_id)
+    bound = next((item for item in accounts if item.get("device_id") == device_id), None)
+    if not bound:
+        return None, None
+    device = load_devices(customer_id).get(device_id, {})
+    if not device_is_online(device) or not bool(device.get("facebook_logged_in")):
+        return None, None
+
+    if not postgres_enabled():
+        with FILE_LOCK:
+            campaigns = {item["campaign_id"]: item for item in load_engine_campaigns(customer_id)}
+            tasks = load_engine_tasks(customer_id)
+            active_for_account = any(
+                task.get("account_id") == bound["account_id"] and task.get("status") in TASK_ACTIVE_STATUSES
+                for task in tasks
+            )
+            if active_for_account:
+                return None, None
+            now = utc_now()
+            candidates = []
+            for task in tasks:
+                campaign = campaigns.get(task.get("campaign_id"), {})
+                if task.get("device_id") != device_id or task.get("account_id") != bound["account_id"]:
+                    continue
+                if task.get("status") not in {"pending", "retry_wait"}:
+                    continue
+                if campaign.get("lifecycle") not in {"queued", "running"}:
+                    continue
+                next_retry = parse_utc_datetime(task.get("next_retry_at")) if task.get("next_retry_at") else None
+                if next_retry and next_retry > now:
+                    continue
+                candidates.append(task)
+            if not candidates:
+                return None, None
+            task = sorted(candidates, key=lambda item: (item.get("created_at", ""), item.get("task_id", "")))[0]
+            lease_token = secrets.token_urlsafe(24)
+            task.update({
+                "status": "claimed", "lease_token": lease_token,
+                "lease_expires_at": (now + timedelta(seconds=TASK_LEASE_SECONDS)).isoformat(timespec="seconds"),
+                "started_at": task.get("started_at") or now_iso(), "updated_at": now_iso(),
+            })
+            campaign = campaigns[task["campaign_id"]]
+            campaign["lifecycle"] = "running"
+            campaign["started_at"] = campaign.get("started_at") or now_iso()
+            campaign["updated_at"] = now_iso()
+            _save_local_engine(customer_id, list(campaigns.values()), tasks)
+            return dict(task), dict(campaign)
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT t.* FROM fbpostpro_campaign_tasks t
+                JOIN fbpostpro_campaign_engine c ON c.campaign_id = t.campaign_id
+                WHERE t.customer_id = %s AND t.device_id = %s AND t.account_id = %s
+                  AND t.status IN ('pending', 'retry_wait')
+                  AND (t.next_retry_at IS NULL OR t.next_retry_at <= NOW())
+                  AND c.lifecycle IN ('queued', 'running')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM fbpostpro_campaign_tasks active
+                      WHERE active.customer_id=t.customer_id AND active.account_id=t.account_id
+                        AND active.status IN ('claimed','running','paused')
+                  )
+                ORDER BY t.created_at ASC, t.task_id ASC
+                FOR UPDATE OF t SKIP LOCKED LIMIT 1
+                """,
+                (customer_id, device_id, bound["account_id"]),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None
+            lease_token = secrets.token_urlsafe(24)
+            cur.execute(
+                """
+                UPDATE fbpostpro_campaign_tasks SET status='claimed', lease_token=%s,
+                    lease_expires_at=NOW() + (%s * INTERVAL '1 second'),
+                    started_at=COALESCE(started_at, NOW()), updated_at=NOW()
+                WHERE task_id=%s RETURNING *
+                """,
+                (lease_token, TASK_LEASE_SECONDS, row["task_id"]),
+            )
+            task_row = cur.fetchone()
+            cur.execute(
+                """
+                UPDATE fbpostpro_campaign_engine SET lifecycle='running',
+                    started_at=COALESCE(started_at, NOW()), updated_at=NOW()
+                WHERE customer_id=%s AND campaign_id=%s RETURNING *
+                """,
+                (customer_id, row["campaign_id"]),
+            )
+            campaign_row = cur.fetchone()
+        conn.commit()
+    return _engine_task_from_row(task_row), _engine_campaign_from_row(campaign_row)
+
+
+def materialize_next_engine_job(customer_id, device_id):
+    jobs = load_jobs(customer_id)
+    existing = jobs.get(device_id)
+    if isinstance(existing, dict) and existing.get("status") not in AGENT_TERMINAL_STATUSES | {"cancelled"}:
+        return None
+    task, campaign = claim_next_engine_task(customer_id, device_id)
+    if not task:
+        return None
+    payload = dict(campaign.get("payload") or {})
+    job = {
+        "job_id": "job_" + task["task_id"],
+        "engine_campaign_id": campaign["campaign_id"],
+        "engine_task_id": task["task_id"],
+        "idempotency_key": task["idempotency_key"],
+        "account_id": task["account_id"],
+        "account_name": next(
+            (item.get("account_name") for item in campaign.get("account_group_snapshot", [])
+             if item.get("account_id") == task["account_id"]),
+            task["account_id"],
+        ),
+        "device_id": device_id, "status": "pending", "mode": "chrome_extension",
+        "created_at": now_iso(), "campaign_name": campaign.get("campaign_name", "Chiến dịch"),
+        "groups": [task["group_url"]], "content": payload.get("content", ""),
+        "images": list(payload.get("images", [])), "min_delay": 0, "max_delay": 0,
+        "retry_count": task.get("retry_count", 0), "max_retries": task.get("max_retries", 0),
+    }
+    jobs[device_id] = job
+    save_jobs(customer_id, jobs)
+    queue_device_command(customer_id, device_id, "start", job["job_id"], "pending")
+    sync_engine_campaign_state(customer_id, campaign["campaign_id"], job)
+    return job
+
+
+def sync_engine_campaign_state(customer_id, campaign_id, job=None):
+    campaign = sync_engine_campaign(customer_id, campaign_id)
+    if not campaign:
+        return None
+    progress = campaign["progress"]
+    processed = progress["successful"] + progress["failed"] + progress["cancelled"] + progress["skipped"]
+    update_campaign_state(
+        customer_id,
+        campaign_id=campaign_id,
+        job_id=(job or {}).get("job_id", get_campaign_state(customer_id).get("job_id", "")),
+        device_id=(job or {}).get("device_id", get_campaign_state(customer_id).get("device_id", "")),
+        running=campaign["lifecycle"] not in {"draft", "completed", "partial_failed", "failed", "cancelled"},
+        status=campaign["lifecycle"],
+        message=f"{processed}/{progress['total']} Group • {campaign['lifecycle']}",
+        processed=processed, total=progress["total"], success=progress["successful"],
+        errors=progress["failed"], pending=progress["pending"], active_tasks=progress["running"],
+        skipped=progress["skipped"], cancelled=progress["cancelled"],
+    )
+    return campaign
+
+
+def update_engine_task_from_agent(customer_id, device_id, job, status, message=""):
+    task_id = str((job or {}).get("engine_task_id", ""))
+    campaign_id = str((job or {}).get("engine_campaign_id", ""))
+    if not task_id or not campaign_id:
+        return None
+    task = next((item for item in load_engine_tasks(customer_id, campaign_id) if item.get("task_id") == task_id), None)
+    if not task or task.get("device_id") != device_id or task.get("account_id") != job.get("account_id"):
+        raise ValueError("Engine task không thuộc worker/account này.")
+    if task.get("status") in TASK_TERMINAL_STATUSES:
+        return sync_engine_campaign_state(customer_id, campaign_id, job)
+
+    if status in {"running", "posting", "delay"}:
+        _update_engine_task(customer_id, task_id, status="running", lease_expires_at=(utc_now() + timedelta(seconds=TASK_LEASE_SECONDS)).isoformat(timespec="seconds"))
+    elif status == "paused":
+        _update_engine_task(customer_id, task_id, status="paused")
+    elif status in {"finished", "success"}:
+        _update_engine_task(customer_id, task_id, status="successful", finished_at=now_iso(), lease_token="", lease_expires_at="", last_error="")
+        campaign = get_engine_campaign(customer_id, campaign_id) or {}
+        payload = campaign.get("payload") or {}
+        minimum = max(0, int(payload.get("min_delay", 0) or 0))
+        maximum = max(minimum, int(payload.get("max_delay", minimum) or minimum))
+        delay_minutes = random.randint(minimum, maximum) if maximum else 0
+        if delay_minutes:
+            pending = [
+                item for item in load_engine_tasks(customer_id, campaign_id)
+                if item.get("account_id") == task["account_id"] and item.get("status") == "pending"
+            ]
+            if pending:
+                _update_engine_task(
+                    customer_id, pending[0]["task_id"],
+                    next_retry_at=(utc_now() + timedelta(minutes=delay_minutes)).isoformat(timespec="seconds"),
+                )
+    elif status == "finished_with_errors" and int(task.get("retry_count", 0)) < int(task.get("max_retries", 0)):
+        retry_count = int(task.get("retry_count", 0)) + 1
+        _update_engine_task(
+            customer_id, task_id, status="retry_wait", retry_count=retry_count,
+            last_error=message[:4000], next_retry_at=(utc_now() + timedelta(seconds=60 * retry_count)).isoformat(timespec="seconds"),
+            lease_token="", lease_expires_at="",
+        )
+    elif status in AGENT_TERMINAL_STATUSES:
+        final_status = "cancelled" if status == "stopped" else "failed"
+        _update_engine_task(
+            customer_id, task_id, status=final_status, last_error=message[:4000],
+            finished_at=now_iso(), lease_token="", lease_expires_at="",
+        )
+    return sync_engine_campaign_state(customer_id, campaign_id, job)
+
+
+def mark_engine_task_interrupted(customer_id, device_id, job, reason):
+    task_id = str((job or {}).get("engine_task_id", ""))
+    campaign_id = str((job or {}).get("engine_campaign_id", ""))
+    if not task_id or not campaign_id:
+        return
+    task = next((item for item in load_engine_tasks(customer_id, campaign_id) if item.get("task_id") == task_id), None)
+    if task and task.get("device_id") == device_id and task.get("status") in TASK_ACTIVE_STATUSES:
+        _update_engine_task(
+            customer_id, task_id, status="failed", last_error=str(reason)[:4000],
+            finished_at=now_iso(), lease_token="", lease_expires_at="",
+        )
+        sync_engine_campaign_state(customer_id, campaign_id, job)
+
+
+def set_engine_campaign_lifecycle(customer_id, campaign_id, lifecycle):
+    customer_id = sanitize_customer_id(customer_id)
+    campaign_id = str(campaign_id or "").strip()
+    if lifecycle not in CAMPAIGN_LIFECYCLES:
+        raise ValueError("Trạng thái campaign không hợp lệ.")
+    campaign = get_engine_campaign(customer_id, campaign_id)
+    if not campaign:
+        raise ValueError("Campaign không thuộc tài khoản hiện tại.")
+    if not postgres_enabled():
+        campaigns = load_engine_campaigns(customer_id)
+        for item in campaigns:
+            if item.get("campaign_id") == campaign_id:
+                item["lifecycle"] = lifecycle
+                item["updated_at"] = now_iso()
+                campaign = item
+                break
+        _save_local_engine(customer_id, campaigns=campaigns)
+        return campaign
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE fbpostpro_campaign_engine SET lifecycle=%s, updated_at=NOW()
+                WHERE customer_id=%s AND campaign_id=%s RETURNING *
+                """,
+                (lifecycle, customer_id, campaign_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    if not row:
+        raise ValueError("Campaign không thuộc tài khoản hiện tại.")
+    return _engine_campaign_from_row(row)
+
+
+def engine_campaign_active_devices(customer_id, campaign_id):
+    return sorted({
+        task.get("device_id", "")
+        for task in load_engine_tasks(customer_id, campaign_id)
+        if task.get("device_id") and task.get("status") in TASK_ACTIVE_STATUSES
+    })
+
+
+def cancel_engine_campaign(customer_id, campaign_id):
+    customer_id = sanitize_customer_id(customer_id)
+    campaign = set_engine_campaign_lifecycle(customer_id, campaign_id, "cancelled")
+    if not postgres_enabled():
+        tasks = load_engine_tasks(customer_id)
+        for task in tasks:
+            if task.get("campaign_id") == campaign_id and task.get("status") not in TASK_TERMINAL_STATUSES:
+                task.update({
+                    "status": "cancelled", "finished_at": now_iso(),
+                    "lease_token": "", "lease_expires_at": "", "updated_at": now_iso(),
+                })
+        _save_local_engine(customer_id, tasks=tasks)
+    else:
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_campaign_tasks
+                    SET status='cancelled', finished_at=NOW(), lease_token='',
+                        lease_expires_at=NULL, updated_at=NOW()
+                    WHERE customer_id=%s AND campaign_id=%s
+                      AND status NOT IN ('successful','failed','skipped','cancelled')
+                    """,
+                    (customer_id, campaign_id),
+                )
+            conn.commit()
+    return sync_engine_campaign_state(customer_id, campaign_id) or campaign
 
 
 # ============================================================
@@ -4022,6 +4807,10 @@ def queue_device_command(
 
 def public_campaign_status(raw_status, worker_online=True):
     raw_status = str(raw_status or "idle")
+    if raw_status in CAMPAIGN_LIFECYCLES:
+        if raw_status == "cancelled":
+            return "cancelled"
+        return raw_status
     if not worker_online and raw_status in {
         "pending", "queued", "agent_received", "claimed", "pausing",
         "resuming", "running", "posting", "delay", "paused",
@@ -4951,6 +5740,12 @@ def groups():
     all_groups = load_groups(customer_id)
     assignments = load_group_assignments(customer_id)
     accounts = load_facebook_accounts(customer_id)
+    devices = []
+    for device_id, device in load_devices(customer_id).items():
+        item = dict(device or {})
+        item["device_id"] = device_id
+        item["online"] = device_is_online(item)
+        devices.append(item)
     account_ids = {item.get("account_id") for item in accounts}
     query = str(request.args.get("q", "")).strip().casefold()[:200]
     account_filter = str(request.args.get("account", "")).strip()
@@ -4988,6 +5783,7 @@ def groups():
         groups=all_groups,
         group_records=page_records,
         accounts=accounts,
+        devices=devices,
         assignments=assignments,
         query=request.args.get("q", ""),
         account_filter=account_filter,
@@ -5071,6 +5867,25 @@ def add_facebook_account():
         return redirect(url_for("groups"))
     add_history(customer_id, "info", "Đã thêm Facebook account", account["display_name"])
     flash("Đã thêm Facebook account.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/accounts/<account_id>/bind", methods=["POST"])
+@synchronized_state
+def bind_facebook_account(account_id):
+    customer_id = get_customer_id()
+    try:
+        account = bind_facebook_account_device(
+            customer_id, account_id, request.form.get("device_id", "")
+        )
+    except ValueError as exc:
+        flash(str(exc), "warning")
+        return redirect(url_for("groups"))
+    add_history(
+        customer_id, "info", "Đã cập nhật Chrome profile cho Facebook account",
+        f"{account['display_name']} • {account.get('device_id') or 'chưa gắn'}",
+    )
+    flash("Đã lưu mapping account → desktop worker/Chrome profile.", "success")
     return redirect(url_for("groups"))
 
 
@@ -6348,6 +7163,112 @@ def run_campaign():
             flash("Chiến dịch đang chạy.", "warning")
             return redirect(url_for("compose"))
 
+        # Phase 8 uses the persistent task engine whenever Groups have account
+        # assignments. The legacy single-worker path below remains intact for
+        # existing customers that have not configured multi-account mapping.
+        groups_list = load_groups(customer_id)
+        content = load_post(customer_id).strip()
+        settings_data = load_settings(customer_id)
+        account_group_snapshot = build_account_group_snapshot(customer_id, groups_list)
+        campaign_action = str(request.form.get("campaign_action", "run")).strip().lower()
+        uses_engine = any(bucket.get("account_id") for bucket in account_group_snapshot)
+
+        if campaign_action not in {"run", "schedule", "draft"}:
+            flash("Hành động campaign không hợp lệ.", "warning")
+            return redirect(url_for("compose"))
+        if campaign_action in {"schedule", "draft"} and not uses_engine:
+            flash("Hãy gán Group cho Facebook account và Chrome profile trước khi hẹn lịch.", "warning")
+            return redirect(url_for("groups"))
+
+        if uses_engine:
+            if not groups_list:
+                flash("Bạn chưa thêm Group.", "warning")
+                return redirect(url_for("groups"))
+            if len(groups_list) > MAX_GROUPS_PER_CAMPAIGN:
+                flash(f"Một chiến dịch không được vượt quá {MAX_GROUPS_PER_CAMPAIGN} Group.", "warning")
+                return redirect(url_for("groups"))
+            if any(not valid_facebook_group_url(group) for group in groups_list):
+                flash("Danh sách có link không phải Facebook Group hợp lệ.", "warning")
+                return redirect(url_for("groups"))
+            if not content:
+                flash("Bạn chưa nhập nội dung bài đăng.", "warning")
+                return redirect(url_for("compose"))
+            try:
+                minimum = max(0, int(settings_data.get("min_delay", 3)))
+                maximum = max(0, int(settings_data.get("max_delay", 7)))
+            except (TypeError, ValueError):
+                flash("Cấu hình delay không hợp lệ.", "warning")
+                return redirect(url_for("settings"))
+            minimum, maximum = sorted((minimum, maximum))
+            if maximum > MAX_DELAY_MINUTES:
+                flash("Delay không được vượt quá 1440 phút.", "warning")
+                return redirect(url_for("settings"))
+
+            lifecycle = {"run": "queued", "schedule": "scheduled", "draft": "draft"}[campaign_action]
+            scheduled_at = str(request.form.get("scheduled_at", "")).strip()
+            if lifecycle == "scheduled":
+                try:
+                    scheduled_value = parse_utc_datetime(scheduled_at)
+                except ValueError as exc:
+                    flash(str(exc), "warning")
+                    return redirect(url_for("compose"))
+                if not scheduled_value or scheduled_value <= utc_now():
+                    flash("Thời gian hẹn chạy phải ở tương lai.", "warning")
+                    return redirect(url_for("compose"))
+
+            user = find_user_by_id(customer_id) or {}
+            campaign_limit = max(1, int(user.get("max_campaigns", 100) or 100))
+            campaign_count = len(load_campaign_records(customer_id, limit=campaign_limit + 1))
+            campaign_count += len(load_engine_campaigns(customer_id))
+            if campaign_count >= campaign_limit:
+                flash(f"Tài khoản đã đạt giới hạn {campaign_limit} chiến dịch.", "warning")
+                return redirect(url_for("compose"))
+
+            payload = {
+                "content": content,
+                "images": [Path(x).name for x in settings_data.get("post_images", [])],
+                "min_delay": minimum,
+                "max_delay": maximum,
+            }
+            try:
+                campaign = create_engine_campaign(
+                    customer_id,
+                    settings_data.get("campaign_name", "Chiến dịch mới"),
+                    account_group_snapshot,
+                    payload,
+                    lifecycle,
+                    scheduled_at,
+                )
+            except ValueError as exc:
+                flash(str(exc), "warning")
+                return redirect(url_for("groups"))
+
+            update_campaign_state(
+                customer_id,
+                campaign_id=campaign["campaign_id"], job_id="", device_id="",
+                running=lifecycle in {"scheduled", "queued"}, status=lifecycle,
+                message=(
+                    "Campaign đã được lưu và sẽ xếp hàng đúng thời điểm."
+                    if lifecycle == "scheduled"
+                    else "Campaign đã được lưu nháp."
+                    if lifecycle == "draft"
+                    else "Campaign đã xếp hàng cho các desktop worker được gắn với từng account."
+                ),
+                processed=0, total=campaign["total"], success=0, errors=0,
+                pending=campaign["total"], active_tasks=0, skipped=0, cancelled=0,
+            )
+            add_history(
+                customer_id, "info", "Đã tạo campaign đa account",
+                f"{campaign['campaign_name']} • {campaign['total']} Groups • {lifecycle}",
+            )
+            flash(
+                "Đã lưu lịch campaign." if lifecycle == "scheduled"
+                else "Đã lưu campaign nháp." if lifecycle == "draft"
+                else "Đã xếp hàng campaign cho desktop worker.",
+                "success",
+            )
+            return redirect(url_for("compose"))
+
         device = get_paired_device(customer_id)
         if not device:
             flash("FB POST PRO Connector chưa online. Vào Cài đặt để liên kết Chrome.", "warning")
@@ -6425,6 +7346,7 @@ def run_campaign():
 
         update_campaign_state(
             customer_id,
+            campaign_id="",
             job_id=job_id,
             device_id=device_id,
             running=True,
@@ -6458,6 +7380,20 @@ def stop_campaign():
     customer_id = get_customer_id()
     settings_data = load_settings(customer_id)
     current_state = get_campaign_state(customer_id)
+    engine_campaign_id = str(current_state.get("campaign_id", ""))
+    engine_campaign = get_engine_campaign(customer_id, engine_campaign_id) if engine_campaign_id else None
+    if engine_campaign and engine_campaign.get("lifecycle") not in {"completed", "partial_failed", "failed", "cancelled"}:
+        active_devices = engine_campaign_active_devices(customer_id, engine_campaign_id)
+        jobs = load_jobs(customer_id)
+        for active_device_id in active_devices:
+            active_job = jobs.get(active_device_id, {})
+            queue_device_command(
+                customer_id, active_device_id, "stop", active_job.get("job_id", "")
+            )
+        cancel_engine_campaign(customer_id, engine_campaign_id)
+        add_history(customer_id, "warning", "Đã hủy campaign đa account", engine_campaign_id)
+        flash("Đã hủy campaign và gửi lệnh dừng tới các worker đang chạy.", "warning")
+        return redirect(url_for("compose"))
     device_id = sanitize_device_id(
         current_state.get("device_id") or settings_data.get("active_device_id", "")
     )
@@ -6522,6 +7458,20 @@ def stop_campaign():
 def pause_campaign():
     customer_id = get_customer_id()
     state = get_campaign_state(customer_id)
+    engine_campaign_id = str(state.get("campaign_id", ""))
+    engine_campaign = get_engine_campaign(customer_id, engine_campaign_id) if engine_campaign_id else None
+    if engine_campaign and engine_campaign.get("lifecycle") in {"scheduled", "queued", "running"}:
+        set_engine_campaign_lifecycle(customer_id, engine_campaign_id, "paused")
+        jobs = load_jobs(customer_id)
+        for active_device_id in engine_campaign_active_devices(customer_id, engine_campaign_id):
+            queue_device_command(
+                customer_id, active_device_id, "pause",
+                (jobs.get(active_device_id) or {}).get("job_id", ""),
+            )
+        sync_engine_campaign_state(customer_id, engine_campaign_id)
+        add_history(customer_id, "info", "Đã tạm dừng campaign đa account", engine_campaign_id)
+        flash("Campaign đã tạm dừng ở điểm an toàn.", "warning")
+        return redirect(url_for("compose"))
     device_id = sanitize_device_id(state.get("device_id", ""))
     if not state.get("running") or not device_id:
         flash("Không có chiến dịch đang chạy để tạm dừng.", "warning")
@@ -6543,6 +7493,20 @@ def resume_campaign():
     customer_id = get_customer_id()
     with FILE_LOCK:
         state = get_campaign_state(customer_id)
+        engine_campaign_id = str(state.get("campaign_id", ""))
+        engine_campaign = get_engine_campaign(customer_id, engine_campaign_id) if engine_campaign_id else None
+        if engine_campaign and engine_campaign.get("lifecycle") == "paused":
+            set_engine_campaign_lifecycle(customer_id, engine_campaign_id, "queued")
+            jobs = load_jobs(customer_id)
+            for active_device_id in engine_campaign_active_devices(customer_id, engine_campaign_id):
+                queue_device_command(
+                    customer_id, active_device_id, "resume",
+                    (jobs.get(active_device_id) or {}).get("job_id", ""),
+                )
+            sync_engine_campaign_state(customer_id, engine_campaign_id)
+            add_history(customer_id, "info", "Đã tiếp tục campaign đa account", engine_campaign_id)
+            flash("Campaign đã tiếp tục; task chờ sẽ được phân đúng worker.", "success")
+            return redirect(url_for("compose"))
         device_id = sanitize_device_id(state.get("device_id", ""))
         device = get_paired_device(customer_id)
         if not device_id or not device or device.get("device_id") != device_id:
@@ -6579,13 +7543,34 @@ def resume_campaign():
 @app.route("/campaign-status")
 def campaign_status():
     customer_id = get_customer_id()
+    activate_due_campaigns(customer_id)
     state = get_campaign_state(customer_id)
-    active_device = get_active_device(customer_id)
+    engine_campaign_id = str(state.get("campaign_id", ""))
+    if engine_campaign_id and get_engine_campaign(customer_id, engine_campaign_id):
+        sync_engine_campaign_state(customer_id, engine_campaign_id)
+        state = get_campaign_state(customer_id)
+    engine_workers = []
+    if engine_campaign_id:
+        devices = load_devices(customer_id)
+        task_device_ids = sorted({
+            task.get("device_id", "")
+            for task in load_engine_tasks(customer_id, engine_campaign_id)
+            if task.get("device_id")
+        })
+        for task_device_id in task_device_ids:
+            worker = dict(devices.get(task_device_id, {}) or {})
+            worker["device_id"] = task_device_id
+            worker["online"] = device_is_online(worker)
+            engine_workers.append(worker)
+    active_device = next((worker for worker in engine_workers if worker.get("online")), None)
+    if not engine_workers:
+        active_device = get_active_device(customer_id)
     state["agent_online"] = active_device is not None
     state["display_status"] = public_campaign_status(
         state.get("status"), active_device is not None
     )
     state["agent_device"] = active_device
+    state["engine_workers"] = engine_workers
     state["facebook"] = get_facebook_state(customer_id)
     device_id = sanitize_device_id(state.get("device_id", ""))
     current_command = load_control(customer_id).get(device_id, {}) if device_id else {}
@@ -6937,6 +7922,7 @@ def agent_heartbeat():
     if worker_state not in {"idle", "busy", "paused"}:
         return jsonify({"error": "Invalid worker state"}), 400
     current_job_id = str(data.get("current_job_id", "")).strip()[:80]
+    interrupted_engine_campaign_id = ""
     device["worker_state"] = worker_state
     device["current_job_id"] = current_job_id
 
@@ -6953,6 +7939,13 @@ def agent_heartbeat():
             interrupted = jobs.get(device_id)
             interrupted_statuses = {"claimed", "running", "posting", "delay", "paused"}
             if isinstance(interrupted, dict) and interrupted.get("status") in interrupted_statuses:
+                interrupted_engine_campaign_id = str(interrupted.get("engine_campaign_id", ""))
+                mark_engine_task_interrupted(
+                    customer_id,
+                    device_id,
+                    interrupted,
+                    "Desktop worker disconnected after claiming the task; automatic replay was blocked.",
+                )
                 interrupted = dict(interrupted)
                 interrupted["status"] = "error"
                 interrupted["finished_at"] = now_iso()
@@ -6979,6 +7972,9 @@ def agent_heartbeat():
                     "Job đã dừng an toàn và không tự chạy lại để tránh đăng trùng.",
                 )
 
+    if interrupted_engine_campaign_id:
+        sync_engine_campaign_state(customer_id, interrupted_engine_campaign_id, interrupted)
+
     if facebook_logged_in:
         current_fb = get_facebook_state(customer_id)
         save_facebook_state(
@@ -6995,12 +7991,21 @@ def agent_heartbeat():
             connected_at=None,
         )
 
+    bound_account = next(
+        (item for item in load_facebook_accounts(customer_id) if item.get("device_id") == device_id),
+        None,
+    )
     return jsonify({
         "ok": True,
         "server_time": now_iso(),
         "facebook_logged_in": facebook_logged_in,
         "worker_state": worker_state,
         "current_job_id": current_job_id,
+        "assigned_account": {
+            "account_id": bound_account.get("account_id", ""),
+            "display_name": bound_account.get("display_name", ""),
+            "facebook_user_id": bound_account.get("facebook_user_id", ""),
+        } if bound_account else None,
     })
 
 
@@ -7039,6 +8044,7 @@ def agent_get_job():
     )
 
     with FILE_LOCK:
+        materialize_next_engine_job(customer_id, device_id)
         jobs = load_jobs(customer_id)
         job = jobs.get(device_id)
         if not job or job.get("status") != "pending":
@@ -7065,6 +8071,13 @@ def agent_get_job():
             started_at=now_iso(),
             device_id=device_id,
         )
+        if job.get("engine_task_id"):
+            _update_engine_task(
+                customer_id, job["engine_task_id"], status="running",
+                lease_expires_at=(utc_now() + timedelta(seconds=TASK_LEASE_SECONDS)).isoformat(timespec="seconds"),
+            )
+            sync_engine_campaign_state(customer_id, job["engine_campaign_id"], job)
+
         controls = load_control(customer_id)
         current_control = dict(controls.get(device_id, {}) or {})
         if (
@@ -7159,7 +8172,13 @@ def agent_update_status():
 
         current = get_campaign_state(customer_id)
         if job_id and current.get("job_id") and current.get("job_id") != job_id:
-            return jsonify({"error": "Campaign state belongs to another job"}), 409
+            same_engine_campaign = bool(
+                isinstance(job, dict)
+                and job.get("engine_campaign_id")
+                and current.get("campaign_id") == job.get("engine_campaign_id")
+            )
+            if not same_engine_campaign:
+                return jsonify({"error": "Campaign state belongs to another job"}), 409
 
         devices = load_devices(customer_id)
         device = devices.get(device_id, {})
@@ -7204,6 +8223,14 @@ def agent_update_status():
             errors=errors,
             finished_at=now_iso() if not running else "",
         )
+
+        if isinstance(job, dict) and job.get("engine_task_id"):
+            try:
+                update_engine_task_from_agent(
+                    customer_id, device_id, job, status, message or detail
+                )
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 409
 
         if event == "group_success" and not duplicate_event:
             add_history(customer_id, "success", message or "Đăng thành công", group_url or detail)

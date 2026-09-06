@@ -83,19 +83,21 @@ def run_checks(temp):
         "campaign_name": "Snapshot test", "content": "Phase 7 content",
         "min_delay": "0", "max_delay": "0",
     })
-    pair_data, agent_header = pair(alice, "phase7")
-    assert heartbeat(alice, agent_header).status_code == 200
+    pair_a, agent_a = pair(alice, "phase7-a")
+    pair_b, agent_b = pair(alice, "phase7-b")
+    assert heartbeat(alice, agent_a).status_code == 200
+    assert heartbeat(alice, agent_b).status_code == 200
+    module.bind_facebook_account_device(alice_id, account_a["account_id"], pair_a["device_id"])
+    module.bind_facebook_account_device(alice_id, account_b["account_id"], pair_b["device_id"])
     assert alice.post("/run-campaign").status_code == 302
-    job = module.load_jobs(alice_id)[pair_data["device_id"]]
-    snapshot = json.loads(json.dumps(job["account_group_snapshot"]))
+    engine_campaign = module.load_engine_campaigns(alice_id)[0]
+    snapshot = json.loads(json.dumps(engine_campaign["account_group_snapshot"]))
     flattened = [url for bucket in snapshot for url in bucket["groups"]]
     assert sorted(flattened) == sorted(urls) and len(flattened) == len(set(flattened)) == 100
     assert {bucket["account_name"] for bucket in snapshot} == {"Account A", "Account B"}
     module.save_group_assignments(alice_id, [{"group_url": urls[2], "account_id": account_b["account_id"]}])
-    assert module.load_jobs(alice_id)[pair_data["device_id"]]["account_group_snapshot"] == snapshot
-    campaign = module.load_campaign_records(alice_id)[0]
-    assert campaign["payload"]["account_group_snapshot"] == snapshot
-    print("PASS 6: campaign stores immutable account -> Groups snapshot while legacy groups payload remains")
+    assert module.load_engine_campaigns(alice_id)[0]["account_group_snapshot"] == snapshot
+    print("PASS 6: campaign stores an immutable account -> Groups snapshot")
 
     csv_url = "https://www.facebook.com/groups/phase7-csv"
     csv_import = alice.post("/groups/import", data={
@@ -130,7 +132,7 @@ def run_checks(temp):
     module = load_app(temp)
     assert len(module.load_facebook_accounts(alice_id)) == 2
     assert len(module.load_group_assignments(alice_id)) == 100
-    assert module.load_campaign_records(alice_id)[0]["payload"]["account_group_snapshot"] == snapshot
+    assert module.load_engine_campaigns(alice_id)[0]["account_group_snapshot"] == snapshot
     print("PASS: account and mapping persistence survives restart")
 
 
