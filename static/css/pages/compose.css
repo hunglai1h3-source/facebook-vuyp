@@ -50,6 +50,14 @@
 .aside-connector-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: var(--r-sm); color: var(--accent-h); background: var(--accent-tint2); }
 .aside-connector-box strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
 .aside-connector-box p { margin-top: 6px; font-size: 12px; color: var(--text3); line-height: 1.6; overflow-wrap: anywhere; }
+.aside-connector-box small { display: block; margin-top: 7px; color: var(--text3); font-size: 11px; }
+.campaign-progress { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface2); }
+.campaign-progress-meta, .campaign-result-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--text2); }
+.campaign-progress-track { height: 7px; margin: 10px 0; overflow: hidden; border-radius: var(--r-full); background: var(--border); }
+.campaign-progress-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-h)); transition: width var(--duration-normal) var(--ease-out); }
+.campaign-result-row strong { color: var(--text); }
+.campaign-secondary-actions { margin-top: 8px; }
+.campaign-secondary-actions form { margin: 0; }
 .info-note { display: flex; align-items: flex-start; gap: 10px; padding: 16px; margin-top: 20px; border-radius: var(--r-md); border: 1px solid var(--accent-border); background: var(--accent-tint); font-size: 12px; line-height: 1.7; color: var(--text2); }
 @media (max-width: 1200px) {
   .compose-layout { grid-template-columns: minmax(0, 1fr); }

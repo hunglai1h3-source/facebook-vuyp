@@ -4,6 +4,8 @@ const VERSION =
     .version;
 
 let busy = false;
+let currentJobId = '';
+let workerState = 'idle';
 let lastHeartbeatAt = 0;
 let lastHeartbeatResult = null;
 
@@ -111,7 +113,13 @@ async function heartbeat(
               VERSION,
 
             facebook_logged_in:
-              fb
+              fb,
+
+            worker_state:
+              workerState,
+
+            current_job_id:
+              currentJobId
           })
       }
     );
@@ -256,7 +264,7 @@ async function report(
   data
 ) {
   try {
-    await fetch(
+    const r = await fetch(
       c.serverOrigin +
         '/api/agent/status',
       {
@@ -267,16 +275,23 @@ async function report(
           headers(c),
 
         body:
-          JSON.stringify(
-            data
-          )
+          JSON.stringify({
+            ...data,
+            job_id:
+              data.job_id || currentJobId
+          })
       }
     );
+    if (!r.ok) {
+      throw new Error('Status update ' + r.status);
+    }
+    return true;
   } catch (e) {
     console.warn(
       'report',
       e
     );
+    return false;
   }
 }
 
@@ -300,10 +315,63 @@ async function control(c) {
     }
   } catch (e) {}
 
-  return {
-    stop_requested:
-      false
-  };
+  return { unavailable: true };
+}
+
+async function acknowledgeControl(c, ctl, kind) {
+  if (!ctl?.command_id) return;
+  try {
+    await fetch(c.serverOrigin + '/api/agent/control/ack', {
+      method: 'POST',
+      headers: headers(c),
+      body: JSON.stringify({
+        command_id: ctl.command_id,
+        [`${kind}_ack`]: true
+      })
+    });
+  } catch (e) {
+    console.warn('control ack', e);
+  }
+}
+
+async function waitForSafeControl(c, stats) {
+  let paused = false;
+  while (true) {
+    const ctl = await control(c);
+    if (ctl.unavailable) {
+      await sleep(3000);
+      continue;
+    }
+    if (ctl.stop_requested) {
+      await acknowledgeControl(c, ctl, 'stop');
+      return 'stop';
+    }
+    if (ctl.pause_requested) {
+      if (!paused) {
+        paused = true;
+        workerState = 'paused';
+        await report(c, {
+          status: 'paused',
+          message: 'Chiến dịch đang tạm dừng ở điểm an toàn.',
+          ...stats
+        });
+        await acknowledgeControl(c, ctl, 'pause');
+      }
+      try { await heartbeat(); } catch (e) {}
+      await sleep(2000);
+      continue;
+    }
+    if (paused || ctl.resume_requested) {
+      workerState = 'busy';
+      await acknowledgeControl(c, ctl, 'resume');
+      await report(c, {
+        status: 'running',
+        message: 'Desktop worker đã tiếp tục chiến dịch.',
+        ...stats
+      });
+    }
+    return 'continue';
+  }
 }
 
 function rnd(
@@ -827,12 +895,8 @@ async function stoppableDelay(
     seconds >
     0
   ) {
-    const ctl =
-      await control(c);
-
-    if (
-      ctl.stop_requested
-    ) {
+    const action = await waitForSafeControl(c, stats);
+    if (action === 'stop') {
       return false;
     }
 
@@ -881,6 +945,8 @@ async function processJob(
   job
 ) {
   busy = true;
+  currentJobId = String(job?.job_id || '');
+  workerState = 'busy';
 
   let processed = 0;
   let success = 0;
@@ -948,12 +1014,13 @@ async function processJob(
       i < groups.length;
       i++
     ) {
-      const ctl =
-        await control(c);
+      const action = await waitForSafeControl(c, {
+        processed,
+        success,
+        errors
+      });
 
-      if (
-        ctl.stop_requested
-      ) {
+      if (action === 'stop') {
         await report(
           c,
           {
@@ -1022,6 +1089,9 @@ async function processJob(
             event:
               'group_success',
 
+            event_id:
+              `${job.job_id}:group:${i}:success`,
+
             message:
               `Đăng thành công • ${job.campaign_name || 'Chiến dịch'}`,
 
@@ -1044,6 +1114,9 @@ async function processJob(
 
             event:
               'group_error',
+
+            event_id:
+              `${job.job_id}:group:${i}:error`,
 
             message:
               `Lỗi đăng bài • ${job.campaign_name || 'Chiến dịch'}`,
@@ -1197,6 +1270,9 @@ async function processJob(
   } finally {
     busy =
       false;
+    currentJobId = '';
+    workerState = 'idle';
+    lastHeartbeatAt = 0;
   }
 }
 

@@ -31,6 +31,7 @@ EXPECTED_ROUTES = {
     ('POST', '/admin/devices/<request_id>/reject'),
     ('POST', '/admin/device/<customer_id>/<device_id>/disconnect'),
     ('POST', '/run-campaign'), ('POST', '/stop-campaign'),
+    ('POST', '/pause-campaign'), ('POST', '/resume-campaign'),
     ('GET', '/campaign-status'), ('GET', '/agent-status'),
     ('POST', '/reset-facebook-profile'), ('GET', '/api/cloud/job'),
     ('GET', '/api/cloud/image/<customer_id>/<filename>'), ('GET', '/api/cloud/control'),

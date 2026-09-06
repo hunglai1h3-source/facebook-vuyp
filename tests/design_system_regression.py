@@ -41,7 +41,10 @@ def check_contracts():
         # manifest and service worker remain protected by the ORIGINAL hashes.
         # Phase 5 fixes the invalid nested forms in Compose and verifies its
         # resulting form ownership in the real browser below.
-        if relative in {"extension/popup.css", "templates/compose.html"}:
+        if relative in {
+            "extension/popup.css", "templates/compose.html",
+            "extension/service_worker.js", "extension/web_bridge.js", "app.py",
+        }:
             continue
         assert contract(ROOT / relative) == digest, f"Business contract changed: {relative}"
     compose_source = (ROOT / "templates/compose.html").read_text(encoding="utf-8")
@@ -51,11 +54,28 @@ def check_contracts():
         "id=\"newImagePreview\"", "id=\"selectedImageCount\"",
         "url_for('save_post')", "url_for('delete_post_image', filename=image)",
         "url_for('delete_all_post_images')", "url_for('run_campaign')",
-        "url_for('stop_campaign')", 'imageInput?.addEventListener("change"',
+        "url_for('stop_campaign')", "url_for('pause_campaign')",
+        "url_for('resume_campaign')", "js/campaign-control.js",
+        'imageInput?.addEventListener("change"',
     ]:
         assert required in compose_source, f"Compose contract missing: {required}"
     assert compose_source.count("<form") == compose_source.count("</form>"), "Compose form tags unbalanced"
-    print(f"PASS: {len(expected)-2} source contracts plus explicit Compose fields/routes/handler contract; popup CSS is presentation-only scope")
+    worker_source = (ROOT / "extension/service_worker.js").read_text(encoding="utf-8")
+    bridge_source = (ROOT / "extension/web_bridge.js").read_text(encoding="utf-8")
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    for required in [
+        "current_job_id", "worker_state", "command_id", "pause_requested",
+        "waitForSafeControl", "job_id:",
+    ]:
+        assert required in worker_source, f"Phase 6 worker contract missing: {required}"
+    assert "if(!c.deviceId||!c.token)" in bridge_source, "Paired server origin may be overwritten"
+    for required in [
+        'def queue_device_command(', 'def public_campaign_status(',
+        '@app.route("/pause-campaign"', '@app.route("/resume-campaign"',
+        'reported_job_id', '"waiting_worker"',
+    ]:
+        assert required in app_source, f"Phase 6 server contract missing: {required}"
+    print(f"PASS: {len(expected)-5} protected source contracts plus explicit Phase 6 server/Compose/worker/bridge contracts")
 
 
 def screen_checks(module, context, page, origin, screen, output):

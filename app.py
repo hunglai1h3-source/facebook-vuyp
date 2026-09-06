@@ -8,7 +8,7 @@ from flask import (
     flash,
     jsonify,
     session,
-    send_from_directory,
+    send_file,
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -30,9 +30,11 @@ try:
 except ImportError:
     sync_playwright = None
 from pathlib import Path
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -129,6 +131,17 @@ CUSTOMERS_ROOT.mkdir(
 )
 
 FILE_LOCK = threading.RLock()
+PERSISTENCE_INIT_LOCK = threading.RLock()
+PERSISTENCE_TABLES_READY = False
+
+
+def synchronized_state(function):
+    """Serialize read-modify-write campaign operations in the active web process."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with FILE_LOCK:
+            return function(*args, **kwargs)
+    return wrapped
 
 # ============================================================
 # LOCAL CHROME RUNTIME
@@ -229,6 +242,7 @@ AGENT_ALLOWED_STATUSES = AGENT_TERMINAL_STATUSES | {
     "running",
     "posting",
     "delay",
+    "paused",
     "success",
 }
 
@@ -461,6 +475,10 @@ def customer_jobs_file(
     )
 
 
+def customer_campaigns_file(customer_id):
+    return customer_data_dir(customer_id) / "campaigns.json"
+
+
 def customer_control_file(
     customer_id
 ):
@@ -620,11 +638,19 @@ def init_users_table():
                     display_name VARCHAR(120) NOT NULL,
                     password_hash TEXT NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    role VARCHAR(16) NOT NULL DEFAULT 'user',
+                    max_facebook_accounts INTEGER NOT NULL DEFAULT 1,
+                    max_groups INTEGER NOT NULL DEFAULT 500,
+                    max_campaigns INTEGER NOT NULL DEFAULT 100,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     last_login_at TIMESTAMPTZ
                 )
                 """
             )
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user'")
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_facebook_accounts INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_groups INTEGER NOT NULL DEFAULT 500")
+            cur.execute("ALTER TABLE fbpostpro_users ADD COLUMN IF NOT EXISTS max_campaigns INTEGER NOT NULL DEFAULT 100")
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_fbpostpro_users_username
@@ -636,6 +662,135 @@ def init_users_table():
                 CREATE INDEX IF NOT EXISTS idx_fbpostpro_users_email
                 ON fbpostpro_users (LOWER(email))
                 """
+            )
+        conn.commit()
+
+
+def init_persistence_tables():
+    """Create additive persistence tables; never drops or rewrites existing data."""
+    global PERSISTENCE_TABLES_READY
+    if not postgres_enabled():
+        return
+    if PERSISTENCE_TABLES_READY:
+        return
+
+    with PERSISTENCE_INIT_LOCK:
+        if PERSISTENCE_TABLES_READY:
+            return
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_customer_data (
+                        customer_id VARCHAR(40) NOT NULL,
+                        data_key VARCHAR(40) NOT NULL,
+                        data JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (customer_id, data_key)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_system_data (
+                        data_key VARCHAR(40) PRIMARY KEY,
+                        data JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_images (
+                        customer_id VARCHAR(40) NOT NULL,
+                        filename VARCHAR(255) NOT NULL,
+                        content BYTEA NOT NULL,
+                        content_type VARCHAR(100) NOT NULL DEFAULT 'application/octet-stream',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (customer_id, filename)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_campaigns (
+                        job_id VARCHAR(64) PRIMARY KEY,
+                        customer_id VARCHAR(40) NOT NULL,
+                        device_id VARCHAR(100) NOT NULL DEFAULT '',
+                        campaign_name VARCHAR(120) NOT NULL DEFAULT '',
+                        status VARCHAR(40) NOT NULL DEFAULT 'pending',
+                        total INTEGER NOT NULL DEFAULT 0,
+                        processed INTEGER NOT NULL DEFAULT 0,
+                        success INTEGER NOT NULL DEFAULT 0,
+                        errors INTEGER NOT NULL DEFAULT 0,
+                        scheduled_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        started_at TIMESTAMPTZ,
+                        finished_at TIMESTAMPTZ,
+                        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaigns_customer ON fbpostpro_campaigns (customer_id, created_at DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaigns_status ON fbpostpro_campaigns (status)"
+                )
+            conn.commit()
+        PERSISTENCE_TABLES_READY = True
+
+
+def postgres_customer_data_get(customer_id, data_key):
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT data FROM fbpostpro_customer_data WHERE customer_id = %s AND data_key = %s",
+                (sanitize_customer_id(customer_id), str(data_key)[:40]),
+            )
+            row = cur.fetchone()
+    return (True, row.get("data")) if row else (False, None)
+
+
+def postgres_customer_data_set(customer_id, data_key, data):
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO fbpostpro_customer_data (customer_id, data_key, data, updated_at)
+                VALUES (%s, %s, %s::jsonb, NOW())
+                ON CONFLICT (customer_id, data_key)
+                DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+                """,
+                (sanitize_customer_id(customer_id), str(data_key)[:40], json.dumps(data, ensure_ascii=False)),
+            )
+        conn.commit()
+
+
+def postgres_system_data_get(data_key):
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM fbpostpro_system_data WHERE data_key = %s", (str(data_key)[:40],))
+            row = cur.fetchone()
+    return (True, row.get("data")) if row else (False, None)
+
+
+def postgres_system_data_set(data_key, data):
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO fbpostpro_system_data (data_key, data, updated_at)
+                VALUES (%s, %s::jsonb, NOW())
+                ON CONFLICT (data_key)
+                DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+                """,
+                (str(data_key)[:40], json.dumps(data, ensure_ascii=False)),
             )
         conn.commit()
 
@@ -663,6 +818,10 @@ def _postgres_row_to_user(row):
         "display_name": row.get("display_name", ""),
         "password_hash": row.get("password_hash", ""),
         "is_active": bool(row.get("is_active", True)),
+        "role": "admin" if row.get("role") == "admin" else "user",
+        "max_facebook_accounts": int(row.get("max_facebook_accounts", 1) or 1),
+        "max_groups": int(row.get("max_groups", 500) or 500),
+        "max_campaigns": int(row.get("max_campaigns", 100) or 100),
         "created_at": _serialize_dt(row.get("created_at")),
         "last_login_at": _serialize_dt(row.get("last_login_at")),
     }
@@ -691,6 +850,10 @@ def load_users():
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    max_facebook_accounts,
+                    max_groups,
+                    max_campaigns,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -737,11 +900,15 @@ def save_users(users):
                         display_name,
                         password_hash,
                         is_active,
+                        role,
+                        max_facebook_accounts,
+                        max_groups,
+                        max_campaigns,
                         created_at,
                         last_login_at
                     )
                     VALUES (
-                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         COALESCE(%s::timestamptz, NOW()),
                         %s::timestamptz
                     )
@@ -752,6 +919,10 @@ def save_users(users):
                         display_name = EXCLUDED.display_name,
                         password_hash = EXCLUDED.password_hash,
                         is_active = EXCLUDED.is_active,
+                        role = EXCLUDED.role,
+                        max_facebook_accounts = EXCLUDED.max_facebook_accounts,
+                        max_groups = EXCLUDED.max_groups,
+                        max_campaigns = EXCLUDED.max_campaigns,
                         last_login_at = EXCLUDED.last_login_at
                     """,
                     (
@@ -761,6 +932,10 @@ def save_users(users):
                         str(user.get("display_name", "")).strip(),
                         str(user.get("password_hash", "")),
                         bool(user.get("is_active", True)),
+                        "admin" if user.get("role") == "admin" else "user",
+                        max(1, int(user.get("max_facebook_accounts", 1) or 1)),
+                        max(1, int(user.get("max_groups", 500) or 500)),
+                        max(1, int(user.get("max_campaigns", 100) or 100)),
                         user.get("created_at") or None,
                         user.get("last_login_at") or None,
                     ),
@@ -803,6 +978,10 @@ def find_user_by_login(login_value):
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    max_facebook_accounts,
+                    max_groups,
+                    max_campaigns,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -845,6 +1024,10 @@ def find_user_by_id(user_id):
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    max_facebook_accounts,
+                    max_groups,
+                    max_campaigns,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -929,6 +1112,10 @@ def create_user_account(
             "display_name": str(display_name or "").strip(),
             "password_hash": password_hash,
             "is_active": True,
+            "role": "user",
+            "max_facebook_accounts": 1,
+            "max_groups": 500,
+            "max_campaigns": 100,
             "created_at": now_iso(),
             "last_login_at": now_iso(),
         }
@@ -948,10 +1135,14 @@ def create_user_account(
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    max_facebook_accounts,
+                    max_groups,
+                    max_campaigns,
                     created_at,
                     last_login_at
                 )
-                VALUES (%s, %s, %s, %s, %s, TRUE, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, TRUE, 'user', 1, 500, 100, NOW(), NOW())
                 """,
                 (
                     user_id,
@@ -1042,11 +1233,15 @@ def migrate_json_users_to_postgres():
                             display_name,
                             password_hash,
                             is_active,
+                            role,
+                            max_facebook_accounts,
+                            max_groups,
+                            max_campaigns,
                             created_at,
                             last_login_at
                         )
                         VALUES (
-                            %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             COALESCE(%s::timestamptz, NOW()),
                             %s::timestamptz
                         )
@@ -1059,6 +1254,10 @@ def migrate_json_users_to_postgres():
                             str(user.get("display_name", username)).strip(),
                             password_hash,
                             bool(user.get("is_active", True)),
+                            "admin" if user.get("role") == "admin" else "user",
+                            max(1, int(user.get("max_facebook_accounts", 1) or 1)),
+                            max(1, int(user.get("max_groups", 500) or 500)),
+                            max(1, int(user.get("max_campaigns", 100) or 100)),
                             user.get("created_at") or None,
                             user.get("last_login_at") or None,
                         ),
@@ -1692,6 +1891,16 @@ def load_post(
     customer_id
 ):
 
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "post_content")
+        if found:
+            return str(data or "")
+
+        path = customer_post_file(customer_id)
+        legacy = path.read_text(encoding="utf-8") if path.exists() else ""
+        postgres_customer_data_set(customer_id, "post_content", legacy)
+        return legacy
+
     path = (
         customer_post_file(
             customer_id
@@ -1712,12 +1921,15 @@ def save_post_content(
     content,
 ):
 
-    customer_post_file(
-        customer_id
-    ).write_text(
-        content,
-        encoding="utf-8",
-    )
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "post_content", str(content or ""))
+        return
+
+    with FILE_LOCK:
+        path = customer_post_file(customer_id)
+        temp = path.with_suffix(path.suffix + ".tmp")
+        temp.write_text(str(content or ""), encoding="utf-8")
+        temp.replace(path)
 
 
 # ============================================================
@@ -1727,6 +1939,15 @@ def save_post_content(
 def load_history(
     customer_id
 ):
+
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "history")
+        if found:
+            return data if isinstance(data, list) else []
+        legacy = read_json(customer_history_file(customer_id), [])
+        legacy = legacy if isinstance(legacy, list) else []
+        postgres_customer_data_set(customer_id, "history", legacy)
+        return legacy
 
     return read_json(
         customer_history_file(
@@ -1766,12 +1987,11 @@ def add_history(
             now_iso(),
     })
 
-    write_json(
-        customer_history_file(
-            customer_id
-        ),
-        history[-300:],
-    )
+    history = history[-300:]
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "history", history)
+    else:
+        write_json(customer_history_file(customer_id), history)
 
 
 # ============================================================
@@ -1781,13 +2001,15 @@ def add_history(
 def load_settings(
     customer_id
 ):
-
-    settings = read_json(
-        customer_settings_file(
-            customer_id
-        ),
-        DEFAULT_SETTINGS,
-    )
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "settings")
+        if found:
+            settings = data
+        else:
+            settings = read_json(customer_settings_file(customer_id), DEFAULT_SETTINGS)
+            postgres_customer_data_set(customer_id, "settings", settings)
+    else:
+        settings = read_json(customer_settings_file(customer_id), DEFAULT_SETTINGS)
 
     if not isinstance(
         settings,
@@ -1860,13 +2082,10 @@ def save_settings(
     customer_id,
     settings,
 ):
-
-    write_json(
-        customer_settings_file(
-            customer_id
-        ),
-        settings,
-    )
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "settings", settings)
+    else:
+        write_json(customer_settings_file(customer_id), settings)
 
 
 
@@ -2837,12 +3056,24 @@ def save_uploaded_image(
         + extension
     )
 
-    image.save(
-        customer_upload_dir(
-            customer_id
-        )
-        / filename
-    )
+    if postgres_enabled():
+        content = image.stream.read()
+        content_type = image.mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_images (customer_id, filename, content, content_type)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (customer_id, filename)
+                    DO UPDATE SET content = EXCLUDED.content, content_type = EXCLUDED.content_type
+                    """,
+                    (sanitize_customer_id(customer_id), filename, content, content_type),
+                )
+            conn.commit()
+    else:
+        image.save(customer_upload_dir(customer_id) / filename)
 
     return filename
 
@@ -2877,6 +3108,17 @@ def delete_image_file(
     filename,
 ):
 
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM fbpostpro_images WHERE customer_id = %s AND filename = %s",
+                    (sanitize_customer_id(customer_id), Path(filename).name),
+                )
+            conn.commit()
+        return
+
     path = (
         customer_upload_dir(
             customer_id
@@ -2895,6 +3137,57 @@ def delete_image_file(
         pass
 
 
+def load_customer_image(customer_id, filename):
+    safe_name = Path(filename).name
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT content, content_type FROM fbpostpro_images WHERE customer_id = %s AND filename = %s",
+                    (sanitize_customer_id(customer_id), safe_name),
+                )
+                row = cur.fetchone()
+        if row:
+            return bytes(row.get("content") or b""), row.get("content_type") or "application/octet-stream"
+
+        legacy_path = customer_upload_dir(customer_id) / safe_name
+        if legacy_path.exists() and legacy_path.is_file():
+            content = legacy_path.read_bytes()
+            content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO fbpostpro_images (customer_id, filename, content, content_type)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (customer_id, filename) DO NOTHING
+                        """,
+                        (sanitize_customer_id(customer_id), safe_name, content, content_type),
+                    )
+                conn.commit()
+            return content, content_type
+        return None
+
+    path = customer_upload_dir(customer_id) / safe_name
+    if not path.exists() or not path.is_file():
+        return None
+    return path.read_bytes(), mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+
+
+def send_customer_image(customer_id, filename, as_attachment=False):
+    image = load_customer_image(customer_id, filename)
+    if image is None:
+        return jsonify({"error": "Image not found"}), 404
+    content, content_type = image
+    return send_file(
+        BytesIO(content),
+        mimetype=content_type,
+        as_attachment=as_attachment,
+        download_name=Path(filename).name,
+    )
+
+
 # ============================================================
 # DEVICES
 # ============================================================
@@ -2902,13 +3195,13 @@ def delete_image_file(
 def load_devices(
     customer_id
 ):
-
-    data = read_json(
-        customer_devices_file(
-            customer_id
-        ),
-        {},
-    )
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "devices")
+        if not found:
+            data = read_json(customer_devices_file(customer_id), {})
+            postgres_customer_data_set(customer_id, "devices", data if isinstance(data, dict) else {})
+    else:
+        data = read_json(customer_devices_file(customer_id), {})
 
     if isinstance(
         data,
@@ -2924,13 +3217,10 @@ def save_devices(
     customer_id,
     devices,
 ):
-
-    write_json(
-        customer_devices_file(
-            customer_id
-        ),
-        devices,
-    )
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "devices", devices)
+    else:
+        write_json(customer_devices_file(customer_id), devices)
 
 
 def device_is_online(
@@ -3080,6 +3370,29 @@ def get_active_device(
     return device
 
 
+def get_paired_device(customer_id):
+    """Return the selected paired device even when its heartbeat is stale."""
+    settings = load_settings(customer_id)
+    devices = load_devices(customer_id)
+    active_id = sanitize_device_id(settings.get("active_device_id", ""))
+    if active_id and isinstance(devices.get(active_id), dict):
+        item = dict(devices[active_id])
+        item["device_id"] = active_id
+        item["online"] = device_is_online(item)
+        return item
+    if not devices:
+        return None
+    device_id, device = max(
+        devices.items(), key=lambda pair: str((pair[1] or {}).get("last_seen", ""))
+    )
+    item = dict(device or {})
+    item["device_id"] = device_id
+    item["online"] = device_is_online(item)
+    settings["active_device_id"] = device_id
+    save_settings(customer_id, settings)
+    return item
+
+
 # ============================================================
 # CAMPAIGN STATE
 # ============================================================
@@ -3094,6 +3407,8 @@ def default_campaign_state():
         "total": 0,
         "success": 0,
         "errors": 0,
+        "job_id": "",
+        "device_id": "",
         "updated_at": now_iso(),
     }
 
@@ -3101,13 +3416,13 @@ def default_campaign_state():
 def get_campaign_state(
     customer_id
 ):
-
-    state = read_json(
-        customer_status_file(
-            customer_id
-        ),
-        default_campaign_state(),
-    )
+    if postgres_enabled():
+        found, state = postgres_customer_data_get(customer_id, "campaign_state")
+        if not found:
+            state = read_json(customer_status_file(customer_id), default_campaign_state())
+            postgres_customer_data_set(customer_id, "campaign_state", state if isinstance(state, dict) else default_campaign_state())
+    else:
+        state = read_json(customer_status_file(customer_id), default_campaign_state())
 
     if not isinstance(
         state,
@@ -3150,12 +3465,10 @@ def update_campaign_state(
         "updated_at"
     ] = now_iso()
 
-    write_json(
-        customer_status_file(
-            customer_id
-        ),
-        state,
-    )
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "campaign_state", state)
+    else:
+        write_json(customer_status_file(customer_id), state)
 
     return state
 
@@ -3167,13 +3480,13 @@ def update_campaign_state(
 def load_jobs(
     customer_id
 ):
-
-    data = read_json(
-        customer_jobs_file(
-            customer_id
-        ),
-        {},
-    )
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "jobs")
+        if not found:
+            data = read_json(customer_jobs_file(customer_id), {})
+            postgres_customer_data_set(customer_id, "jobs", data if isinstance(data, dict) else {})
+    else:
+        data = read_json(customer_jobs_file(customer_id), {})
 
     if isinstance(
         data,
@@ -3189,13 +3502,129 @@ def save_jobs(
     customer_id,
     jobs,
 ):
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "jobs", jobs)
+    else:
+        write_json(customer_jobs_file(customer_id), jobs)
 
-    write_json(
-        customer_jobs_file(
-            customer_id
-        ),
-        jobs,
-    )
+
+def create_campaign_record(customer_id, job):
+    record = {
+        "job_id": str(job.get("job_id", "")),
+        "customer_id": sanitize_customer_id(customer_id),
+        "device_id": sanitize_device_id(job.get("device_id", "")),
+        "campaign_name": str(job.get("campaign_name", ""))[:MAX_CAMPAIGN_NAME_LENGTH],
+        "status": str(job.get("status", "pending")),
+        "total": len(job.get("groups", [])),
+        "processed": 0,
+        "success": 0,
+        "errors": 0,
+        "scheduled_at": job.get("scheduled_at", ""),
+        "created_at": job.get("created_at") or now_iso(),
+        "started_at": "",
+        "finished_at": "",
+        "updated_at": now_iso(),
+        "payload": dict(job),
+    }
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_campaigns (
+                        job_id, customer_id, device_id, campaign_name, status,
+                        total, processed, success, errors, scheduled_at,
+                        created_at, payload, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, 0, 0, 0,
+                        %s::timestamptz, %s::timestamptz, %s::jsonb, NOW()
+                    )
+                    ON CONFLICT (job_id) DO NOTHING
+                    """,
+                    (
+                        record["job_id"], record["customer_id"], record["device_id"],
+                        record["campaign_name"], record["status"], record["total"],
+                        record["scheduled_at"] or None, record["created_at"],
+                        json.dumps(record["payload"], ensure_ascii=False),
+                    ),
+                )
+            conn.commit()
+    else:
+        records = read_json(customer_campaigns_file(customer_id), [])
+        records = records if isinstance(records, list) else []
+        if not any(item.get("job_id") == record["job_id"] for item in records if isinstance(item, dict)):
+            records.append(record)
+            write_json(customer_campaigns_file(customer_id), records[-1000:])
+    return record
+
+
+def update_campaign_record(customer_id, job_id, **changes):
+    job_id = str(job_id or "").strip()
+    if not job_id:
+        return
+    allowed = {"status", "processed", "success", "errors", "started_at", "finished_at", "device_id"}
+    clean = {key: value for key, value in changes.items() if key in allowed}
+    clean["updated_at"] = now_iso()
+    if postgres_enabled():
+        init_persistence_tables()
+        status = str(clean.get("status", ""))[:40] or None
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_campaigns SET
+                        status = COALESCE(%s, status),
+                        processed = COALESCE(%s, processed),
+                        success = COALESCE(%s, success),
+                        errors = COALESCE(%s, errors),
+                        started_at = COALESCE(%s::timestamptz, started_at),
+                        finished_at = COALESCE(%s::timestamptz, finished_at),
+                        device_id = COALESCE(%s, device_id),
+                        updated_at = NOW()
+                    WHERE job_id = %s AND customer_id = %s
+                    """,
+                    (
+                        status, clean.get("processed"), clean.get("success"), clean.get("errors"),
+                        clean.get("started_at") or None, clean.get("finished_at") or None,
+                        clean.get("device_id"), job_id, sanitize_customer_id(customer_id),
+                    ),
+                )
+            conn.commit()
+    else:
+        records = read_json(customer_campaigns_file(customer_id), [])
+        records = records if isinstance(records, list) else []
+        for record in records:
+            if isinstance(record, dict) and record.get("job_id") == job_id:
+                record.update(clean)
+                break
+        write_json(customer_campaigns_file(customer_id), records[-1000:])
+
+
+def load_campaign_records(customer_id=None, limit=1000):
+    if postgres_enabled():
+        init_persistence_tables()
+        query = "SELECT * FROM fbpostpro_campaigns"
+        params = []
+        if customer_id:
+            query += " WHERE customer_id = %s"
+            params.append(sanitize_customer_id(customer_id))
+        query += " ORDER BY created_at DESC LIMIT %s"
+        params.append(max(1, min(int(limit), 5000)))
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    customer_ids = [sanitize_customer_id(customer_id)] if customer_id else [p.name for p in CUSTOMERS_ROOT.iterdir() if p.is_dir()]
+    records = []
+    for current_id in customer_ids:
+        data = read_json(customer_campaigns_file(current_id), [])
+        if isinstance(data, list):
+            records.extend(item for item in data if isinstance(item, dict))
+    records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return records[:max(1, min(int(limit), 5000))]
 
 
 # ============================================================
@@ -3205,13 +3634,13 @@ def save_jobs(
 def load_control(
     customer_id
 ):
-
-    data = read_json(
-        customer_control_file(
-            customer_id
-        ),
-        {},
-    )
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "control")
+        if not found:
+            data = read_json(customer_control_file(customer_id), {})
+            postgres_customer_data_set(customer_id, "control", data if isinstance(data, dict) else {})
+    else:
+        data = read_json(customer_control_file(customer_id), {})
 
     if isinstance(
         data,
@@ -3227,13 +3656,88 @@ def save_control(
     customer_id,
     control,
 ):
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "control", control)
+    else:
+        write_json(customer_control_file(customer_id), control)
 
-    write_json(
-        customer_control_file(
-            customer_id
-        ),
-        control,
-    )
+
+def load_command_log(customer_id):
+    if postgres_enabled():
+        found, data = postgres_customer_data_get(customer_id, "command_log")
+        if not found:
+            data = []
+    else:
+        data = read_json(customer_data_dir(customer_id) / "command_log.json", [])
+    return data if isinstance(data, list) else []
+
+
+def save_command_log(customer_id, commands):
+    commands = list(commands)[-1000:]
+    if postgres_enabled():
+        postgres_customer_data_set(customer_id, "command_log", commands)
+    else:
+        write_json(customer_data_dir(customer_id) / "command_log.json", commands)
+
+
+def update_command_log(customer_id, command_id, **changes):
+    commands = load_command_log(customer_id)
+    for command in reversed(commands):
+        if isinstance(command, dict) and command.get("command_id") == command_id:
+            command.update(changes)
+            break
+    save_command_log(customer_id, commands)
+
+
+def queue_device_command(
+    customer_id, device_id, command_type, job_id="", command_status="pending"
+):
+    """Persist one idempotent control command for a tenant-owned device."""
+    command_id = "cmd_" + uuid.uuid4().hex[:20]
+    with FILE_LOCK:
+        control = load_control(customer_id)
+        current = dict(control.get(device_id, {}) or {})
+        current.update({
+            "command_id": command_id,
+            "command_type": command_type,
+            "command_status": command_status,
+            "job_id": str(job_id or ""),
+            "requested_at": now_iso(),
+            "stop_requested": command_type in {"stop", "cancel"},
+            "pause_requested": command_type == "pause",
+            "resume_requested": command_type == "resume",
+            "reset_profile_requested": bool(current.get("reset_profile_requested", False)),
+        })
+        control[device_id] = current
+        save_control(customer_id, control)
+        commands = load_command_log(customer_id)
+        commands.append(dict(current, device_id=device_id))
+        save_command_log(customer_id, commands)
+    return current
+
+
+def public_campaign_status(raw_status, worker_online=True):
+    raw_status = str(raw_status or "idle")
+    if not worker_online and raw_status in {
+        "pending", "queued", "agent_received", "claimed", "pausing",
+        "resuming", "running", "posting", "delay", "paused",
+    }:
+        return "worker_offline"
+    if raw_status == "waiting_worker":
+        return "worker_offline"
+    if raw_status in {"pending", "queued", "agent_received", "claimed", "pausing", "resuming"}:
+        return "queued"
+    if raw_status in {"running", "posting", "delay"}:
+        return "running" if worker_online else "worker_offline"
+    if raw_status == "paused":
+        return "paused"
+    if raw_status in {"finished"}:
+        return "completed"
+    if raw_status in {"stopped", "cancelled"}:
+        return "stopped"
+    if raw_status in {"finished_with_errors", "error", "needs_facebook_login", "facebook_checkpoint"}:
+        return "failed"
+    return "waiting" if raw_status == "idle" else raw_status
 
 
 # ============================================================
@@ -3241,11 +3745,13 @@ def save_control(
 # ============================================================
 
 def load_connect_requests():
-
-    data = read_json(
-        CONNECT_REQUESTS_FILE,
-        {},
-    )
+    if postgres_enabled():
+        found, data = postgres_system_data_get("connect_requests")
+        if not found:
+            data = read_json(CONNECT_REQUESTS_FILE, {})
+            postgres_system_data_set("connect_requests", data if isinstance(data, dict) else {})
+    else:
+        data = read_json(CONNECT_REQUESTS_FILE, {})
 
     if isinstance(
         data,
@@ -3260,11 +3766,10 @@ def load_connect_requests():
 def save_connect_requests(
     data
 ):
-
-    write_json(
-        CONNECT_REQUESTS_FILE,
-        data,
-    )
+    if postgres_enabled():
+        postgres_system_data_set("connect_requests", data)
+    else:
+        write_json(CONNECT_REQUESTS_FILE, data)
 
 
 def cleanup_connect_requests():
@@ -3907,13 +4412,11 @@ def compose():
 def customer_image(
     filename
 ):
-
-    return send_from_directory(
-        customer_upload_dir(
-            get_customer_id()
-        ),
-        Path(filename).name,
-    )
+    settings_data = load_settings(get_customer_id())
+    safe_name = Path(filename).name
+    if safe_name not in settings_data.get("post_images", []):
+        return jsonify({"error": "Image not found"}), 404
+    return send_customer_image(get_customer_id(), safe_name)
 
 
 # ============================================================
@@ -4169,12 +4672,7 @@ def add_group():
         get_customer_id()
     )
 
-    group_url = (
-        request.form.get(
-            "group_url",
-            "",
-        ).strip()
-    )
+    group_url = normalize_group_url(request.form.get("group_url", ""))
 
     if not group_url:
 
@@ -4182,6 +4680,10 @@ def add_group():
             "Bạn chưa nhập link Group.",
             "warning",
         )
+
+    if not valid_facebook_group_url(group_url):
+        flash("Link phải là URL HTTPS của một Facebook Group.", "warning")
+        return redirect(url_for("groups"))
 
         return redirect(
             url_for(
@@ -4207,6 +4709,12 @@ def add_group():
                 "groups"
             )
         )
+
+    user = find_user_by_id(customer_id) or {}
+    group_limit = max(1, int(user.get("max_groups", 500) or 500))
+    if len(current) >= group_limit:
+        flash(f"Tài khoản đã đạt giới hạn {group_limit} Group.", "warning")
+        return redirect(url_for("groups"))
 
     current.append(
         group_url
@@ -4342,11 +4850,16 @@ def settings():
     current = load_settings(customer_id)
 
     if request.method == "POST":
-        current["campaign_name"] = (
+        campaign_name = (
             request.form.get("campaign_name", current["campaign_name"]).strip()
             or "Chiến dịch mới"
         )
-        current["theme"] = request.form.get("theme", current["theme"])
+        if len(campaign_name) > MAX_CAMPAIGN_NAME_LENGTH:
+            flash("Tên chiến dịch không được vượt quá 120 ký tự.", "warning")
+            return redirect(url_for("settings"))
+        current["campaign_name"] = campaign_name
+        theme = request.form.get("theme", current["theme"])
+        current["theme"] = theme if theme in {"dark", "light"} else "dark"
 
         try:
             current["min_delay"] = int(request.form.get("min_delay", current["min_delay"]))
@@ -4357,6 +4870,10 @@ def settings():
 
         if current["min_delay"] < 0 or current["max_delay"] < 0:
             flash("Delay không được nhỏ hơn 0.", "warning")
+            return redirect(url_for("settings"))
+
+        if current["min_delay"] > MAX_DELAY_MINUTES or current["max_delay"] > MAX_DELAY_MINUTES:
+            flash("Delay không được vượt quá 1440 phút.", "warning")
             return redirect(url_for("settings"))
 
         if current["min_delay"] > current["max_delay"]:
@@ -4379,8 +4896,26 @@ def settings():
     )
 
 
+def load_pairing_codes():
+    if postgres_enabled():
+        found, data = postgres_system_data_get("pairing_codes")
+        if not found:
+            data = read_json(PAIRING_CODES_FILE, {})
+            postgres_system_data_set("pairing_codes", data if isinstance(data, dict) else {})
+    else:
+        data = read_json(PAIRING_CODES_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_pairing_codes(data):
+    if postgres_enabled():
+        postgres_system_data_set("pairing_codes", data)
+    else:
+        write_json(PAIRING_CODES_FILE, data)
+
+
 def _cleanup_pairing_codes():
-    data = read_json(PAIRING_CODES_FILE, {})
+    data = load_pairing_codes()
     if not isinstance(data, dict):
         data = {}
     now = utc_now()
@@ -4392,7 +4927,7 @@ def _cleanup_pairing_codes():
             data.pop(code, None)
             changed = True
     if changed:
-        write_json(PAIRING_CODES_FILE, data)
+        save_pairing_codes(data)
     return data
 
 
@@ -4425,7 +4960,7 @@ def extension_pair_code():
         "created_at": now_iso(),
         "expires_at": expires_at,
     }
-    write_json(PAIRING_CODES_FILE, data)
+    save_pairing_codes(data)
     return jsonify({
         "ok": True,
         "code": code,
@@ -4457,8 +4992,10 @@ def extension_pair():
         "token": token,
         "mode": "chrome_extension",
         "paired_at": now_iso(),
-        "last_seen": now_iso(),
-        "status": "online",
+        "last_seen": "",
+        "status": "offline",
+        "worker_state": "offline",
+        "current_job_id": "",
         "facebook_logged_in": False,
         "extension_version": str(payload.get("extension_version", ""))[:30],
     }
@@ -4476,7 +5013,7 @@ def extension_pair():
     )
 
     data.pop(code, None)
-    write_json(PAIRING_CODES_FILE, data)
+    save_pairing_codes(data)
 
     return jsonify({
         "ok": True,
@@ -5374,84 +5911,126 @@ def admin_disconnect_device(
 # ============================================================
 
 @app.route("/run-campaign", methods=["POST"])
+@synchronized_state
 def run_campaign():
     customer_id = get_customer_id()
-    state = get_campaign_state(customer_id)
+    with FILE_LOCK:
+        state = get_campaign_state(customer_id)
+        if state.get("running"):
+            flash("Chiến dịch đang chạy.", "warning")
+            return redirect(url_for("compose"))
 
-    if state.get("running"):
-        flash("Chiến dịch đang chạy.", "warning")
-        return redirect(url_for("compose"))
+        device = get_paired_device(customer_id)
+        if not device:
+            flash("FB POST PRO Connector chưa online. Vào Cài đặt để liên kết Chrome.", "warning")
+            return redirect(url_for("settings"))
 
-    device = get_active_device(customer_id)
-    if not device:
-        flash("FB POST PRO Connector chưa online. Vào Cài đặt để liên kết Chrome.", "warning")
-        return redirect(url_for("settings"))
+        worker_online = bool(device.get("online"))
+        facebook_state = get_facebook_state(customer_id)
+        if worker_online and facebook_state.get("status") != "connected":
+            flash("Chrome đã liên kết nhưng Facebook chưa đăng nhập. Hãy mở facebook.com trên Chrome của bạn.", "warning")
+            return redirect(url_for("settings"))
 
-    facebook_state = get_facebook_state(customer_id)
-    if facebook_state.get("status") != "connected":
-        flash("Chrome đã liên kết nhưng Facebook chưa đăng nhập. Hãy mở facebook.com trên Chrome của bạn.", "warning")
-        return redirect(url_for("settings"))
+        groups_list = load_groups(customer_id)
+        content = load_post(customer_id).strip()
+        settings_data = load_settings(customer_id)
 
-    groups_list = load_groups(customer_id)
-    content = load_post(customer_id).strip()
-    settings_data = load_settings(customer_id)
+        if not groups_list:
+            flash("Bạn chưa thêm Group.", "warning")
+            return redirect(url_for("groups"))
+        if len(groups_list) > MAX_GROUPS_PER_CAMPAIGN:
+            flash(f"Một chiến dịch không được vượt quá {MAX_GROUPS_PER_CAMPAIGN} Group.", "warning")
+            return redirect(url_for("groups"))
+        if any(not valid_facebook_group_url(group) for group in groups_list):
+            flash("Danh sách có link không phải Facebook Group hợp lệ.", "warning")
+            return redirect(url_for("groups"))
+        if not content:
+            flash("Bạn chưa nhập nội dung bài đăng.", "warning")
+            return redirect(url_for("compose"))
 
-    if not groups_list:
-        flash("Bạn chưa thêm Group.", "warning")
-        return redirect(url_for("groups"))
-    if not content:
-        flash("Bạn chưa nhập nội dung bài đăng.", "warning")
-        return redirect(url_for("compose"))
+        user = find_user_by_id(customer_id) or {}
+        campaign_limit = max(1, int(user.get("max_campaigns", 100) or 100))
+        if len(load_campaign_records(customer_id, limit=campaign_limit + 1)) >= campaign_limit:
+            flash(f"Tài khoản đã đạt giới hạn {campaign_limit} chiến dịch.", "warning")
+            return redirect(url_for("compose"))
 
-    device_id = device["device_id"]
-    job_id = "job_" + uuid.uuid4().hex[:20]
-    jobs = load_jobs(customer_id)
-    jobs[device_id] = {
-        "job_id": job_id,
-        "status": "pending",
-        "mode": "chrome_extension",
-        "created_at": now_iso(),
-        "campaign_name": settings_data.get("campaign_name", "Chiến dịch mới"),
-        "groups": list(groups_list),
-        "content": content,
-        "images": [Path(x).name for x in settings_data.get("post_images", [])],
-        "min_delay": max(0, int(settings_data.get("min_delay", 3))),
-        "max_delay": max(0, int(settings_data.get("max_delay", 7))),
-    }
-    save_jobs(customer_id, jobs)
+        try:
+            minimum = max(0, int(settings_data.get("min_delay", 3)))
+            maximum = max(0, int(settings_data.get("max_delay", 7)))
+        except (TypeError, ValueError):
+            flash("Cấu hình delay không hợp lệ.", "warning")
+            return redirect(url_for("settings"))
+        minimum, maximum = sorted((minimum, maximum))
+        if maximum > MAX_DELAY_MINUTES:
+            flash("Delay không được vượt quá 1440 phút.", "warning")
+            return redirect(url_for("settings"))
 
-    control = load_control(customer_id)
-    control[device_id] = {
-        "stop_requested": False,
-        "reset_profile_requested": False,
-    }
-    save_control(customer_id, control)
+        device_id = device["device_id"]
+        job_id = "job_" + uuid.uuid4().hex[:20]
+        job = {
+            "job_id": job_id,
+            "device_id": device_id,
+            "status": "pending" if worker_online else "waiting_worker",
+            "mode": "chrome_extension",
+            "created_at": now_iso(),
+            "campaign_name": settings_data.get("campaign_name", "Chiến dịch mới"),
+            "groups": list(groups_list),
+            "content": content,
+            "images": [Path(x).name for x in settings_data.get("post_images", [])],
+            "min_delay": minimum,
+            "max_delay": maximum,
+        }
+        jobs = load_jobs(customer_id)
+        jobs[device_id] = job
+        save_jobs(customer_id, jobs)
+        create_campaign_record(customer_id, job)
 
-    update_campaign_state(
-        customer_id,
-        running=True,
-        status="queued",
-        message="Đã gửi chiến dịch tới FB POST PRO Connector...",
-        processed=0,
-        total=len(groups_list),
-        success=0,
-        errors=0,
-    )
-    add_history(
-        customer_id,
-        "info",
-        "Bắt đầu chiến dịch",
-        f"{settings_data.get('campaign_name', 'Chiến dịch mới')} • {len(groups_list)} Groups",
-    )
-    flash("Đã gửi chiến dịch. Connector trên Chrome sẽ tự nhận và chạy.", "success")
+        queue_device_command(
+            customer_id,
+            device_id,
+            "start",
+            job_id,
+            "pending" if worker_online else "waiting_worker",
+        )
+
+        update_campaign_state(
+            customer_id,
+            job_id=job_id,
+            device_id=device_id,
+            running=True,
+            status="queued" if worker_online else "waiting_worker",
+            message=(
+                "Đã xếp hàng chiến dịch cho FB POST PRO Connector..."
+                if worker_online
+                else "Desktop worker đang offline. Job được giữ an toàn và chỉ chạy sau khi bạn bấm Tiếp tục."
+            ),
+            processed=0,
+            total=len(groups_list),
+            success=0,
+            errors=0,
+        )
+        add_history(
+            customer_id,
+            "info",
+            "Bắt đầu chiến dịch",
+            f"{settings_data.get('campaign_name', 'Chiến dịch mới')} • {len(groups_list)} Groups",
+        )
+    if worker_online:
+        flash("Đã xếp hàng chiến dịch cho Connector.", "success")
+    else:
+        flash("Worker đang offline. Job đã được lưu và chưa được phép chạy.", "warning")
     return redirect(url_for("compose"))
 
 
 @app.route("/stop-campaign", methods=["POST"])
+@synchronized_state
 def stop_campaign():
     customer_id = get_customer_id()
     settings_data = load_settings(customer_id)
-    device_id = sanitize_device_id(settings_data.get("active_device_id", ""))
+    current_state = get_campaign_state(customer_id)
+    device_id = sanitize_device_id(
+        current_state.get("device_id") or settings_data.get("active_device_id", "")
+    )
 
     if not device_id:
         update_campaign_state(
@@ -5463,11 +6042,42 @@ def stop_campaign():
         flash("Không có Connector đang liên kết.", "warning")
         return redirect(url_for("compose"))
 
-    control = load_control(customer_id)
-    device_control = control.get(device_id, {})
-    device_control["stop_requested"] = True
-    control[device_id] = device_control
-    save_control(customer_id, control)
+    state = get_campaign_state(customer_id)
+    jobs = load_jobs(customer_id)
+    job = jobs.get(device_id, {})
+    if isinstance(job, dict) and job.get("status") in {"pending", "waiting_worker"}:
+        cancel_command = queue_device_command(
+            customer_id, device_id, "cancel", job.get("job_id", ""), "acknowledged"
+        )
+        cancel_command["acknowledged_at"] = now_iso()
+        cancel_command["stop_requested"] = False
+        control = load_control(customer_id)
+        control[device_id] = cancel_command
+        save_control(customer_id, control)
+        update_command_log(
+            customer_id,
+            cancel_command["command_id"],
+            command_status="acknowledged",
+            acknowledged_at=cancel_command["acknowledged_at"],
+        )
+        job["status"] = "cancelled"
+        job["finished_at"] = now_iso()
+        jobs[device_id] = job
+        save_jobs(customer_id, jobs)
+        update_campaign_record(
+            customer_id, job.get("job_id", ""), status="cancelled", finished_at=now_iso()
+        )
+        update_campaign_state(
+            customer_id,
+            running=False,
+            status="cancelled",
+            message="Chiến dịch đã hủy trước khi worker nhận job.",
+        )
+        flash("Đã hủy chiến dịch đang chờ.", "warning")
+        return redirect(url_for("compose"))
+
+    queue_device_command(customer_id, device_id, "stop", state.get("job_id", ""))
+    add_history(customer_id, "warning", "Đã gửi lệnh dừng", state.get("job_id", ""))
     update_campaign_state(
         customer_id,
         status="stopping",
@@ -5477,14 +6087,82 @@ def stop_campaign():
     return redirect(url_for("compose"))
 
 
+@app.route("/pause-campaign", methods=["POST"])
+@synchronized_state
+def pause_campaign():
+    customer_id = get_customer_id()
+    state = get_campaign_state(customer_id)
+    device_id = sanitize_device_id(state.get("device_id", ""))
+    if not state.get("running") or not device_id:
+        flash("Không có chiến dịch đang chạy để tạm dừng.", "warning")
+        return redirect(url_for("compose"))
+    queue_device_command(customer_id, device_id, "pause", state.get("job_id", ""))
+    add_history(customer_id, "info", "Đã gửi lệnh tạm dừng", state.get("job_id", ""))
+    update_campaign_state(
+        customer_id,
+        status="pausing",
+        message="Đang yêu cầu worker tạm dừng ở điểm an toàn...",
+    )
+    flash("Đã gửi lệnh tạm dừng.", "warning")
+    return redirect(url_for("compose"))
+
+
+@app.route("/resume-campaign", methods=["POST"])
+@synchronized_state
+def resume_campaign():
+    customer_id = get_customer_id()
+    with FILE_LOCK:
+        state = get_campaign_state(customer_id)
+        device_id = sanitize_device_id(state.get("device_id", ""))
+        device = get_paired_device(customer_id)
+        if not device_id or not device or device.get("device_id") != device_id:
+            flash("Desktop worker của chiến dịch không còn liên kết.", "warning")
+            return redirect(url_for("compose"))
+        if not device_is_online(device):
+            update_campaign_state(
+                customer_id,
+                status="waiting_worker",
+                message="Worker vẫn offline; job tiếp tục được giữ lại.",
+            )
+            flash("Worker vẫn offline.", "warning")
+            return redirect(url_for("compose"))
+
+        jobs = load_jobs(customer_id)
+        job = jobs.get(device_id, {})
+        if isinstance(job, dict) and job.get("status") == "waiting_worker":
+            job["status"] = "pending"
+            jobs[device_id] = job
+            save_jobs(customer_id, jobs)
+            update_campaign_record(customer_id, job.get("job_id", ""), status="pending")
+        queue_device_command(customer_id, device_id, "resume", state.get("job_id", ""))
+        add_history(customer_id, "info", "Đã gửi lệnh tiếp tục", state.get("job_id", ""))
+        update_campaign_state(
+            customer_id,
+            running=True,
+            status="queued",
+            message="Chiến dịch đã được tiếp tục.",
+        )
+    flash("Đã gửi lệnh tiếp tục.", "success")
+    return redirect(url_for("compose"))
+
+
 @app.route("/campaign-status")
 def campaign_status():
     customer_id = get_customer_id()
     state = get_campaign_state(customer_id)
     active_device = get_active_device(customer_id)
     state["agent_online"] = active_device is not None
+    state["display_status"] = public_campaign_status(
+        state.get("status"), active_device is not None
+    )
     state["agent_device"] = active_device
     state["facebook"] = get_facebook_state(customer_id)
+    device_id = sanitize_device_id(state.get("device_id", ""))
+    current_command = load_control(customer_id).get(device_id, {}) if device_id else {}
+    state["command"] = {
+        key: current_command.get(key, "")
+        for key in ("command_id", "command_type", "command_status", "requested_at", "acknowledged_at")
+    }
     return jsonify(state)
 
 
@@ -5492,9 +6170,14 @@ def campaign_status():
 def web_agent_status():
     customer_id = get_customer_id()
     active_device = get_active_device(customer_id)
+    paired_device = get_paired_device(customer_id)
     return jsonify({
         "online": active_device is not None,
         "device": active_device,
+        "paired": paired_device is not None,
+        "last_seen": (paired_device or {}).get("last_seen", ""),
+        "worker_state": (paired_device or {}).get("worker_state", "offline"),
+        "current_job_id": (paired_device or {}).get("current_job_id", ""),
         "facebook": get_facebook_state(customer_id),
         "campaign_running": bool(get_campaign_state(customer_id).get("running")),
     })
@@ -5643,11 +6326,7 @@ def cloud_download_image(
     if safe_name not in settings_data.get("post_images", []):
         return jsonify({"error": "Image not found"}), 404
 
-    return send_from_directory(
-        customer_upload_dir(customer_id),
-        safe_name,
-        as_attachment=True,
-    )
+    return send_customer_image(customer_id, safe_name, as_attachment=True)
 
 
 # ============================================================
@@ -5806,6 +6485,7 @@ def cloud_control_ack():
 # ============================================================
 
 @app.route("/api/agent/heartbeat", methods=["POST"])
+@synchronized_state
 def agent_heartbeat():
     auth = authenticate_agent()
     if not auth:
@@ -5823,11 +6503,51 @@ def agent_heartbeat():
     if data.get("device_name"):
         device["name"] = str(data.get("device_name"))[:100]
     device["extension_version"] = str(data.get("extension_version", device.get("extension_version", "")))[:30]
+    worker_state = str(data.get("worker_state", "idle")).strip().lower()
+    if worker_state not in {"idle", "busy", "paused"}:
+        return jsonify({"error": "Invalid worker state"}), 400
+    current_job_id = str(data.get("current_job_id", "")).strip()[:80]
+    device["worker_state"] = worker_state
+    device["current_job_id"] = current_job_id
 
     facebook_logged_in = bool(data.get("facebook_logged_in", False))
     device["facebook_logged_in"] = facebook_logged_in
     devices[device_id] = device
     save_devices(customer_id, devices)
+
+    # A restarted/suspended extension must never silently replay a claimed job.
+    # Mark the interrupted run failed and require a new explicit campaign start.
+    if worker_state == "idle" and not current_job_id:
+        with FILE_LOCK:
+            jobs = load_jobs(customer_id)
+            interrupted = jobs.get(device_id)
+            interrupted_statuses = {"claimed", "running", "posting", "delay", "paused"}
+            if isinstance(interrupted, dict) and interrupted.get("status") in interrupted_statuses:
+                interrupted = dict(interrupted)
+                interrupted["status"] = "error"
+                interrupted["finished_at"] = now_iso()
+                jobs[device_id] = interrupted
+                save_jobs(customer_id, jobs)
+                update_campaign_state(
+                    customer_id,
+                    job_id=interrupted.get("job_id", ""),
+                    device_id=device_id,
+                    running=False,
+                    status="error",
+                    message="Desktop worker đã ngắt hoặc khởi động lại. Job không được tự chạy lại để tránh đăng trùng.",
+                )
+                update_campaign_record(
+                    customer_id,
+                    interrupted.get("job_id", ""),
+                    status="error",
+                    finished_at=now_iso(),
+                )
+                add_history(
+                    customer_id,
+                    "error",
+                    "Desktop worker bị gián đoạn",
+                    "Job đã dừng an toàn và không tự chạy lại để tránh đăng trùng.",
+                )
 
     if facebook_logged_in:
         current_fb = get_facebook_state(customer_id)
@@ -5849,6 +6569,8 @@ def agent_heartbeat():
         "ok": True,
         "server_time": now_iso(),
         "facebook_logged_in": facebook_logged_in,
+        "worker_state": worker_state,
+        "current_job_id": current_job_id,
     })
 
 
@@ -5860,6 +6582,7 @@ def agent_heartbeat():
     "/api/agent/job",
     methods=["GET"],
 )
+@synchronized_state
 def agent_get_job():
 
     auth = (
@@ -5885,58 +6608,56 @@ def agent_get_job():
         ]
     )
 
-    jobs = (
-        load_jobs(
-            customer_id
+    with FILE_LOCK:
+        jobs = load_jobs(customer_id)
+        job = jobs.get(device_id)
+        if not job or job.get("status") != "pending":
+            return jsonify({"has_job": False})
+
+        job = dict(job)
+        job["status"] = "claimed"
+        job["claimed_at"] = now_iso()
+        jobs[device_id] = job
+        save_jobs(customer_id, jobs)
+
+        update_campaign_state(
+            customer_id,
+            job_id=job.get("job_id", ""),
+            device_id=device_id,
+            running=True,
+            status="agent_received",
+            message="Connector đã nhận chiến dịch. Đang chuẩn bị Facebook...",
         )
-    )
-
-    job = jobs.get(
-        device_id
-    )
-
-    if (
-        not job
-        or job.get(
-            "status"
-        ) != "pending"
-    ):
-
-        return jsonify({
-            "has_job":
-                False
-        })
-
-    job[
-        "status"
-    ] = "claimed"
-
-    job[
-        "claimed_at"
-    ] = now_iso()
-
-    jobs[
-        device_id
-    ] = job
-
-    save_jobs(
-        customer_id,
-        jobs,
-    )
-
-    update_campaign_state(
-        customer_id,
-
-        running=True,
-
-        status=
-            "agent_received",
-
-        message=(
-            "Connector đã nhận chiến dịch. "
-            "Đang chuẩn bị Facebook..."
-        ),
-    )
+        update_campaign_record(
+            customer_id,
+            job.get("job_id", ""),
+            status="claimed",
+            started_at=now_iso(),
+            device_id=device_id,
+        )
+        controls = load_control(customer_id)
+        current_control = dict(controls.get(device_id, {}) or {})
+        if (
+            current_control.get("job_id") == job.get("job_id")
+            and current_control.get("command_type") in {"start", "resume"}
+        ):
+            current_control["command_status"] = "acknowledged"
+            current_control["acknowledged_at"] = now_iso()
+            current_control["resume_requested"] = False
+            controls[device_id] = current_control
+            save_control(customer_id, controls)
+            update_command_log(
+                customer_id,
+                current_control.get("command_id", ""),
+                command_status="acknowledged",
+                acknowledged_at=current_control["acknowledged_at"],
+            )
+        add_history(
+            customer_id,
+            "info",
+            "Desktop worker đã nhận job",
+            f"{job.get('job_id', '')} • {device_id}",
+        )
 
     return jsonify({
         "has_job":
@@ -5955,244 +6676,131 @@ def agent_get_job():
     "/api/agent/status",
     methods=["POST"],
 )
+@synchronized_state
 def agent_update_status():
-
-    auth = (
-        authenticate_agent()
-    )
-
+    auth = authenticate_agent()
     if not auth:
+        return jsonify({"error": "Unauthorized"}), 401
 
-        return jsonify({
-            "error":
-                "Unauthorized"
-        }), 401
-
-    customer_id = (
-        auth[
-            "customer_id"
-        ]
-    )
-
-    device_id = (
-        auth[
-            "device_id"
-        ]
-    )
-
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
-
-    # Mọi cập nhật tiến độ cũng được tính là heartbeat để Connector
-    # không bị hiển thị offline trong chiến dịch dài.
-    devices = load_devices(customer_id)
-    device = devices.get(device_id, {})
-    if device:
-        device["last_seen"] = now_iso()
-        device["status"] = "online"
-        devices[device_id] = device
-        save_devices(customer_id, devices)
-
-    status = str(
-        data.get(
-            "status",
-            "running",
-        )
-    )
-
-    message = str(
-        data.get(
-            "message",
-            "",
-        )
-    )
+    customer_id = auth["customer_id"]
+    device_id = auth["device_id"]
+    data = request.get_json(silent=True) or {}
+    status = str(data.get("status", "running")).strip()
+    if status not in AGENT_ALLOWED_STATUSES:
+        return jsonify({"error": "Invalid campaign status"}), 400
 
     try:
+        processed = int(data.get("processed", 0) or 0)
+        success = int(data.get("success", 0) or 0)
+        errors = int(data.get("errors", 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid campaign counters"}), 400
 
-        processed = int(
-            data.get(
-                "processed",
-                0,
-            )
-            or 0
-        )
+    if any(value < 0 or value > MAX_GROUPS_PER_CAMPAIGN + 1 for value in (processed, success, errors)):
+        return jsonify({"error": "Campaign counters out of bounds"}), 400
 
-        success = int(
-            data.get(
-                "success",
-                0,
-            )
-            or 0
-        )
-
-        errors = int(
-            data.get(
-                "errors",
-                0,
-            )
-            or 0
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
-
-        processed = 0
-        success = 0
-        errors = 0
-
-    finished_statuses = {
-        "finished",
-        "finished_with_errors",
-        "error",
-        "stopped",
-        "needs_facebook_login",
-        "facebook_checkpoint",
-    }
-
-    running = (
-        status
-        not in finished_statuses
-    )
-
-    current = (
-        get_campaign_state(
-            customer_id
-        )
-    )
-
-    update_campaign_state(
-        customer_id,
-
-        running=
-            running,
-
-        status=
-            status,
-
-        message=
-            message,
-
-        processed=
-            processed,
-
-        total=
-            current.get(
-                "total",
-                0,
-            ),
-
-        success=
-            success,
-
-        errors=
-            errors,
-    )
-
-    jobs = load_jobs(
-        customer_id
-    )
-
-    job = jobs.get(
-        device_id
-    )
-
-    if job:
-
-        job[
-            "status"
-        ] = status
-
-        if not running:
-
-            job[
-                "finished_at"
-            ] = now_iso()
-
-        jobs[
-            device_id
-        ] = job
-
-        save_jobs(
-            customer_id,
-            jobs,
-        )
-
-    detail = str(
-        data.get(
-            "detail",
-            "",
-        )
-    )
-
+    message = str(data.get("message", ""))[:2000]
+    detail = str(data.get("detail", ""))[:4000]
     event = str(data.get("event", "")).strip()
-    group_url = str(data.get("group_url", "")).strip()
-    if event == "group_success":
-        add_history(
-            customer_id,
-            "success",
-            message or "Đăng thành công",
-            group_url or detail,
-        )
-    elif event == "group_error":
-        add_history(
-            customer_id,
-            "error",
-            message or "Lỗi đăng bài",
-            (group_url + (" • " + detail if detail else "")).strip(" •"),
-        )
+    event_id = str(data.get("event_id", "")).strip()[:160]
+    group_url = str(data.get("group_url", "")).strip()[:2048]
+    reported_job_id = str(data.get("job_id", "")).strip()
+    running = status not in AGENT_TERMINAL_STATUSES
 
-    if status == "needs_facebook_login":
-        save_facebook_state(
-            customer_id,
-            context_id="chrome_extension",
-            status="needs_login",
-            connected_at=None,
-        )
-    elif status == "facebook_checkpoint":
-        save_facebook_state(
-            customer_id,
-            context_id="chrome_extension",
-            status="needs_login",
-            connected_at=None,
-        )
+    with FILE_LOCK:
+        jobs = load_jobs(customer_id)
+        job = jobs.get(device_id)
+        current_job_id = str(job.get("job_id", "")) if isinstance(job, dict) else ""
+        if reported_job_id and reported_job_id != current_job_id:
+            return jsonify({"error": "Stale or unknown job", "current_job_id": current_job_id}), 409
+        job_id = reported_job_id or current_job_id
 
-    if status == "success":
+        if isinstance(job, dict) and job.get("status") in AGENT_TERMINAL_STATUSES:
+            if not running and job.get("status") == status:
+                return jsonify({"ok": True, "job_id": job_id, "duplicate": True})
+            return jsonify({"error": "Campaign is already terminal"}), 409
 
-        add_history(
+        duplicate_event = False
+        if event and event_id and isinstance(job, dict):
+            event_ids = list(job.get("event_ids", []))[-(MAX_GROUPS_PER_CAMPAIGN * 2):]
+            duplicate_event = event_id in event_ids
+            if not duplicate_event:
+                event_ids.append(event_id)
+
+        current = get_campaign_state(customer_id)
+        if job_id and current.get("job_id") and current.get("job_id") != job_id:
+            return jsonify({"error": "Campaign state belongs to another job"}), 409
+
+        devices = load_devices(customer_id)
+        device = devices.get(device_id, {})
+        if device:
+            device["last_seen"] = now_iso()
+            device["status"] = "online"
+            device["worker_state"] = "idle" if not running else ("paused" if status == "paused" else "busy")
+            device["current_job_id"] = "" if not running else job_id
+            devices[device_id] = device
+            save_devices(customer_id, devices)
+
+        update_campaign_state(
             customer_id,
-            "success",
-            (
-                message
-                or "Đăng thành công"
-            ),
-            detail,
-        )
-
-    elif status in {
-        "error",
-        "finished_with_errors",
-    }:
-
-        add_history(
-            customer_id,
-            "error",
-            (
-                message
-                or "Connector báo lỗi"
-            ),
-            detail,
+            job_id=job_id,
+            device_id=device_id,
+            running=running,
+            status=status,
+            message=message,
+            processed=processed,
+            total=current.get("total", 0),
+            success=success,
+            errors=errors,
         )
 
-    return jsonify({
-        "ok":
-            True
-    })
+        if isinstance(job, dict):
+            job = dict(job)
+            if event and event_id and not duplicate_event:
+                job["event_ids"] = event_ids
+            job["status"] = status
+            job["last_progress_at"] = now_iso()
+            if not running:
+                job["finished_at"] = now_iso()
+            jobs[device_id] = job
+            save_jobs(customer_id, jobs)
+
+        update_campaign_record(
+            customer_id,
+            job_id,
+            status=status,
+            processed=processed,
+            success=success,
+            errors=errors,
+            finished_at=now_iso() if not running else "",
+        )
+
+        if event == "group_success" and not duplicate_event:
+            add_history(customer_id, "success", message or "Đăng thành công", group_url or detail)
+        elif event == "group_error" and not duplicate_event:
+            add_history(
+                customer_id,
+                "error",
+                message or "Lỗi đăng bài",
+                (group_url + (" • " + detail if detail else "")).strip(" •"),
+            )
+
+        if status in {"needs_facebook_login", "facebook_checkpoint"}:
+            save_facebook_state(
+                customer_id,
+                context_id="chrome_extension",
+                status="needs_login",
+                connected_at=None,
+            )
+
+        if status in {"success", "finished"}:
+            add_history(customer_id, "success", message or "Đăng thành công", detail)
+        elif status in {"error", "finished_with_errors", "needs_facebook_login", "facebook_checkpoint"}:
+            add_history(customer_id, "error", message or "Connector báo lỗi", detail)
+        elif status == "stopped":
+            add_history(customer_id, "warning", message or "Chiến dịch đã dừng", detail)
+
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 # ============================================================
@@ -6233,6 +6841,12 @@ def agent_control():
                 "stop_requested":
                     False,
 
+                "pause_requested":
+                    False,
+
+                "resume_requested":
+                    False,
+
                 "reset_profile_requested":
                     False,
             },
@@ -6244,6 +6858,7 @@ def agent_control():
     "/api/agent/control/ack",
     methods=["POST"],
 )
+@synchronized_state
 def agent_control_ack():
 
     auth = (
@@ -6289,6 +6904,9 @@ def agent_control_ack():
         )
     )
 
+    if data.get("command_id") and data.get("command_id") != device_control.get("command_id"):
+        return jsonify({"error": "Stale command"}), 409
+
     if data.get(
         "stop_ack"
     ):
@@ -6297,6 +6915,14 @@ def agent_control_ack():
             "stop_requested"
         ] = False
 
+    if data.get("pause_ack"):
+        device_control["command_status"] = "acknowledged"
+
+    if data.get("resume_ack"):
+        device_control["pause_requested"] = False
+        device_control["resume_requested"] = False
+        device_control["command_status"] = "acknowledged"
+
     if data.get(
         "reset_profile_ack"
     ):
@@ -6304,6 +6930,17 @@ def agent_control_ack():
         device_control[
             "reset_profile_requested"
         ] = False
+
+    if data.get("stop_ack"):
+        device_control["command_status"] = "acknowledged"
+
+    device_control["acknowledged_at"] = now_iso()
+    update_command_log(
+        customer_id,
+        device_control.get("command_id", ""),
+        command_status=device_control.get("command_status", "acknowledged"),
+        acknowledged_at=device_control["acknowledged_at"],
+    )
 
     control[
         device_id
@@ -6371,13 +7008,7 @@ def agent_download_image(
                 "Image not found"
         }), 404
 
-    return send_from_directory(
-        customer_upload_dir(
-            customer_id
-        ),
-        safe_name,
-        as_attachment=True,
-    )
+    return send_customer_image(customer_id, safe_name, as_attachment=True)
 
 
 # ============================================================

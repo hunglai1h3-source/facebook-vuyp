@@ -1,6 +1,8 @@
 (()=>{
   const origin=location.origin;
-  chrome.storage.local.set({serverOrigin:origin}).catch(()=>{});
+  chrome.storage.local.get(['serverOrigin','deviceId','token']).then(c=>{
+    if(!c.deviceId||!c.token) chrome.storage.local.set({serverOrigin:origin}).catch(()=>{});
+  }).catch(()=>{});
   const ping=()=>{try{chrome.runtime.sendMessage({type:'POLL_NOW'}).catch(()=>{});}catch(e){}};
   ping();
   const timer=setInterval(()=>{if(document.visibilityState==='visible')ping();},3000);
