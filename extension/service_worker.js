@@ -92,7 +92,7 @@ async function verifyJobSession(c, job) {
 }
 
 async function verifyExecutionRequest(msg, sender) {
-  if (!busy || !currentJob || msg.job_id !== currentJobId || sender.tab?.id !== currentExecutionTab) {
+  if (!busy || !currentJob || msg.job_id !== currentJobId || sender.tab?.id !== currentExecutionTab || sender.tab?.incognito) {
     return {ok: false, error: 'Execution không còn active; đã chặn thao tác đăng.'};
   }
   try {
@@ -377,6 +377,9 @@ async function control(c) {
     if (r.ok) {
       return await r.json();
     }
+    if (r.status === 401 || r.status === 403) {
+      return {unauthorized: true, unavailable: true};
+    }
   } catch (e) {}
 
   return { unavailable: true };
@@ -402,6 +405,9 @@ async function waitForSafeControl(c, stats) {
   let paused = false;
   while (true) {
     const ctl = await control(c);
+    if (ctl.unauthorized) {
+      throw new Error('Liên kết worker đã hết hạn hoặc bị thu hồi. Đã dừng; hãy liên kết lại Connector.');
+    }
     if (ctl.unavailable) {
       await sleep(3000);
       continue;
@@ -734,6 +740,11 @@ async function postGroup(
       active: true
     });
   currentExecutionTab = tab.id;
+  // Cookies are read from the regular profile. Incognito has a separate store
+  // and must never be treated as the same Facebook session.
+  if (tab.incognito) {
+    return {ok: false, code: 'requires_review', error: 'Không hỗ trợ chạy bằng cửa sổ ẩn danh; hãy dùng Chrome profile đã gắn account.'};
+  }
 
   try {
     await waitTab(

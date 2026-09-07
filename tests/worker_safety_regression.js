@@ -9,6 +9,7 @@ async function main() {
   let identity = '81001';
   const requests = [];
   let tabCreates = 0;
+  let incognitoTab = false;
   let sends = 0;
   let sendFailure = '';
   const configuration = {deviceId: 'ext_test', token: 'test-only', serverOrigin: 'http://localhost', customerId: 'test'};
@@ -26,7 +27,7 @@ async function main() {
       cookies: {get: async () => ({value: identity})},
       alarms: {create() {}, onAlarm: {addListener() {}}},
       tabs: {
-        create: async () => {tabCreates++; return {id: 10};},
+        create: async () => {tabCreates++; return {id: 10, incognito: incognitoTab};},
         get: async () => ({id: 10, status: 'complete', url: 'https://www.facebook.com/groups/test'}),
         update: async () => ({}),
         sendMessage: async () => {sends++; if (sendFailure) throw Error(sendFailure); return {ok: true};},
@@ -73,6 +74,13 @@ async function main() {
   assert.equal(requests.filter(item => item.url.endsWith('/api/agent/job')).length, 1);
   console.log('PASS worker concurrent poll: one claim request');
 
+  incognitoTab = true;
+  const incognito = await context.postGroup(configuration, 'https://www.facebook.com/groups/test', '', [], job, 0);
+  assert.equal(incognito.code, 'requires_review');
+  assert.equal(sends, 0, 'regular-profile identity must not authorize an incognito runner');
+  incognitoTab = false;
+  console.log('PASS incognito isolation: regular cookie identity cannot authorize a different cookie store');
+
   sendFailure = 'The message port closed before a response was received.';
   const uncertain = await context.postGroup(configuration, 'https://www.facebook.com/groups/test', '', [], job, 0);
   assert.equal(uncertain.code, 'requires_review');
@@ -88,6 +96,13 @@ async function main() {
   await context.processJob(configuration, {...job, groups: ['https://www.facebook.com/groups/test']});
   assert.equal(tabCreates, createsBefore, 'rejected backend status must stop before opening Facebook');
   console.log('PASS rejected backend claim/status: no automation starts');
+  for (const status of [401, 403]) {
+    let controlRequests = 0;
+    context.fetch = async () => {controlRequests++; return {ok: false, status};};
+    await assert.rejects(context.waitForSafeControl(configuration, {}), /hết hạn|thu hồi/);
+    assert.equal(controlRequests, 1, 'invalid/revoked token must not spin in a retry loop');
+  }
+  console.log('PASS revoked/expired authentication: control rejects once and safely stops');
 
   let runnerCalls = 0;
   const stored = new Map();

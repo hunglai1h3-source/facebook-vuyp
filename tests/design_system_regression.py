@@ -48,12 +48,16 @@ def check_contracts():
             "templates/groups.html",
             # Phase 10 intentionally hardens environment/deploy configuration.
             "render.yaml", ".env.example",
+            # Host validation requires Flask 3.1; pin contract checked below.
+            "requirements.txt",
             # System hardening replaces the old runner success heuristic; its
             # delivery/identity contracts are exercised by worker_safety_regression.js.
             "extension/facebook_runner.js",
         }:
             continue
         assert contract(ROOT / relative) == digest, f"Business contract changed: {relative}"
+    requirements = (ROOT / 'requirements.txt').read_text(encoding='utf-8')
+    assert 'Flask>=3.1,<4' in requirements, 'Production TRUSTED_HOSTS requires Flask 3.1+'
     compose_source = (ROOT / "templates/compose.html").read_text(encoding="utf-8")
     for required in [
         "name=\"campaign_name\"", "name=\"content\"", "name=\"images\"",

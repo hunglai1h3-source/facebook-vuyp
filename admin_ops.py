@@ -295,7 +295,9 @@ def register_admin_ops(app, services):
                 # untrusted JSON to timestamptz and never retain the device registry.
                 with conn.cursor(name="admin_device_metrics") as cur:
                     cur.execute("""SELECT device.value->>'last_seen' AS last_seen,
-                                          device.value->>'mode' AS mode, device.value->>'status' AS status
+                                          device.value->>'mode' AS mode, device.value->>'status' AS status,
+                                          device.value->>'revoked_at' AS revoked_at,
+                                          device.value->>'token_expires_at' AS token_expires_at
                                    FROM fbpostpro_customer_data cd
                                    CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(cd.data)='object' THEN cd.data ELSE '{}'::jsonb END) device
                                    WHERE cd.data_key='devices' AND jsonb_typeof(device.value)='object'""")

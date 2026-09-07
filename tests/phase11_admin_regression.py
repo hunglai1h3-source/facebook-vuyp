@@ -3,6 +3,8 @@
 Uses only isolated test data; never launches an automation worker.
 """
 from contextlib import contextmanager
+from datetime import timedelta
+import os
 import re
 import tempfile
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +25,30 @@ def captured_templates(app):
         yield contexts
     finally:
         template_rendered.disconnect(capture, app)
+
+
+def check_device_metrics(module, admin, customer_id):
+    """Exercise the dashboard and worker predicates with the same persisted devices."""
+    before = admin.get("/api/admin/dashboard").get_json()["metrics"]
+    now = module.now_iso()
+    devices = module.load_devices(customer_id)
+    devices.update({
+        "ext_metric_valid": {"last_seen": now, "token_expires_at": (module.utc_now() + timedelta(days=1)).isoformat()},
+        "ext_metric_expired": {"last_seen": now, "token_expires_at": (module.utc_now() - timedelta(days=1)).isoformat()},
+        "ext_metric_revoked": {"last_seen": now, "revoked_at": now},
+        "ext_metric_bad_expiry": {"last_seen": now, "token_expires_at": "not-a-date"},
+        "ext_metric_bad_seen": {"last_seen": "2026-99-99T00:00:00+00:00"},
+    })
+    module.save_devices(customer_id, devices)
+    response = admin.get("/api/admin/dashboard")
+    assert response.status_code == 200
+    metrics = response.get_json()["metrics"]
+    assert metrics["devices_online"] == before["devices_online"] + 1
+    assert metrics["devices_offline"] == before["devices_offline"] + 4
+    with captured_templates(module.app) as contexts:
+        assert admin.get("/admin/workers?q=ext_metric&state=offline").status_code == 200
+    assert contexts[-1]["pagination"]["total"] == 4
+    print("PASS admin device metrics: expired/revoked/invalid timestamps are offline in dashboard and worker list")
 
 
 def run_checks():
@@ -93,7 +119,28 @@ def run_checks():
         assert ctx["account_count"] == 61 and len(ctx["accounts"]) == 11
         assert ctx["campaign_count"] == 1 and ctx["device_count"] == 61
         print("PASS admin totals: detail metrics cover full campaign/user, not only visible page")
+        check_device_metrics(module, admin, customer_id)
+
+
+def run_postgres_checks(database_url):
+    """Opt-in PostgreSQL projection check, limited to an explicitly named local test DB."""
+    from pathlib import Path
+    from uuid import uuid4
+    from phase10_postgres_integration import load_postgres_app
+    parsed = urlsplit(database_url)
+    if parsed.hostname not in {"localhost", "127.0.0.1"} or not parsed.path.lstrip("/").startswith("fbpostpro_phase"):
+        raise SystemExit("Admin PostgreSQL test requires a localhost fbpostpro_phase* database.")
+    with tempfile.TemporaryDirectory(prefix="fbpp-admin-pg-") as temp:
+        module = load_postgres_app(Path(temp), database_url)
+        admin = module.app.test_client()
+        user_id = register(admin, "admin_metrics_" + uuid4().hex[:10])
+        with module.postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE fbpostpro_users SET role='admin' WHERE user_id=%s", (user_id,))
+        check_device_metrics(module, admin, user_id)
 
 
 if __name__ == "__main__":
     run_checks()
+    if os.environ.get("PHASE11_ADMIN_TEST_DATABASE_URL"):
+        run_postgres_checks(os.environ["PHASE11_ADMIN_TEST_DATABASE_URL"])
