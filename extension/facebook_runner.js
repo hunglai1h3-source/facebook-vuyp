@@ -1,5 +1,52 @@
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function verifyExecution(payload) {
+  const response = await chrome.runtime.sendMessage({type: 'VERIFY_EXECUTION', job_id: payload.job_id});
+  if (!response?.ok) throw new Error(response?.error || 'Không thể xác minh execution; đã dừng trước khi đăng.');
+}
+
+function publicationConfirmed(previousNotices) {
+  const confirmation = /(?:your post (?:has been|was) published|post published|bài viết (?:của bạn )?đã được đăng)/i;
+  return [...document.querySelectorAll('[role="status"], [role="alert"]')].some(node => {
+    const text = textOf(node);
+    return visible(node) && previousNotices.get(node) !== text && confirmation.test(text);
+  });
+}
+
+async function runPostOnce(payload) {
+  const executionId = String(payload.execution_id || '');
+  if (!executionId || executionId.length > 240 || !payload.job_id) {
+    return {ok: false, code: 'requires_review', error: 'Thiếu execution ID; đã chặn thao tác đăng.'};
+  }
+  const key = 'fbpost-execution:' + executionId;
+  const saved = sessionStorage.getItem(key);
+  if (saved) {
+    try {
+      const result = JSON.parse(saved);
+      if (result.done) return result.response;
+    } catch (error) {}
+    return {ok: false, code: 'requires_review', error: 'Execution đã bắt đầu; không chạy lại khi mất phản hồi.'};
+  }
+  // Persist before the first side effect. A tab reload must not blindly replay it.
+  sessionStorage.setItem(key, JSON.stringify({phase: 'preparing'}));
+  const context = {key, publishAttempted: false};
+  let response;
+  try {
+    await verifyExecution(payload);
+    response = await postCurrentGroup(payload, context);
+  } catch (error) {
+    response = {
+      ok: false,
+      code: context.publishAttempted ? 'requires_review' : 'pre_publish_error',
+      error: context.publishAttempted
+        ? 'Result uncertain; requires review; automatic replay blocked.'
+        : String(error?.message || 'Không thể chuẩn bị bài đăng.')
+    };
+  }
+  sessionStorage.setItem(key, JSON.stringify({done: true, response}));
+  return response;
+}
+
 function visible(el) {
   if (!el) return false;
 
@@ -723,7 +770,9 @@ async function attachImages(
 }
 
 async function clickPost(
-  dialog
+  dialog,
+  payload,
+  context
 ) {
   const buttons = [
     ...dialog.querySelectorAll(
@@ -793,30 +842,36 @@ async function clickPost(
 
   await sleep(400);
 
+  await verifyExecution(payload);
+  const previousNotices = new Map(
+    [...document.querySelectorAll('[role="status"], [role="alert"]')].map(node => [node, textOf(node)])
+  );
+  context.publishAttempted = true;
+  sessionStorage.setItem(context.key, JSON.stringify({phase: 'publish_attempted'}));
+
   postButton.click();
 
-  await sleep(1500);
-
-  const closed =
+  const confirmed =
     await waitFor(
       () =>
-        !document.contains(
+        (!document.contains(
           dialog
         ) ||
-        !visible(dialog),
+        !visible(dialog)) && publicationConfirmed(previousNotices),
       60000,
       500
     );
 
-  if (!closed) {
+  if (!confirmed) {
     throw new Error(
-      "Đã bấm Đăng nhưng cửa sổ tạo bài chưa đóng."
+      "Chưa có xác nhận đăng thành công từ Facebook; cần kiểm tra thủ công, không tự đăng lại."
     );
   }
 }
 
 async function postCurrentGroup(
-  payload
+  payload,
+  context
 ) {
   const loginState =
     pageNeedsLogin();
@@ -867,7 +922,9 @@ async function postCurrentGroup(
   );
 
   await clickPost(
-    dialog
+    dialog,
+    payload,
+    context
   );
 
   return {
@@ -888,7 +945,7 @@ chrome.runtime.onMessage.addListener(
       return;
     }
 
-    postCurrentGroup(msg)
+    runPostOnce(msg)
       .then(result => {
         sendResponse(
           result

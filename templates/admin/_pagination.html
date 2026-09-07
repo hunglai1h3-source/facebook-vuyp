@@ -1,0 +1,4 @@
+{% macro controls(pagination) %}
+{% if pagination.page > 1 %}<a class="admin-button secondary small" rel="prev" href="{{ admin_page_url(pagination.page - 1) }}">Trước</a>{% endif %}
+{% if pagination.page < pagination.pages %}<a class="admin-button secondary small" rel="next" href="{{ admin_page_url(pagination.page + 1) }}">Sau</a>{% endif %}
+{% endmacro %}

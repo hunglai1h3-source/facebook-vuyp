@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from functools import wraps
 import json
 import math
+from urllib.parse import urlencode
 
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 
@@ -100,25 +101,69 @@ def register_admin_ops(app, services):
             summary["device_ids"].update(row.get("device_ids") or [])
         return campaigns, summaries, pagination
 
-    def _users():
+    def _users(user_ids=None, limit=None):
+        if services["postgres_enabled"]():
+            clauses, params = ["1=1"], []
+            if user_ids is not None:
+                clauses.append("user_id=ANY(%s)")
+                params.append(list(user_ids))
+            sql = "SELECT user_id, username, display_name, email, role, is_active, created_at, last_login_at FROM fbpostpro_users WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY username, user_id"
+            if limit is not None:
+                sql += " LIMIT %s"
+                params.append(limit)
+            with services["postgres_connect"]() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    return cur.fetchall()
         result = []
         for user_id, raw in services["load_users"]().items():
-            if not isinstance(raw, dict):
+            if not isinstance(raw, dict) or (user_ids is not None and user_id not in user_ids):
                 continue
             user = dict(raw)
             user["user_id"] = user_id
             user.pop("password_hash", None)
             result.append(user)
-        return result
+        return result[:limit] if limit is not None else result
 
-    def _all_devices(users=None):
-        users = users or _users()
+    def _filter_users(owner=""):
+        # Filter suggestions are bounded; arbitrary IDs remain accepted by the input.
+        users = _users(limit=200)
+        if owner and owner not in {item["user_id"] for item in users}:
+            users.extend(_users([owner]))
+        return users
+
+    @bp.context_processor
+    def _pagination_helpers():
+        def page_url(page):
+            args = request.args.to_dict(flat=True)
+            args["page"] = page
+            return request.path + "?" + urlencode(args)
+        return {"admin_page_url": page_url}
+
+    def _all_devices(users=None, device_ids=None):
+        supplied_users = users is not None
+        if users is None:
+            users = _users()
         rows = []
         if services["postgres_enabled"]():
             services["init_persistence_tables"]()
             with services["postgres_connect"]() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT customer_id, data FROM fbpostpro_customer_data WHERE data_key='devices'")
+                    if device_ids is not None:
+                        cur.execute("""SELECT cd.customer_id, device.key AS device_id,
+                                              device.value - ARRAY['token','token_hash','agent_token'] AS device
+                                       FROM fbpostpro_customer_data cd
+                                       CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(cd.data)='object' THEN cd.data ELSE '{}'::jsonb END) device
+                                       WHERE cd.data_key='devices' AND cd.customer_id=ANY(%s)
+                                         AND device.key=ANY(%s) AND jsonb_typeof(device.value)='object'""",
+                                    ([user["user_id"] for user in users], list(device_ids)))
+                        return [{**row["device"], "customer_id": row["customer_id"], "device_id": row["device_id"], "online": services["device_is_online"](row["device"])} for row in cur.fetchall()]
+                    sql = "SELECT customer_id, data FROM fbpostpro_customer_data WHERE data_key='devices'"
+                    if supplied_users:
+                        cur.execute(sql + " AND customer_id=ANY(%s)", ([user["user_id"] for user in users],))
+                    else:
+                        cur.execute(sql)
                     datasets = cur.fetchall()
             source = {row.get("customer_id", ""): row.get("data") or {} for row in datasets}
         else:
@@ -127,7 +172,9 @@ def register_admin_ops(app, services):
             if not isinstance(devices, dict):
                 continue
             for device_id, raw in devices.items():
-                device = dict(raw or {})
+                if not isinstance(raw, dict):
+                    continue
+                device = dict(raw)
                 device.pop("token", None)
                 device.pop("token_hash", None)
                 device.pop("agent_token", None)
@@ -190,12 +237,12 @@ def register_admin_ops(app, services):
                     cur.execute("SELECT * FROM fbpostpro_campaigns ORDER BY created_at DESC")
                     legacy = cur.fetchall()
             rows.extend({**item, "kind": "engine", "status": item.get("lifecycle", "draft")} for item in engine)
-            rows.extend({**item, "kind": "legacy", "campaign_id": item.get("job_id", ""), "lifecycle": item.get("status", "pending")} for item in legacy)
+            rows.extend({**item, "kind": "legacy", "campaign_id": item.get("job_id", ""), "lifecycle": LEGACY_STATUS_MAP.get(item.get("status", "pending"), item.get("status", "pending"))} for item in legacy)
             return rows
         for user in users:
             customer_id = user["user_id"]
             rows.extend({**item, "customer_id": customer_id, "kind": "engine", "status": item.get("lifecycle", "draft")} for item in services["load_engine_campaigns"](customer_id))
-            rows.extend({**item, "customer_id": customer_id, "kind": "legacy", "campaign_id": item.get("job_id", ""), "lifecycle": item.get("status", "pending")} for item in services["load_campaign_records"](customer_id, limit=10000))
+            rows.extend({**item, "customer_id": customer_id, "kind": "legacy", "campaign_id": item.get("job_id", ""), "lifecycle": LEGACY_STATUS_MAP.get(item.get("status", "pending"), item.get("status", "pending"))} for item in services["load_campaign_records"](customer_id, limit=10000))
         rows.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
         return rows
 
@@ -242,20 +289,20 @@ def register_admin_ops(app, services):
                         lifecycle[mapped] = lifecycle.get(mapped, 0) + int(row.get("total", 0))
                         task_counts["successful"] = task_counts.get("successful", 0) + int(row.get("success", 0))
                         task_counts["failed"] = task_counts.get("failed", 0) + int(row.get("failed", 0))
-                    cur.execute(
-                        """SELECT COUNT(*) AS total,
-                                  COUNT(*) FILTER (WHERE
-                                    CASE WHEN COALESCE(device.value->>'last_seen','') ~ '^\\d{4}-\\d{2}-\\d{2}T'
-                                      THEN (device.value->>'last_seen')::timestamptz >= NOW() - INTERVAL '75 seconds'
-                                      ELSE FALSE END
-                                  ) AS online
-                           FROM fbpostpro_customer_data cd
-                           CROSS JOIN LATERAL jsonb_each(
-                             CASE WHEN jsonb_typeof(cd.data)='object' THEN cd.data ELSE '{}'::jsonb END
-                           ) device
-                           WHERE cd.data_key='devices'"""
-                    )
-                    device_counts = cur.fetchone() or {}
+                device_counts = {"total": 0, "online": 0}
+                # Legacy timestamps can be malformed or use a non-UTC offset. Stream
+                # only these small fields through the shared safe parser, never cast
+                # untrusted JSON to timestamptz and never retain the device registry.
+                with conn.cursor(name="admin_device_metrics") as cur:
+                    cur.execute("""SELECT device.value->>'last_seen' AS last_seen,
+                                          device.value->>'mode' AS mode, device.value->>'status' AS status
+                                   FROM fbpostpro_customer_data cd
+                                   CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(cd.data)='object' THEN cd.data ELSE '{}'::jsonb END) device
+                                   WHERE cd.data_key='devices' AND jsonb_typeof(device.value)='object'""")
+                    while batch := cur.fetchmany(250):
+                        for device in batch:
+                            device_counts["total"] += 1
+                            device_counts["online"] += int(services["device_is_online"](device))
             # Legacy rows were merged into lifecycle above, so they must not be counted twice.
             total_campaigns = sum(lifecycle.values())
             total_users, active_users = int(user_counts.get("total", 0)), int(user_counts.get("active", 0))
@@ -415,31 +462,56 @@ def register_admin_ops(app, services):
             abort(404)
         user = dict(user)
         user.pop("password_hash", None)
-        devices = [item for item in _all_devices() if item["customer_id"] == user_id]
-        accounts = services["load_facebook_accounts"](user_id)
-        groups = services["load_groups"](user_id)
-        campaigns = services["load_engine_campaigns"](user_id)
-        return render_template("admin/user_detail.html", user=user, devices=devices, accounts=accounts, group_count=len(groups), campaigns=campaigns)
+        if services["postgres_enabled"]():
+            with services["postgres_connect"]() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) AS total FROM fbpostpro_accounts WHERE customer_id=%s", (user_id,))
+                    account_count = int(cur.fetchone()["total"])
+                    pagination = _pagination(account_count, _int_arg("page"), 50)
+                    cur.execute("SELECT account_id, display_name, facebook_user_id, device_id, browser_profile_id, status FROM fbpostpro_accounts WHERE customer_id=%s ORDER BY created_at DESC, account_id LIMIT 50 OFFSET %s", (user_id, (pagination["page"] - 1) * 50))
+                    accounts = cur.fetchall()
+                    cur.execute("SELECT COUNT(*) AS total FROM fbpostpro_groups WHERE customer_id=%s", (user_id,))
+                    group_count = int(cur.fetchone()["total"])
+                    cur.execute("SELECT (SELECT COUNT(*) FROM fbpostpro_campaign_engine WHERE customer_id=%s) + (SELECT COUNT(*) FROM fbpostpro_campaigns WHERE customer_id=%s) AS total", (user_id, user_id))
+                    campaign_count = int(cur.fetchone()["total"])
+                    cur.execute("SELECT COUNT(*) AS total FROM fbpostpro_customer_data cd CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(cd.data)='object' THEN cd.data ELSE '{}'::jsonb END) device WHERE cd.customer_id=%s AND cd.data_key='devices' AND jsonb_typeof(device.value)='object'", (user_id,))
+                    device_count = int(cur.fetchone()["total"])
+        else:
+            devices = _all_devices([user])
+            accounts = services["load_facebook_accounts"](user_id)
+            group_count = len(services["load_groups"](user_id))
+            campaign_count = len(services["load_engine_campaigns"](user_id)) + len(services["load_campaign_records"](user_id, limit=100000))
+            account_count, device_count = len(accounts), len(devices)
+            accounts, pagination = _paginate(accounts, _int_arg("page"), 50)
+        return render_template("admin/user_detail.html", user=user, accounts=accounts, group_count=group_count, account_count=account_count, campaign_count=campaign_count, device_count=device_count, pagination=pagination)
 
     @bp.route("/api/admin/users/<user_id>/status", methods=["POST"])
     @admin_required
     @services["synchronized_state"]
     def admin_user_status(user_id):
         user_id = services["sanitize_customer_id"](user_id)
-        users = services["load_users"]()
-        user = users.get(user_id)
+        user = services["find_user_by_id"](user_id)
         if not isinstance(user, dict):
             return jsonify({"error": "User not found."}), 404
         payload = request.get_json(silent=True) if request.is_json else request.form
         if not hasattr(payload, "get") or "is_active" not in payload:
             return jsonify({"error": "Thiếu is_active."}), 400
         active = payload.get("is_active")
-        active = active is True or str(active).lower() in {"1", "true", "yes", "on"}
+        if not isinstance(active, (str, bool, int)) or str(active).lower() not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+            return jsonify({"error": "is_active must be a boolean."}), 400
+        active = str(active).lower() in {"1", "true", "yes", "on"}
         if user.get("role") == "admin" and not active and services["get_admin_actor_id"]() == user_id:
             return jsonify({"error": "Admin không thể tự khóa tài khoản đang dùng."}), 409
         previous = bool(user.get("is_active", True))
         user["is_active"] = active
-        services["save_users"](users)
+        if services["postgres_enabled"]():
+            with services["postgres_connect"]() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE fbpostpro_users SET is_active=%s WHERE user_id=%s", (active, user_id))
+        else:
+            users = services["load_users"]()
+            users[user_id] = user
+            services["save_users"](users)
         services["record_admin_audit"](services["get_admin_actor_id"](), "unlock_user" if active else "lock_user", "user", user_id, {"previous": previous, "is_active": active})
         services["record_operational_log"](user_id, "user_status_changed", "warning" if not active else "info", "Tài khoản đã được mở khóa." if active else "Tài khoản đã bị khóa.")
         return jsonify({"ok": True, "user_id": user_id, "is_active": active})
@@ -449,8 +521,7 @@ def register_admin_ops(app, services):
     @services["synchronized_state"]
     def admin_user_quota(user_id):
         user_id = services["sanitize_customer_id"](user_id)
-        users = services["load_users"]()
-        user = users.get(user_id)
+        user = services["find_user_by_id"](user_id)
         if not isinstance(user, dict):
             return jsonify({"error": "User not found."}), 404
         payload = request.get_json(silent=True) if request.is_json else request.form
@@ -468,6 +539,8 @@ def register_admin_ops(app, services):
             if key not in limits:
                 continue
             try:
+                if isinstance(raw, (bool, float)):
+                    raise ValueError("Quota must be an integer")
                 value = int(raw)
             except (TypeError, ValueError):
                 return jsonify({"error": f"{incoming} phải là số nguyên."}), 400
@@ -478,18 +551,25 @@ def register_admin_ops(app, services):
             user[key] = value
         if not changes:
             return jsonify({"error": "Không có quota hợp lệ."}), 400
-        services["save_users"](users)
+        if services["postgres_enabled"]():
+            with services["postgres_connect"]() as conn:
+                with conn.cursor() as cur:
+                    # Column names come only from the quota allowlist above.
+                    assignments = ", ".join(f"{key}=%s" for key in changes)
+                    cur.execute(f"UPDATE fbpostpro_users SET {assignments} WHERE user_id=%s", [user[key] for key in changes] + [user_id])
+        else:
+            users = services["load_users"]()
+            users[user_id] = user
+            services["save_users"](users)
         services["record_admin_audit"](services["get_admin_actor_id"](), "change_quota", "user", user_id, changes)
         return jsonify({"ok": True, "quotas": {key: user[key] for key in limits}})
 
     @bp.route("/admin/accounts")
     @admin_required
     def admin_accounts():
-        users, devices = _users(), _all_devices()
-        user_map = {item["user_id"]: item for item in users}
-        device_map = {(item["customer_id"], item["device_id"]): item for item in devices}
         query = str(request.args.get("q", "")).strip().casefold()[:200]
         owner = services["sanitize_customer_id"](request.args.get("user", ""))
+        users = _filter_users(owner) if services["postgres_enabled"]() else _users()
         page = _int_arg("page")
         if services["postgres_enabled"]():
             clauses, params = ["1=1"], []
@@ -524,6 +604,10 @@ def register_admin_ops(app, services):
             accounts = _all_accounts(users)
             tasks = _all_tasks(users)
             pagination = None
+        page_users = _users({item.get("customer_id", "") for item in accounts}) if services["postgres_enabled"]() else users
+        user_map = {item["user_id"]: item for item in page_users}
+        devices = _all_devices(page_users, {item.get("device_id", "") for item in accounts})
+        device_map = {(item["customer_id"], item["device_id"]): item for item in devices}
         active = {}
         for task in tasks:
             if task.get("status") in {"claimed", "running", "paused"}:
@@ -548,10 +632,10 @@ def register_admin_ops(app, services):
     @bp.route("/admin/groups")
     @admin_required
     def admin_groups():
-        users = _users()
-        user_map = {item["user_id"]: item for item in users}
         query = str(request.args.get("q", "")).strip().casefold()[:200]
         owner = services["sanitize_customer_id"](request.args.get("user", ""))
+        users = _filter_users(owner) if services["postgres_enabled"]() else _users()
+        user_map = {item["user_id"]: item for item in users}
         account_filter = str(request.args.get("account", ""))[:64]
         page = _int_arg("page")
         if services["postgres_enabled"]():
@@ -606,6 +690,7 @@ def register_admin_ops(app, services):
                         }
                     else:
                         campaign_groups = {}
+            user_map = {item["user_id"]: item for item in _users(customer_ids)}
             rows = []
             for group in groups:
                 row = dict(group)
@@ -646,14 +731,17 @@ def register_admin_ops(app, services):
     @bp.route("/admin/campaigns")
     @admin_required
     def admin_campaigns():
-        users, devices = _users(), _all_devices()
         query = str(request.args.get("q", "")).strip().casefold()[:200]
         owner = services["sanitize_customer_id"](request.args.get("user", ""))
+        users = _filter_users(owner) if services["postgres_enabled"]() else _users()
         status = str(request.args.get("status", ""))[:32]
         page = _int_arg("page")
         if services["postgres_enabled"]():
             page_items, summaries, pagination = _postgres_campaign_page(query, owner, status, page, 40)
-            page_items = _enrich_campaigns(page_items, [], users, devices)
+            page_users = _users({item.get("customer_id", "") for item in page_items})
+            device_ids = {device_id for summary in summaries.values() for device_id in summary.get("device_ids", set())}
+            devices = _all_devices(page_users, device_ids)
+            page_items = _enrich_campaigns(page_items, [], page_users, devices)
             device_map = {(item.get("customer_id", ""), item.get("device_id", "")): item for item in devices}
             for item in page_items:
                 summary = summaries.get(item.get("campaign_id", ""), {})
@@ -664,6 +752,7 @@ def register_admin_ops(app, services):
                     for device_id in summary.get("device_ids", set())
                 })
         else:
+            devices = _all_devices(users)
             tasks = _all_tasks(users)
             rows = _enrich_campaigns(_all_campaigns(users), tasks, users, devices)
             rows = [item for item in rows if (not owner or item.get("customer_id") == owner) and (not status or item.get("lifecycle") == status) and (not query or query in f"{item.get('campaign_name','')} {item.get('campaign_id','')}".casefold())]
@@ -673,7 +762,6 @@ def register_admin_ops(app, services):
     @bp.route("/admin/campaigns/<campaign_id>")
     @admin_required
     def admin_campaign_detail(campaign_id):
-        users = _users()
         campaign_id = str(campaign_id or "")[:64]
         task_summary_rows, retry_total, summary_device_ids = [], 0, []
         if services["postgres_enabled"]():
@@ -714,8 +802,12 @@ def register_admin_ops(app, services):
                     else:
                         tasks, pagination = [], _pagination(0, 1, 50)
         else:
+            users = _users()
             campaign = next((item for item in _all_campaigns(users) if item.get("campaign_id") == campaign_id), None)
             tasks = [item for item in _all_tasks(users) if item.get("campaign_id") == campaign_id and item.get("customer_id") == (campaign or {}).get("customer_id")]
+            task_summary_rows = [{"status": status, "total": count} for status, count in Counter(item.get("status", "") for item in tasks).items()]
+            retry_total = sum(int(item.get("retry_count", 0) or 0) for item in tasks)
+            summary_device_ids = sorted({item.get("device_id", "") for item in tasks if item.get("device_id")})
             tasks, pagination = _paginate(tasks, _int_arg("page"), 50)
         if not campaign:
             abort(404)
@@ -725,9 +817,10 @@ def register_admin_ops(app, services):
             task.pop("lease_token", None)
             task["last_error"] = str(services["safe_log_value"](task.get("last_error", "")))
             safe_tasks.append(task)
-        all_devices = _all_devices(users)
+        users = _users([campaign.get("customer_id", "")])
+        all_devices = _all_devices(users, summary_device_ids)
         campaign = _enrich_campaigns([campaign], safe_tasks, users, all_devices)[0]
-        if services["postgres_enabled"]() and campaign.get("kind") == "engine":
+        if campaign.get("kind") == "engine":
             campaign["task_counts"] = Counter({item.get("status", ""): int(item.get("total", 0)) for item in task_summary_rows})
             campaign["retry_total"] = retry_total
             device_map = {(item.get("customer_id", ""), item.get("device_id", "")): item for item in all_devices}
@@ -768,12 +861,55 @@ def register_admin_ops(app, services):
     @bp.route("/admin/workers")
     @admin_required
     def admin_workers():
+        query = str(request.args.get("q", "")).strip().casefold()[:200]
+        state = str(request.args.get("state", ""))
+        if services["postgres_enabled"]():
+            page, per_page, total = _int_arg("page"), 50, 0
+            rows, last_page = [], []
+            offset = (page - 1) * per_page
+            with services["postgres_connect"]() as conn:
+                # Server cursor bounds memory for large device registries. Online
+                # uses the same safe timestamp/cloud predicate as the worker API.
+                with conn.cursor(name="admin_worker_page") as cur:
+                    cur.execute("""SELECT cd.customer_id, device.key AS device_id,
+                                          device.value - ARRAY['token','token_hash','agent_token'] AS device
+                                   FROM fbpostpro_customer_data cd
+                                   CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(cd.data)='object' THEN cd.data ELSE '{}'::jsonb END) device
+                                   WHERE cd.data_key='devices' AND jsonb_typeof(device.value)='object'
+                                     AND (%s='' OR POSITION(%s IN LOWER(COALESCE(device.value->>'name','') || ' ' || device.key))>0)
+                                   ORDER BY device.value->>'last_seen' DESC NULLS LAST, cd.customer_id, device.key""", (query, query))
+                    while batch := cur.fetchmany(250):
+                        for raw in batch:
+                            device = {**raw["device"], "customer_id": raw["customer_id"], "device_id": raw["device_id"]}
+                            device["online"] = services["device_is_online"](device)
+                            if (state == "online" and not device["online"]) or (state == "offline" and device["online"]):
+                                continue
+                            if total % per_page == 0:
+                                last_page = []
+                            last_page.append(device)
+                            if offset <= total < offset + per_page:
+                                rows.append(device)
+                            total += 1
+                pagination = _pagination(total, page, per_page)
+                if pagination["page"] != page:
+                    rows = last_page
+                with conn.cursor() as cur:
+                    cur.execute("""SELECT DISTINCT ON (customer_id,device_id)
+                                          customer_id, device_id, account_id, display_name, browser_profile_id
+                                   FROM fbpostpro_accounts WHERE customer_id=ANY(%s) AND device_id=ANY(%s)
+                                   ORDER BY customer_id,device_id,updated_at DESC,account_id""",
+                                (list({row["customer_id"] for row in rows}), list({row["device_id"] for row in rows})))
+                    accounts = cur.fetchall()
+            user_map = {item["user_id"]: item for item in _users({row["customer_id"] for row in rows})}
+            account_by_device = {(item["customer_id"], item["device_id"]): item for item in accounts}
+            for device in rows:
+                device["owner"] = user_map.get(device["customer_id"], {})
+                device["account"] = account_by_device.get((device["customer_id"], device["device_id"]), {})
+            return render_template("admin/workers.html", devices=rows, pagination=pagination, query=request.args.get("q", ""), state=state)
         users = _users()
         user_map = {item["user_id"]: item for item in users}
         accounts = _all_accounts(users)
         account_by_device = {(item.get("customer_id", ""), item.get("device_id", "")): item for item in accounts if item.get("device_id")}
-        query = str(request.args.get("q", "")).strip().casefold()[:200]
-        state = str(request.args.get("state", ""))
         rows = []
         for device in _all_devices(users):
             if state == "online" and not device["online"] or state == "offline" and device["online"]:
@@ -795,7 +931,7 @@ def register_admin_ops(app, services):
         filters["query"] = request.args.get("q", "")
         logs, total = services["load_operational_logs"](filters, page, per_page)
         pagination = {"page": page, "pages": max(1, math.ceil(total / per_page)), "total": total, "per_page": per_page}
-        return render_template("admin/logs.html", logs=logs, users=_users(), filters=filters, query=request.args.get("q", ""), pagination=pagination)
+        return render_template("admin/logs.html", logs=logs, users=_filter_users(filters["customer_id"]), filters=filters, query=request.args.get("q", ""), pagination=pagination)
 
     @bp.route("/admin/audit")
     @admin_required

@@ -5,6 +5,10 @@ const VERSION =
 
 let busy = false;
 let currentJobId = '';
+let currentJob = null;
+let currentOwner = null;
+let currentExecutionTab = null;
+let pollPromise = null;
 let workerState = 'idle';
 let lastHeartbeatAt = 0;
 let lastHeartbeatResult = null;
@@ -61,6 +65,52 @@ async function facebookLoggedIn() {
   }
 }
 
+async function facebookSessionFingerprint() {
+  const cookie = await chrome.cookies.get({url: 'https://www.facebook.com/', name: 'c_user'});
+  const identity = String(cookie?.value || '');
+  if (!/^[0-9]{1,30}$/.test(identity)) return '';
+  const digest = await crypto.subtle.digest(
+    'SHA-256', new TextEncoder().encode('fbpostpro:facebook-user:' + identity)
+  );
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function verifyJobSession(c, job) {
+  if (!job?.engine_task_id && !job?.account_id) return true;
+  const profile = 'chrome-profile:' + c.deviceId;
+  if (job.device_id !== c.deviceId || job.browser_profile_id !== profile || job.session_context !== profile) {
+    throw new Error('Worker/Chrome profile không khớp account của task. Đã dừng trước khi đăng.');
+  }
+  const expected = String(job.expected_session_fingerprint || '');
+  if (!/^[a-f0-9]{64}$/.test(expected)) {
+    throw new Error('Account chưa được xác minh Facebook user ID/session. Hãy cấu hình đúng account trước khi chạy.');
+  }
+  if (await facebookSessionFingerprint() !== expected) {
+    throw new Error('Facebook session hiện tại không đúng account được gán. Đã dừng trước khi đăng.');
+  }
+  return true;
+}
+
+async function verifyExecutionRequest(msg, sender) {
+  if (!busy || !currentJob || msg.job_id !== currentJobId || sender.tab?.id !== currentExecutionTab) {
+    return {ok: false, error: 'Execution không còn active; đã chặn thao tác đăng.'};
+  }
+  try {
+    const c = await cfg();
+    if (!currentOwner || c.deviceId !== currentOwner.deviceId || c.serverOrigin !== currentOwner.serverOrigin || c.token !== currentOwner.token) {
+      return {ok: false, error: 'Liên kết worker đã thay đổi; đã dừng execution cũ.'};
+    }
+    await verifyJobSession(c, currentJob);
+    const ctl = await control(c);
+    if (ctl.unavailable || ctl.stop_requested || ctl.pause_requested) {
+      return {ok: false, error: 'Không thể xác nhận lệnh tiếp tục; đã dừng trước khi đăng.'};
+    }
+    return {ok: true};
+  } catch (error) {
+    return {ok: false, error: error.message};
+  }
+}
+
 async function heartbeat(
   force = false
 ) {
@@ -90,8 +140,8 @@ async function heartbeat(
     return lastHeartbeatResult;
   }
 
-  const fb =
-    await facebookLoggedIn();
+  const sessionFingerprint = await facebookSessionFingerprint();
+  const fb = Boolean(sessionFingerprint);
 
   const r =
     await fetch(
@@ -119,7 +169,12 @@ async function heartbeat(
               workerState,
 
             current_job_id:
-              currentJobId
+              currentJobId,
+            execution_token: currentJob?.execution_token || '',
+            facebook_session_fingerprint: sessionFingerprint,
+            session_verification_version: 1,
+            browser_profile_id: 'chrome-profile:' + c.deviceId,
+            session_context: 'chrome-profile:' + c.deviceId
           })
       }
     );
@@ -151,6 +206,8 @@ async function pairFromWeb(
   serverOrigin,
   code
 ) {
+  const linked = await cfg();
+  if (busy) return {ok: false, error: 'Hãy dừng campaign trước khi liên kết lại Connector.'};
   const server =
     String(
       serverOrigin ||
@@ -169,6 +226,12 @@ async function pairFromWeb(
     )
       .trim()
       .toUpperCase();
+
+  // Content scripts also run on other Render apps. Only a site already paired
+  // through the extension popup may rotate its own binding.
+  if (!linked.deviceId || !linked.token || server !== linked.serverOrigin) {
+    return {ok: false, error: 'Hãy mở popup Connector để xác nhận URL website và liên kết lần đầu.'};
+  }
 
   if (
     !server ||
@@ -278,7 +341,8 @@ async function report(
           JSON.stringify({
             ...data,
             job_id:
-              data.job_id || currentJobId
+              data.job_id || currentJobId,
+            execution_token: currentJob?.execution_token || ''
           })
       }
     );
@@ -649,8 +713,15 @@ async function postGroup(
   c,
   url,
   content,
-  images
+  images,
+  job,
+  groupIndex
 ) {
+  const groupUrl = new URL(url);
+  if (groupUrl.protocol !== 'https:' || !['facebook.com', 'www.facebook.com', 'm.facebook.com'].includes(groupUrl.hostname)
+      || groupUrl.username || groupUrl.password || !/^\/groups\/[^/]+\/?$/.test(groupUrl.pathname)) {
+    return {ok: false, code: 'invalid_group', error: 'URL Group không hợp lệ; đã chặn điều hướng.'};
+  }
   /*
    * QUAN TRỌNG:
    * active:true
@@ -662,6 +733,7 @@ async function postGroup(
       url,
       active: true
     });
+  currentExecutionTab = tab.id;
 
   try {
     await waitTab(
@@ -758,6 +830,7 @@ async function postGroup(
       i++
     ) {
       try {
+        await verifyJobSession(c, job);
         res =
           await chrome.tabs.sendMessage(
             tab.id,
@@ -770,8 +843,9 @@ async function postGroup(
                 '',
 
               images:
-                images ||
-                []
+                images || [],
+              job_id: job.job_id,
+              execution_id: (job.execution_token || job.job_id) + ':' + groupIndex
             }
           );
 
@@ -781,6 +855,12 @@ async function postGroup(
       } catch (e) {
         lastError =
           e;
+
+        // Only a missing receiver proves that the runner has not started.
+        // A closed message port can mean Facebook already accepted the post.
+        if (!String(e?.message || '').includes('Receiving end does not exist')) {
+          return {ok: false, code: 'requires_review', error: 'Kết quả chưa xác định; không tự gửi lại thao tác đăng.'};
+        }
 
         console.log(
           'Chờ facebook_runner.js:',
@@ -946,6 +1026,8 @@ async function processJob(
 ) {
   busy = true;
   currentJobId = String(job?.job_id || '');
+  currentJob = job;
+  currentOwner = c;
   workerState = 'busy';
 
   let processed = 0;
@@ -953,6 +1035,7 @@ async function processJob(
   let errors = 0;
 
   try {
+    await verifyJobSession(c, job);
     const fb =
       await facebookLoggedIn();
 
@@ -983,7 +1066,7 @@ async function processJob(
       return;
     }
 
-    await report(
+    const accepted = await report(
       c,
       {
         status:
@@ -997,6 +1080,7 @@ async function processJob(
         errors
       }
     );
+    if (!accepted) throw new Error('Backend không xác nhận task; đã dừng trước khi đăng.');
 
     const images =
       await loadImages(
@@ -1039,7 +1123,8 @@ async function processJob(
         return;
       }
 
-      await report(
+      await verifyJobSession(c, job);
+      const postingAccepted = await report(
         c,
         {
           status:
@@ -1053,6 +1138,7 @@ async function processJob(
           errors
         }
       );
+      if (!postingAccepted) throw new Error('Backend không xác nhận task; đã dừng trước khi đăng.');
 
       let res;
 
@@ -1063,7 +1149,9 @@ async function processJob(
             groups[i],
             job.content ||
               '',
-            images
+            images,
+            job,
+            i
           );
       } catch (e) {
         res = {
@@ -1105,6 +1193,11 @@ async function processJob(
         );
       } else {
         errors++;
+
+        if (res?.code === 'requires_review') {
+          await report(c, {status: 'error', message: 'Result uncertain; requires review; automatic replay blocked. ' + (res.error || ''), processed, success, errors});
+          return;
+        }
 
         await report(
           c,
@@ -1271,12 +1364,20 @@ async function processJob(
     busy =
       false;
     currentJobId = '';
+    currentJob = null;
+    currentOwner = null;
+    currentExecutionTab = null;
     workerState = 'idle';
     lastHeartbeatAt = 0;
   }
 }
 
-async function poll() {
+function poll() {
+  if (!pollPromise) pollPromise = pollOnce().finally(() => { pollPromise = null; });
+  return pollPromise;
+}
+
+async function pollOnce() {
   if (busy) {
     return {
       ok: true,
@@ -1426,6 +1527,10 @@ chrome.runtime.onMessage.addListener(
     sender,
     sendResponse
   ) => {
+    if (msg?.type === 'VERIFY_EXECUTION') {
+      verifyExecutionRequest(msg, sender).then(sendResponse);
+      return true;
+    }
     if (
       msg?.type ===
       'POLL_NOW'
@@ -1442,6 +1547,13 @@ chrome.runtime.onMessage.addListener(
       msg?.type ===
       'PAIR_FROM_WEB'
     ) {
+      try {
+        const senderOrigin = new URL(sender.url || sender.tab?.url || '').origin;
+        if (senderOrigin !== new URL(msg.serverOrigin).origin) throw new Error('origin');
+      } catch (error) {
+        sendResponse({ok: false, error: 'Website origin không hợp lệ.'});
+        return;
+      }
       pairFromWeb(
         msg.serverOrigin,
         msg.code
