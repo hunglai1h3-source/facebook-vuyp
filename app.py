@@ -9901,9 +9901,20 @@ def ready():
         return jsonify({"status": "not_ready", "database": "unavailable"}), 503
     if blocked or not schema_complete:
         return jsonify({'status': 'not_ready', 'database': 'connected', 'schema': 'operator_review_required'}), 503
-    if SCHEDULER_ENABLED and (not SCHEDULER_THREAD or not SCHEDULER_THREAD.is_alive() or SCHEDULER_LAST_ERROR):
-        return jsonify({'status': 'not_ready', 'database': 'connected', 'scheduler': 'unavailable'}), 503
-    return jsonify({"status": "ready", "database": "connected", "storage": "postgres"})
+        scheduler_status = "disabled"
+
+    if SCHEDULER_ENABLED:
+    if SCHEDULER_THREAD and SCHEDULER_THREAD.is_alive() and not SCHEDULER_LAST_ERROR:
+        scheduler_status = "running"
+    else:
+        scheduler_status = "unavailable"
+
+        return jsonify({
+    "status": "ready",
+    "database": "connected",
+    "storage": "postgres",
+    "scheduler": scheduler_status,
+})
 
 
 # ============================================================
