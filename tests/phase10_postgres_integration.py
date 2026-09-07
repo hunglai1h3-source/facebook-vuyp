@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def load_postgres_app(data_root, database_url, app_env="development"):
@@ -20,6 +21,7 @@ def load_postgres_app(data_root, database_url, app_env="development"):
         DATA_ROOT=str(data_root),
         USERS_FILE=str(Path(data_root) / "users.json"),
         ENABLE_LEGACY_ADMIN_AUTH="false",
+        ENABLE_SCHEDULER="false",
         ALLOWED_HOSTS="app.example" if app_env == "production" else "",
     )
     spec = importlib.util.spec_from_file_location("app", ROOT / "app.py")

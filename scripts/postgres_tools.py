@@ -21,6 +21,10 @@ def database_parameters(url):
         for key in ("sslmode", "sslrootcert", "sslcert", "sslkey"):
             if key in query:
                 parameters[key] = query[key][-1]
+        if os.environ.get('APP_ENV', '').lower() in {'production', 'prod'} and parameters['host'] not in {'127.0.0.1', 'localhost', '::1'}:
+            parameters.setdefault('sslmode', 'require')
+            if parameters['sslmode'] not in {'require', 'verify-ca', 'verify-full'}:
+                raise ValueError
         return parameters
     except (TypeError, ValueError):
         raise ValueError("A valid PostgreSQL DATABASE_URL is required.") from None

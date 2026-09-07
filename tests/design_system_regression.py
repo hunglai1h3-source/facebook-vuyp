@@ -16,6 +16,7 @@ import tempfile
 import threading
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def contract(path):
@@ -47,6 +48,9 @@ def check_contracts():
             "templates/groups.html",
             # Phase 10 intentionally hardens environment/deploy configuration.
             "render.yaml", ".env.example",
+            # System hardening replaces the old runner success heuristic; its
+            # delivery/identity contracts are exercised by worker_safety_regression.js.
+            "extension/facebook_runner.js",
         }:
             continue
         assert contract(ROOT / relative) == digest, f"Business contract changed: {relative}"
@@ -64,6 +68,9 @@ def check_contracts():
         assert required in compose_source, f"Compose contract missing: {required}"
     assert compose_source.count("<form") == compose_source.count("</form>"), "Compose form tags unbalanced"
     worker_source = (ROOT / "extension/service_worker.js").read_text(encoding="utf-8")
+    runner_source = (ROOT / 'extension/facebook_runner.js').read_text(encoding='utf-8')
+    for required in ('VERIFY_EXECUTION', 'requires review', 'sessionStorage'):
+        assert required in runner_source, f'Worker safety contract missing: {required}'
     bridge_source = (ROOT / "extension/web_bridge.js").read_text(encoding="utf-8")
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
     groups_source = (ROOT / "templates/groups.html").read_text(encoding="utf-8")

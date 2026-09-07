@@ -50,6 +50,9 @@ import uuid
 import importlib.util
 import hashlib
 import logging
+from contextlib import contextmanager
+from worker_security import facebook_session_fingerprint, verify_worker_session
+from scripts.postgres_tools import database_parameters
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 
@@ -95,7 +98,7 @@ app.config.update(
     SESSION_REFRESH_EACH_REQUEST=False,
 )
 if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)
 
 
 def normalize_trusted_host(value):
@@ -105,6 +108,11 @@ def normalize_trusted_host(value):
         return ""
     if not re.fullmatch(r"\.?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?", value):
         return ""
+    host, _, port = value.partition(':')
+    if port and not 1 <= int(port) <= 65535:
+        return ''
+    if any(not label or len(label) > 63 or label.startswith('-') or label.endswith('-') for label in host.lstrip('.').split('.')):
+        return ''
     return value
 
 
@@ -185,6 +193,7 @@ CUSTOMERS_ROOT.mkdir(
 )
 
 FILE_LOCK = threading.RLock()
+STATE_LOCK_CONTEXT = threading.local()
 PERSISTENCE_INIT_LOCK = threading.RLock()
 PERSISTENCE_TABLES_READY = False
 MAX_JSON_REQUEST_BYTES = 2 * 1024 * 1024
@@ -233,10 +242,10 @@ def auth_rate_allowed(scope, limit, window_seconds):
                     count = int((cur.fetchone() or {}).get("request_count", limit + 1))
                 conn.commit()
             return count <= int(limit)
-        except Exception:
-            app.logger.exception("shared_rate_limit_unavailable scope=%s", scope)
+        except Exception as exc:
+            app.logger.error("shared_rate_limit_unavailable scope=%s error_type=%s", scope, type(exc).__name__)
             if IS_PRODUCTION:
-                return False
+                raise DatabaseUnavailable('Shared rate limiter unavailable.') from None
 
     now = time.monotonic()
     key = (scope, client_identity)
@@ -305,11 +314,20 @@ def production_response_headers(response):
 
 
 def synchronized_state(function):
-    """Serialize read-modify-write campaign operations in the active web process."""
+    """Serialize legacy JSONB read/modify/write operations across web processes."""
     @wraps(function)
     def wrapped(*args, **kwargs):
         with FILE_LOCK:
-            return function(*args, **kwargs)
+            if not postgres_enabled() or getattr(STATE_LOCK_CONTEXT, "held", False):
+                return function(*args, **kwargs)
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext('fbpostpro_state_mutation'))")
+                STATE_LOCK_CONTEXT.held = True
+                try:
+                    return function(*args, **kwargs)
+                finally:
+                    STATE_LOCK_CONTEXT.held = False
     return wrapped
 
 # ============================================================
@@ -762,6 +780,8 @@ def read_json(
     path,
     default,
 ):
+    if IS_PRODUCTION:
+        return clone_default(default)
 
     with FILE_LOCK:
 
@@ -843,13 +863,43 @@ def postgres_connect():
             "Thiếu psycopg. Hãy chạy: pip install -r requirements.txt"
         )
 
-    return psycopg.connect(
-        DATABASE_URL,
-        row_factory=dict_row,
-        connect_timeout=10,
-    )
+    try:
+        parameters = database_parameters(DATABASE_URL)
+        if IS_PRODUCTION and parameters['host'] not in {'localhost', '127.0.0.1', '::1'}:
+            parameters.setdefault('sslmode', 'require')
+            if parameters['sslmode'] not in {'require', 'verify-ca', 'verify-full'}:
+                raise ValueError('Production PostgreSQL requires TLS.')
+        return psycopg.connect(**parameters, row_factory=dict_row,
+            application_name='fbpostpro', options='-c statement_timeout=30000 -c lock_timeout=10000')
+    except (ValueError, psycopg.OperationalError, psycopg.InterfaceError) as exc:
+        app.logger.error('database_connection_failed error_type=%s action=verify_DATABASE_URL_DNS_TLS', type(exc).__name__)
+        raise DatabaseUnavailable('Database unavailable; verify DATABASE_URL, DNS and TLS configuration.') from None
 
 
+class DatabaseUnavailable(RuntimeError):
+    pass
+
+
+@app.errorhandler(DatabaseUnavailable)
+def database_unavailable(error):
+    return jsonify({'error': 'Database temporarily unavailable.', 'request_id': getattr(g, 'request_id', '')}), 503
+
+
+def schema_once(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if not postgres_enabled():
+            return
+        with PERSISTENCE_INIT_LOCK:
+            if getattr(wrapped, 'ready', False):
+                return
+            result = function(*args, **kwargs)
+            wrapped.ready = True
+            return result
+    return wrapped
+
+
+@schema_once
 def init_users_table():
 
     if not postgres_enabled():
@@ -857,6 +907,7 @@ def init_users_table():
 
     with postgres_connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext('fbpostpro_schema_migrations'))")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS fbpostpro_users (
@@ -915,6 +966,7 @@ def init_persistence_tables():
         skipped_constraints = []
         with postgres_connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext('fbpostpro_schema_migrations'))")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS fbpostpro_schema_migrations (
@@ -1275,6 +1327,8 @@ def init_persistence_tables():
                     ("phase11_remaining_risk_remediation_v1", "Shared rate limits, backup receipts and persistent migration issue reports"),
                 )
                 for migration_id, description in migrations:
+                    if skipped_constraints and migration_id == 'phase11_remaining_risk_remediation_v1':
+                        continue
                     cur.execute(
                         """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
                            VALUES (%s, %s) ON CONFLICT (migration_id) DO NOTHING
@@ -1865,8 +1919,12 @@ def migrate_json_users_to_postgres():
 # Khởi tạo bảng ngay khi service khởi động.
 # Nếu DATABASE_URL chưa có, local vẫn tiếp tục bằng users.json.
 if postgres_enabled():
+    if IS_PRODUCTION:
+        from scripts.deploy_preflight import check_deploy
+        check_deploy(DATABASE_URL)
     init_users_table()
-    migrate_json_users_to_postgres()
+    if not IS_PRODUCTION:
+        migrate_json_users_to_postgres()
 
 def migrate_legacy_customer_data(old_customer_id, user_id):
 
@@ -2111,6 +2169,7 @@ def logout():
 # GROUPS - POSTGRES PRODUCTION / FILE LOCAL FALLBACK
 # ============================================================
 
+@schema_once
 def init_groups_table():
     """
     Tạo bảng lưu Group trên PostgreSQL.
@@ -2129,6 +2188,7 @@ def init_groups_table():
 
     with postgres_connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext('fbpostpro_schema_migrations'))")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS fbpostpro_groups (
@@ -2563,7 +2623,7 @@ def create_facebook_account(customer_id, display_name, facebook_user_id=""):
     return record
 
 
-def bind_facebook_account_device(customer_id, account_id, device_id):
+def bind_facebook_account_device(customer_id, account_id, device_id, facebook_user_id=None):
     customer_id = sanitize_customer_id(customer_id)
     account_id = str(account_id or "").strip()
     device_id = sanitize_device_id(device_id)
@@ -2571,6 +2631,19 @@ def bind_facebook_account_device(customer_id, account_id, device_id):
     account = next((item for item in accounts if item.get("account_id") == account_id), None)
     if not account:
         raise ValueError("Facebook account không thuộc tài khoản hiện tại.")
+    if facebook_user_id is not None:
+        facebook_user_id = str(facebook_user_id).strip()
+        if not facebook_session_fingerprint(facebook_user_id):
+            raise ValueError('Facebook user ID phải là UID dạng số, không phải tên hiển thị.')
+    identity = account.get('facebook_user_id', '') if facebook_user_id is None else facebook_user_id
+    changing_device = device_id != account.get('device_id', '')
+    changing_identity = identity != account.get('facebook_user_id', '')
+    if changing_device or changing_identity:
+        for task in load_engine_tasks(customer_id):
+            if task.get('account_id') != account_id:
+                continue
+            if task.get('status') in TASK_ACTIVE_STATUSES or (changing_device and task.get('status') not in TASK_TERMINAL_STATUSES | {'draft'}):
+                raise ValueError('Hãy dừng campaign hiện tại trước khi thay đổi account/profile mapping.')
     devices = load_devices(customer_id)
     if device_id and device_id not in devices:
         raise ValueError("Desktop worker không thuộc tài khoản hiện tại.")
@@ -2582,6 +2655,7 @@ def bind_facebook_account_device(customer_id, account_id, device_id):
 
     if not postgres_enabled():
         account["device_id"] = device_id
+        account['facebook_user_id'] = identity
         account["browser_profile_id"] = f"chrome-profile:{device_id}" if device_id else ""
         account["updated_at"] = now_iso()
         write_json(customer_accounts_file(customer_id), accounts)
@@ -2593,15 +2667,16 @@ def bind_facebook_account_device(customer_id, account_id, device_id):
             cur.execute(
                 """
                 UPDATE fbpostpro_accounts
-                SET device_id = %s, browser_profile_id = %s, updated_at = NOW()
+                SET device_id = %s, browser_profile_id = %s, facebook_user_id = %s, updated_at = NOW()
                 WHERE customer_id = %s AND account_id = %s
                 """,
-                (device_id, f"chrome-profile:{device_id}" if device_id else "", customer_id, account_id),
+                (device_id, f"chrome-profile:{device_id}" if device_id else "", identity, customer_id, account_id),
             )
             if cur.rowcount != 1:
                 raise ValueError("Facebook account không tồn tại.")
         conn.commit()
     account["device_id"] = device_id
+    account['facebook_user_id'] = identity
     account["browser_profile_id"] = f"chrome-profile:{device_id}" if device_id else ""
     account["updated_at"] = now_iso()
     return account
@@ -2902,6 +2977,8 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
         if not device_id or device_id not in devices:
             raise ValueError(f"{account.get('display_name', account_id)} chưa được gắn với desktop worker/Chrome profile.")
         browser_profile_id = account.get("browser_profile_id") or f"chrome-profile:{device_id}"
+        if IS_PRODUCTION and lifecycle != 'draft' and not facebook_session_fingerprint(account.get('facebook_user_id')):
+            raise ValueError('Facebook account cần Facebook user ID dạng số để xác minh session trước khi chạy hoặc hẹn lịch.')
         group_list = []
         for group_url in bucket.get("groups", []):
             group_url = normalize_group_url(group_url)
@@ -3019,6 +3096,7 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
     return campaign
 
 
+@synchronized_state
 def activate_due_campaigns(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     now = utc_now()
@@ -3066,6 +3144,7 @@ def activate_due_campaigns(customer_id):
         conn.commit()
 
 
+@synchronized_state
 def activate_due_campaigns_all(limit=200):
     """Promote due PostgreSQL campaigns independently of worker traffic.
 
@@ -3138,7 +3217,7 @@ def scheduler_loop():
         except Exception as exc:
             SCHEDULER_LAST_ERROR = type(exc).__name__
             SCHEDULER_LAST_TICK_AT = now_iso()
-            app.logger.exception("scheduler_tick_failed")
+            app.logger.error("scheduler_tick_failed error_type=%s", type(exc).__name__)
         SCHEDULER_STOP_EVENT.wait(SCHEDULER_POLL_SECONDS)
 
 
@@ -3231,21 +3310,34 @@ def expire_stale_engine_tasks(customer_id, device_id=""):
 
 
 def get_engine_campaign(customer_id, campaign_id):
+    if postgres_enabled():
+        with postgres_connect() as conn:
+            row = conn.execute('SELECT * FROM fbpostpro_campaign_engine WHERE customer_id=%s AND campaign_id=%s',
+                (sanitize_customer_id(customer_id), str(campaign_id))).fetchone()
+        return _engine_campaign_from_row(row) if row else None
     return next(
         (item for item in load_engine_campaigns(customer_id) if item.get("campaign_id") == campaign_id),
         None,
     )
 
 
+@synchronized_state
 def sync_engine_campaign(customer_id, campaign_id):
     campaign = get_engine_campaign(customer_id, campaign_id)
     if not campaign:
         return None
-    tasks = load_engine_tasks(customer_id, campaign_id)
-    counts = {status: sum(task.get("status") == status for task in tasks) for status in {
+    counts = {status: 0 for status in {
         "draft", "scheduled", "pending", "retry_wait", "claimed", "running", "paused",
         "successful", "failed", "skipped", "cancelled",
     }}
+    if postgres_enabled():
+        with postgres_connect() as conn:
+            rows = conn.execute('SELECT status, COUNT(*) AS n FROM fbpostpro_campaign_tasks WHERE customer_id=%s AND campaign_id=%s GROUP BY status', (customer_id, campaign_id)).fetchall()
+        counts.update({row['status']: int(row['n']) for row in rows})
+    else:
+        for task in load_engine_tasks(customer_id, campaign_id):
+            counts[task['status']] = counts.get(task['status'], 0) + 1
+    total_tasks = sum(counts.values())
     successful = counts["successful"]
     failed = counts["failed"]
     cancelled = counts["cancelled"] + counts["skipped"]
@@ -3253,8 +3345,8 @@ def sync_engine_campaign(customer_id, campaign_id):
     pending = counts["draft"] + counts["scheduled"] + counts["pending"] + counts["retry_wait"]
     lifecycle = campaign.get("lifecycle", "draft")
     if lifecycle != "cancelled":
-        if successful + failed + cancelled == len(tasks) and tasks:
-            if successful == len(tasks):
+        if successful + failed + cancelled == total_tasks and total_tasks:
+            if successful == total_tasks:
                 lifecycle = "completed"
             elif successful:
                 lifecycle = "partial_failed"
@@ -3300,7 +3392,7 @@ def sync_engine_campaign(customer_id, campaign_id):
             conn.commit()
         campaign.update(changes)
     campaign["progress"] = {
-        "total": len(tasks), "pending": pending, "running": active,
+        "total": total_tasks, "pending": pending, "running": active,
         "successful": successful, "failed": failed,
         "skipped": counts["skipped"], "cancelled": counts["cancelled"],
     }
@@ -3319,6 +3411,8 @@ def _update_engine_task(customer_id, task_id, **changes):
         result = None
         for task in tasks:
             if task.get("task_id") == task_id:
+                if task.get('status') in TASK_TERMINAL_STATUSES:
+                    return task
                 task.update(clean)
                 result = task
                 break
@@ -3339,12 +3433,34 @@ def _update_engine_task(customer_id, task_id, **changes):
     with postgres_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"UPDATE fbpostpro_campaign_tasks SET {', '.join(columns)} WHERE customer_id = %s AND task_id = %s RETURNING *",
+                f"UPDATE fbpostpro_campaign_tasks SET {', '.join(columns)} WHERE customer_id = %s AND task_id = %s AND status NOT IN ('successful','failed','cancelled','skipped') RETURNING *",
                 tuple(params),
             )
             row = cur.fetchone()
         conn.commit()
     return _engine_task_from_row(row) if row else None
+
+
+def validate_job_execution(customer_id, device_id, job, payload):
+    if not isinstance(job, dict):
+        return 'Unknown job.'
+    if job.get('execution_token_required') or payload.get('execution_token'):
+        if not secrets.compare_digest(str(payload.get('execution_token', '')), str(job.get('execution_token', ''))):
+            return 'Stale execution attempt.'
+    if job.get('engine_task_id'):
+        if postgres_enabled():
+            with postgres_connect() as conn:
+                task = conn.execute('SELECT * FROM fbpostpro_campaign_tasks WHERE customer_id=%s AND task_id=%s',
+                    (customer_id, job['engine_task_id'])).fetchone()
+        else:
+            task = next((item for item in load_engine_tasks(customer_id, job.get('engine_campaign_id', '')) if item['task_id'] == job['engine_task_id']), None)
+        if not task or task['device_id'] != device_id or task['account_id'] != job.get('account_id'):
+            return 'Task ownership mismatch.'
+        if task['status'] in TASK_TERMINAL_STATUSES:
+            return 'Task already terminal.'
+        if job.get('execution_token_required') and task.get('lease_token') != job.get('execution_token'):
+            return 'Stale task lease.'
+    return ''
 
 
 def claim_next_engine_task(customer_id, device_id):
@@ -3356,6 +3472,17 @@ def claim_next_engine_task(customer_id, device_id):
     if not bound:
         return None, None
     device = load_devices(customer_id).get(device_id, {})
+    user = find_user_by_id(customer_id)
+    if not user or not user.get('is_active', True):
+        return None, None
+    if IS_PRODUCTION or device.get('session_verification_version') == 1:
+        session_error = verify_worker_session(bound, device_id, device)
+        if session_error:
+            state = get_campaign_state(customer_id)
+            if state.get('message') != session_error:
+                update_campaign_state(customer_id, message=session_error)
+                record_operational_log(customer_id, 'worker_session_unverified', 'warning', session_error, device_id=device_id)
+            return None, None
     if not device_is_online(device) or not bool(device.get("facebook_logged_in")):
         return None, None
 
@@ -3469,6 +3596,10 @@ def materialize_next_engine_job(customer_id, device_id):
     payload = dict(campaign.get("payload") or {})
     job = {
         "job_id": "job_" + task["task_id"],
+        'execution_token': task['lease_token'],
+        'execution_token_required': bool(IS_PRODUCTION or load_devices(customer_id).get(device_id, {}).get('session_verification_version') == 1),
+        'expected_session_fingerprint': facebook_session_fingerprint(next(
+            (account.get('facebook_user_id') for account in load_facebook_accounts(customer_id) if account['account_id'] == task['account_id']), '')),
         "engine_campaign_id": campaign["campaign_id"],
         "engine_task_id": task["task_id"],
         "idempotency_key": task["idempotency_key"],
@@ -3494,6 +3625,7 @@ def materialize_next_engine_job(customer_id, device_id):
     return job
 
 
+@synchronized_state
 def sync_engine_campaign_state(customer_id, campaign_id, job=None):
     campaign = sync_engine_campaign(customer_id, campaign_id)
     if not campaign:
@@ -3686,7 +3818,7 @@ def load_post(
             return str(data or "")
 
         path = customer_post_file(customer_id)
-        legacy = path.read_text(encoding="utf-8") if path.exists() else ""
+        legacy = path.read_text(encoding="utf-8") if not IS_PRODUCTION and path.exists() else ""
         postgres_customer_data_set(customer_id, "post_content", legacy)
         return legacy
 
@@ -3747,6 +3879,7 @@ def load_history(
 
 
 SENSITIVE_LOG_KEYS = {
+    'execution_token', 'lease_token', 'facebook_session_fingerprint',
     "password", "password_hash", "token", "token_hash", "cookie", "cookies",
     "secret", "session_secret", "agent_token", "authorization", "database_url",
     "api_key", "private_key", "webhook_secret",
@@ -5225,7 +5358,7 @@ def load_customer_image(customer_id, filename):
             return bytes(row.get("content") or b""), row.get("content_type") or "application/octet-stream"
 
         legacy_path = customer_upload_dir(customer_id) / safe_name
-        if legacy_path.exists() and legacy_path.is_file():
+        if not IS_PRODUCTION and legacy_path.exists() and legacy_path.is_file():
             content = legacy_path.read_bytes()
             content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
             with postgres_connect() as conn:
@@ -5329,8 +5462,16 @@ def device_is_online(
     ).total_seconds()
 
     return (
-        age <= max_age
+        -5 <= age <= max_age
+        and not device.get('revoked_at')
+        and device.get('status') != 'revoked'
+        and (not device.get('token_expires_at') or (parse_iso(device['token_expires_at']) or datetime.min.replace(tzinfo=timezone.utc)) > utc_now())
     )
+
+
+def public_device(device):
+    return {key: value for key, value in (device or {}).items()
+            if key not in {'token', 'token_hash', 'agent_token', 'facebook_session_fingerprint'}} if device else None
 
 
 def get_online_devices(
@@ -5359,9 +5500,7 @@ def get_online_devices(
                 "device_id"
             ] = device_id
 
-            online.append(
-                item
-            )
+            online.append(public_device(item))
 
     online.sort(
         key=lambda x:
@@ -5415,7 +5554,7 @@ def get_active_device(
                 "device_id"
             ] = active_id
 
-            return item
+            return public_device(item)
 
     online = (
         get_online_devices(
@@ -5452,7 +5591,7 @@ def get_paired_device(customer_id):
         item = dict(devices[active_id])
         item["device_id"] = active_id
         item["online"] = device_is_online(item)
-        return item
+        return public_device(item)
     if not devices:
         return None
     device_id, device = max(
@@ -5463,7 +5602,7 @@ def get_paired_device(customer_id):
     item["online"] = device_is_online(item)
     settings["active_device_id"] = device_id
     save_settings(customer_id, settings)
-    return item
+    return public_device(item)
 
 
 # ============================================================
@@ -6052,7 +6191,9 @@ def admin_required(
             and user.get("is_active", True)
             and user.get("role") == "admin"
         )
-        legacy_admin = bool(LEGACY_ADMIN_AUTH_ENABLED and session.get("admin_logged_in"))
+        legacy_admin = bool(not IS_PRODUCTION and LEGACY_ADMIN_AUTH_ENABLED and session.get("admin_logged_in"))
+        if legacy_admin and not role_admin:
+            app.logger.warning('legacy_admin_used environment=development endpoint=%s', request.endpoint)
 
         if not role_admin and not legacy_admin:
             if request.path.startswith("/api/admin/"):
@@ -6073,7 +6214,7 @@ def get_admin_actor_id():
     user = get_current_user()
     if user and user.get("role") == "admin" and user.get("is_active", True):
         return sanitize_customer_id(user.get("user_id", ""))
-    return "system_admin" if LEGACY_ADMIN_AUTH_ENABLED and session.get("admin_logged_in") else ""
+    return "system_admin" if not IS_PRODUCTION and LEGACY_ADMIN_AUTH_ENABLED and session.get("admin_logged_in") else ""
 
 
 # ============================================================
@@ -6221,17 +6362,23 @@ def _device_token_matches(device, supplied_token):
         return False
     if device.get("revoked_at") or device.get("status") == "revoked":
         return False
+    if device.get('token_expires_at'):
+        expiry = parse_iso(device['token_expires_at'])
+        if not expiry or expiry <= utc_now():
+            return False
     stored_hash = str(device.get("token_hash", ""))
     if stored_hash:
         return secrets.compare_digest(hash_device_token(supplied_token), stored_hash)
     legacy_token = str(device.get("token", ""))
     return bool(legacy_token and secrets.compare_digest(supplied_token, legacy_token))
 
+@synchronized_state
 def find_agent(
     device_id,
     token,
 ):
 
+    raw_device_id = str(device_id or '')
     device_id = (
         sanitize_device_id(
             device_id
@@ -6240,7 +6387,7 @@ def find_agent(
 
     if (
         not device_id
-        or not token
+        or not token or device_id != raw_device_id or len(device_id) > 100 or len(str(token)) > 256
     ):
 
         return (
@@ -6281,9 +6428,11 @@ def find_agent(
             continue
 
         if _device_token_matches(device, token):
-            if device.get("token") and not device.get("token_hash"):
+            if not device.get('token_expires_at') or device.get("token"):
                 devices[device_id] = {**device, "token_hash": hash_device_token(token)}
                 devices[device_id].pop("token", None)
+                devices[device_id].setdefault('token_issued_at', now_iso())
+                devices[device_id].setdefault('token_expires_at', (utc_now() + timedelta(days=LEGACY_DEVICE_TOKEN_GRACE_DAYS)).isoformat(timespec='seconds'))
                 save_devices(customer_id, devices)
                 device = devices[device_id]
 
@@ -6525,6 +6674,7 @@ def customer_image(
     "/save-post",
     methods=["POST"],
 )
+@synchronized_state
 def save_post():
     customer_id = get_customer_id()
     content = request.form.get("content", "").strip()
@@ -6636,6 +6786,7 @@ def save_post():
     "/delete-post-image/<filename>",
     methods=["POST"],
 )
+@synchronized_state
 def delete_post_image(
     filename
 ):
@@ -6690,6 +6841,7 @@ def delete_post_image(
     "/delete-all-post-images",
     methods=["POST"],
 )
+@synchronized_state
 def delete_all_post_images():
 
     customer_id = (
@@ -6881,7 +7033,7 @@ def bind_facebook_account(account_id):
     customer_id = get_customer_id()
     try:
         account = bind_facebook_account_device(
-            customer_id, account_id, request.form.get("device_id", "")
+            customer_id, account_id, request.form.get("device_id", ""), request.form.get('facebook_user_id')
         )
     except ValueError as exc:
         flash(str(exc), "warning")
@@ -7068,6 +7220,7 @@ def history():
     "/clear-history",
     methods=["POST"],
 )
+@synchronized_state
 def clear_history():
 
     customer_id = (
@@ -7093,6 +7246,7 @@ def clear_history():
 # ============================================================
 
 @app.route("/settings", methods=["GET", "POST"])
+@synchronized_state
 def settings():
     customer_id = get_customer_id()
     current = load_settings(customer_id)
@@ -7190,6 +7344,7 @@ def _make_pairing_code():
 
 
 @app.route("/api/extension/pair-code", methods=["POST"])
+@synchronized_state
 def extension_pair_code():
     customer_id = get_customer_id()
     if not customer_id:
@@ -7218,6 +7373,7 @@ def extension_pair_code():
 
 
 @app.route("/api/extension/pair", methods=["POST"])
+@synchronized_state
 def extension_pair():
     if not auth_rate_allowed("extension_pair", 20, 600):
         return jsonify({"error": "Too many pairing attempts. Try again later."}), 429
@@ -7240,6 +7396,8 @@ def extension_pair():
     token = secrets.token_urlsafe(40)
     devices = load_devices(customer_id)
     user = find_user_by_id(customer_id) or {}
+    if not user or not user.get('is_active', True):
+        return jsonify({'error': 'Account is unavailable.'}), 403
     device_limit = max(1, int(user.get("max_devices", 3) or 3))
     if len(devices) >= device_limit:
         return jsonify({
@@ -7248,6 +7406,8 @@ def extension_pair():
     devices[device_id] = {
         "name": device_name,
         "token_hash": hash_device_token(token),
+        'token_issued_at': now_iso(),
+        'token_expires_at': (utc_now() + timedelta(days=DEVICE_TOKEN_TTL_DAYS)).isoformat(timespec='seconds'),
         "mode": "chrome_extension",
         "paired_at": now_iso(),
         "last_seen": "",
@@ -7283,6 +7443,7 @@ def extension_pair():
 
 
 @app.route("/connector/disconnect", methods=["POST"])
+@synchronized_state
 def connector_disconnect():
     customer_id = get_customer_id()
     settings_data = load_settings(customer_id)
@@ -7667,7 +7828,7 @@ def api_connect_status():
 )
 def admin_login():
 
-    if not LEGACY_ADMIN_AUTH_ENABLED:
+    if IS_PRODUCTION or not LEGACY_ADMIN_AUTH_ENABLED:
         flash("Hãy đăng nhập bằng tài khoản có role admin.", "info")
         return redirect(url_for("login", next=request.args.get("next", "/admin")))
 
@@ -7725,7 +7886,7 @@ def admin_login():
             session.permanent = True
 
             return redirect(
-                next_url
+                safe_next_url(next_url)
                 or url_for(
                     "admin_ops.admin_dashboard"
                 )
@@ -7866,6 +8027,7 @@ def admin_devices():
     methods=["POST"],
 )
 @admin_required
+@synchronized_state
 def admin_approve_device(
     request_id
 ):
@@ -8063,6 +8225,7 @@ def admin_approve_device(
     methods=["POST"],
 )
 @admin_required
+@synchronized_state
 def admin_reject_device(
     request_id
 ):
@@ -8118,6 +8281,7 @@ def admin_reject_device(
     methods=["POST"],
 )
 @admin_required
+@synchronized_state
 def admin_disconnect_device(
     customer_id,
     device_id,
@@ -8197,6 +8361,9 @@ def admin_disconnect_device(
 @synchronized_state
 def run_campaign():
     customer_id = get_customer_id()
+    current_user = find_user_by_id(customer_id)
+    if not current_user or not current_user.get('is_active', True):
+        return jsonify({'error': 'Account is unavailable.'}), 403
     with FILE_LOCK:
         state = get_campaign_state(customer_id)
         if state.get("running"):
@@ -8611,6 +8778,7 @@ def resume_campaign():
 
 
 @app.route("/campaign-status")
+@synchronized_state
 def campaign_status():
     customer_id = get_customer_id()
     activate_due_campaigns(customer_id)
@@ -8632,7 +8800,7 @@ def campaign_status():
             worker = dict(devices.get(task_device_id, {}) or {})
             worker["device_id"] = task_device_id
             worker["online"] = device_is_online(worker)
-            engine_workers.append(worker)
+            engine_workers.append(public_device(worker))
     active_device = next((worker for worker in engine_workers if worker.get("online")), None)
     if not engine_workers:
         active_device = get_active_device(customer_id)
@@ -8642,6 +8810,18 @@ def campaign_status():
     )
     state["agent_device"] = active_device
     state["engine_workers"] = engine_workers
+    if state.get('status') in {'queued', 'running', 'scheduled', 'paused'} and engine_workers:
+        accounts = load_facebook_accounts(customer_id)
+        session_errors = []
+        for worker in engine_workers:
+            raw_worker = devices.get(worker['device_id'], {})
+            account = next((item for item in accounts if item.get('device_id') == worker['device_id']), None)
+            if account and (IS_PRODUCTION or raw_worker.get('session_verification_version') == 1):
+                error = verify_worker_session(account, worker['device_id'], raw_worker)
+                if error:
+                    session_errors.append(error)
+        if session_errors:
+            state['message'] = ' '.join(dict.fromkeys(session_errors))
     state["facebook"] = get_facebook_state(customer_id)
     device_id = sanitize_device_id(state.get("device_id", ""))
     current_command = load_control(customer_id).get(device_id, {}) if device_id else {}
@@ -8711,6 +8891,7 @@ def cloud_worker_authorized():
     "/api/cloud/job",
     methods=["GET"],
 )
+@synchronized_state
 def cloud_get_job():
 
     if not cloud_worker_authorized():
@@ -8868,6 +9049,7 @@ def cloud_control():
     "/api/cloud/status",
     methods=["POST"],
 )
+@synchronized_state
 def cloud_status():
 
     if not cloud_worker_authorized():
@@ -8917,6 +9099,12 @@ def cloud_status():
         return jsonify({"error": "Unknown cloud job"}), 404
     if job_id and str(job.get("job_id", "")) != job_id:
         return jsonify({"error": "Stale or unknown job"}), 409
+    if IS_PRODUCTION and not job_id:
+        return jsonify({'error': 'job_id required.'}), 400
+    if job.get('status') in AGENT_TERMINAL_STATUSES | {'cancelled', 'needs_facebook_session', 'needs_facebook_reauth'}:
+        if job.get('status') == status:
+            return jsonify({'ok': True, 'duplicate': True})
+        return jsonify({'error': 'Campaign is already terminal.'}), 409
 
     terminal = status in {
         "finished",
@@ -8968,6 +9156,7 @@ def cloud_status():
     "/api/cloud/control/ack",
     methods=["POST"],
 )
+@synchronized_state
 def cloud_control_ack():
 
     if not cloud_worker_authorized():
@@ -9030,12 +9219,22 @@ def agent_heartbeat():
     if worker_state not in {"idle", "busy", "paused"}:
         return jsonify({"error": "Invalid worker state"}), 400
     current_job_id = str(data.get("current_job_id", "")).strip()[:80]
+    if current_job_id and worker_state in {'busy', 'paused'}:
+        active_job = load_jobs(customer_id).get(device_id)
+        if not active_job or active_job.get('job_id') != current_job_id:
+            return jsonify({'error': 'Stale job heartbeat.'}), 409
+        execution_error = validate_job_execution(customer_id, device_id, active_job, data)
+        if execution_error or active_job.get('status') in AGENT_TERMINAL_STATUSES | {'cancelled'}:
+            return jsonify({'error': execution_error or 'Job already terminal.'}), 409
     interrupted_engine_campaign_id = ""
     device["worker_state"] = worker_state
     device["current_job_id"] = current_job_id
 
     facebook_logged_in = bool(data.get("facebook_logged_in", False))
     device["facebook_logged_in"] = facebook_logged_in
+    device['session_verification_version'] = 1 if data.get('session_verification_version') == 1 else 0
+    for field, bound in [('facebook_session_fingerprint', 64), ('browser_profile_id', 120), ('session_context', 180)]:
+        device[field] = str(data.get(field, ''))[:bound]
     devices[device_id] = device
     save_devices(customer_id, devices)
 
@@ -9131,6 +9330,8 @@ def agent_heartbeat():
             "display_name": bound_account.get("display_name", ""),
             "facebook_user_id": bound_account.get("facebook_user_id", ""),
         } if bound_account else None,
+        'session_verification_error': verify_worker_session(bound_account, device_id, device) if bound_account else '',
+        'token_expires_at': device.get('token_expires_at', ''),
     })
 
 
@@ -9285,10 +9486,18 @@ def agent_update_status():
             return jsonify({"error": "Stale or unknown job", "current_job_id": current_job_id}), 409
         job_id = reported_job_id or current_job_id
 
-        if isinstance(job, dict) and job.get("status") in AGENT_TERMINAL_STATUSES:
+        if isinstance(job, dict) and job.get("status") in AGENT_TERMINAL_STATUSES | {'cancelled'}:
             if not running and job.get("status") == status:
                 return jsonify({"ok": True, "job_id": job_id, "duplicate": True})
             return jsonify({"error": "Campaign is already terminal"}), 409
+
+        if not isinstance(job, dict):
+            return jsonify({'error': 'Unknown job.'}), 404
+        if job.get('engine_task_id') and not reported_job_id:
+            return jsonify({'error': 'job_id required for a mapped task.'}), 400
+        execution_error = validate_job_execution(customer_id, device_id, job, data)
+        if execution_error:
+            return jsonify({'error': execution_error}), 409
 
         duplicate_event = False
         if event and event_id and isinstance(job, dict):
@@ -9619,7 +9828,7 @@ def customer_info():
             device is not None,
 
         "agent_device":
-            device,
+            {key: value for key, value in device.items() if key not in {'token', 'token_hash', 'agent_token', 'facebook_session_fingerprint'}} if device else None,
 
         "campaign":
             get_campaign_state(
@@ -9680,10 +9889,20 @@ def ready():
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 AS ok")
                 ok = bool((cur.fetchone() or {}).get("ok"))
+                cur.execute("SELECT EXISTS(SELECT 1 FROM fbpostpro_migration_issues WHERE resolved_at IS NULL) AS blocked")
+                blocked = bool(cur.fetchone()['blocked'])
+                cur.execute("SELECT EXISTS(SELECT 1 FROM fbpostpro_schema_migrations WHERE migration_id='phase11_remaining_risk_remediation_v1') AS complete")
+                schema_complete = bool(cur.fetchone()['complete'])
+                cur.execute("SELECT to_regclass('public.idx_fbpostpro_one_active_account_task') IS NOT NULL AND to_regclass('public.idx_fbpostpro_one_account_per_device') IS NOT NULL AS valid")
+                schema_complete = schema_complete and bool(cur.fetchone()['valid'])
         if not ok:
             raise RuntimeError("database readiness query failed")
     except Exception:
         return jsonify({"status": "not_ready", "database": "unavailable"}), 503
+    if blocked or not schema_complete:
+        return jsonify({'status': 'not_ready', 'database': 'connected', 'schema': 'operator_review_required'}), 503
+    if SCHEDULER_ENABLED and (not SCHEDULER_THREAD or not SCHEDULER_THREAD.is_alive() or SCHEDULER_LAST_ERROR):
+        return jsonify({'status': 'not_ready', 'database': 'connected', 'scheduler': 'unavailable'}), 503
     return jsonify({"status": "ready", "database": "connected", "storage": "postgres"})
 
 
@@ -9783,6 +10002,24 @@ register_admin_ops(app, {
     "record_admin_audit": record_admin_audit,
     "load_admin_audit_logs": load_admin_audit_logs,
 })
+
+if psycopg:
+    app.register_error_handler(psycopg.OperationalError, database_unavailable)
+    app.register_error_handler(psycopg.InterfaceError, database_unavailable)
+
+class SafeApplicationLogFilter(logging.Filter):
+    def filter(self, record):
+        record.msg = str(_safe_log_value(record.getMessage()))
+        record.args = ()
+        if record.exc_info:
+            record.msg += ' error_type=' + record.exc_info[0].__name__
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
+app.logger.addFilter(SafeApplicationLogFilter())
+start_scheduler_thread()
 
 if __name__ == "__main__":
 

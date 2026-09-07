@@ -17,6 +17,7 @@ backups/
 *.dump.sha256
 *.partial
 .phase10-*
+.phase11-*
 
 # Secrets
 .env

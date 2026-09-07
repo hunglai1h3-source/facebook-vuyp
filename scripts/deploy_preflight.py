@@ -47,7 +47,7 @@ def check_connection(conn, max_age_hours=24):
             """SELECT receipt_id, backup_name, sha256 FROM public.fbpostpro_backup_receipts
                WHERE migration_id=%s AND created_at <= NOW()
                  AND created_at >= NOW() - (%s * INTERVAL '1 hour')
-               ORDER BY created_at DESC LIMIT 1""", (pending[-1], max_age_hours),
+               ORDER BY created_at DESC LIMIT 1""", (LATEST_MIGRATION, max_age_hours),
         )
         receipt = cur.fetchone()
         if not receipt or not re.fullmatch(r"[a-f0-9]{64}", receipt[2] or ""):
