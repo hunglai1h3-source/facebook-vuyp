@@ -9878,45 +9878,143 @@ def health():
 
 @app.route("/ready")
 def ready():
+    # Production bắt buộc phải có PostgreSQL.
+    # Local development vẫn có thể dùng JSON.
     if not postgres_enabled():
         return jsonify({
             "status": "ready" if not IS_PRODUCTION else "not_ready",
             "database": "not_configured",
             "storage": "development_json",
+            "scheduler": "disabled",
         }), (200 if not IS_PRODUCTION else 503)
+
+    # ============================================================
+    # DATABASE + SCHEMA READINESS
+    # ============================================================
     try:
         with postgres_connect() as conn:
             with conn.cursor() as cur:
+                # Kiểm tra database có thực sự query được không.
                 cur.execute("SELECT 1 AS ok")
-                ok = bool((cur.fetchone() or {}).get("ok"))
-                cur.execute("SELECT EXISTS(SELECT 1 FROM fbpostpro_migration_issues WHERE resolved_at IS NULL) AS blocked")
-                blocked = bool(cur.fetchone()['blocked'])
-                cur.execute("SELECT EXISTS(SELECT 1 FROM fbpostpro_schema_migrations WHERE migration_id='phase11_remaining_risk_remediation_v1') AS complete")
-                schema_complete = bool(cur.fetchone()['complete'])
-                cur.execute("SELECT to_regclass('public.idx_fbpostpro_one_active_account_task') IS NOT NULL AND to_regclass('public.idx_fbpostpro_one_account_per_device') IS NOT NULL AS valid")
-                schema_complete = schema_complete and bool(cur.fetchone()['valid'])
-        if not ok:
-            raise RuntimeError("database readiness query failed")
-    except Exception:
-        return jsonify({"status": "not_ready", "database": "unavailable"}), 503
-    if blocked or not schema_complete:
-        return jsonify({'status': 'not_ready', 'database': 'connected', 'schema': 'operator_review_required'}), 503
-        scheduler_status = "disabled"
+                ok = bool(
+                    (cur.fetchone() or {}).get("ok")
+                )
 
-    if SCHEDULER_ENABLED:
-    if SCHEDULER_THREAD and SCHEDULER_THREAD.is_alive() and not SCHEDULER_LAST_ERROR:
-        scheduler_status = "running"
-    else:
-        scheduler_status = "unavailable"
+                # Kiểm tra còn migration issue chưa được xử lý hay không.
+                cur.execute(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM fbpostpro_migration_issues
+                        WHERE resolved_at IS NULL
+                    ) AS blocked
+                    """
+                )
+                blocked = bool(
+                    (cur.fetchone() or {}).get("blocked")
+                )
+
+                # Kiểm tra migration Phase 11 đã hoàn thành.
+                cur.execute(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM fbpostpro_schema_migrations
+                        WHERE migration_id = 'phase11_remaining_risk_remediation_v1'
+                    ) AS complete
+                    """
+                )
+                schema_complete = bool(
+                    (cur.fetchone() or {}).get("complete")
+                )
+
+                # Kiểm tra các safety index quan trọng đã tồn tại.
+                cur.execute(
+                    """
+                    SELECT
+                        to_regclass(
+                            'public.idx_fbpostpro_one_active_account_task'
+                        ) IS NOT NULL
+                        AND
+                        to_regclass(
+                            'public.idx_fbpostpro_one_account_per_device'
+                        ) IS NOT NULL
+                        AS valid
+                    """
+                )
+
+                indexes_valid = bool(
+                    (cur.fetchone() or {}).get("valid")
+                )
+
+                schema_complete = (
+                    schema_complete
+                    and indexes_valid
+                )
+
+        if not ok:
+            raise RuntimeError(
+                "database readiness query failed"
+            )
+
+    except Exception as exc:
+        app.logger.error(
+            "readiness_database_failed error_type=%s",
+            type(exc).__name__,
+        )
 
         return jsonify({
-    "status": "ready",
-    "database": "connected",
-    "storage": "postgres",
-    "scheduler": scheduler_status,
-})
+            "status": "not_ready",
+            "database": "unavailable",
+            "storage": "postgres",
+        }), 503
 
+    # ============================================================
+    # SCHEMA / MIGRATION SAFETY
+    # ============================================================
+    if blocked or not schema_complete:
+        app.logger.warning(
+            "readiness_schema_blocked "
+            "blocked=%s schema_complete=%s",
+            blocked,
+            schema_complete,
+        )
 
+        return jsonify({
+            "status": "not_ready",
+            "database": "connected",
+            "storage": "postgres",
+            "schema": "operator_review_required",
+        }), 503
+
+    # ============================================================
+    # SCHEDULER STATUS
+    #
+    # Scheduler không được làm Render deployment fail.
+    # Database/schema vẫn là hard readiness requirement.
+    # ============================================================
+    scheduler_status = "disabled"
+
+    if SCHEDULER_ENABLED:
+        if (
+            SCHEDULER_THREAD
+            and SCHEDULER_THREAD.is_alive()
+            and not SCHEDULER_LAST_ERROR
+        ):
+            scheduler_status = "running"
+        else:
+            scheduler_status = "unavailable"
+
+    # ============================================================
+    # READY
+    # ============================================================
+    return jsonify({
+        "status": "ready",
+        "database": "connected",
+        "storage": "postgres",
+        "schema": "ready",
+        "scheduler": scheduler_status,
+    }), 200
 # ============================================================
 # FILE TOO LARGE
 # ============================================================
