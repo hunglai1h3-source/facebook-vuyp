@@ -3,13 +3,15 @@ services:
     name: fb-post-pro
     runtime: python
     region: oregon
-    plan: free
+    # Always-on instance avoids scheduler/worker polling delays caused by free-tier sleep.
+    plan: 0.5c-512mb
 
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120 --access-logfile - --error-logfile - --max-requests 2000 --max-requests-jitter 200
 
     healthCheckPath: /ready
-    autoDeployTrigger: commit
+    # Deploy manually after the documented pre-migration backup step.
+    autoDeployTrigger: off
 
     envVars:
       - key: SECRET_KEY
@@ -24,9 +26,6 @@ services:
       - key: ENABLE_LEGACY_ADMIN_AUTH
         value: "false"
 
-      - key: ADMIN_PASSWORD
-        sync: false
-
       - key: SESSION_LIFETIME_HOURS
         value: "12"
 
@@ -35,6 +34,9 @@ services:
 
       - key: AUDIT_LOG_RETENTION_DAYS
         value: "365"
+
+      - key: LOG_CLEANUP_BATCH_SIZE
+        value: "10000"
 
       - key: PYTHONUNBUFFERED
         value: "1"

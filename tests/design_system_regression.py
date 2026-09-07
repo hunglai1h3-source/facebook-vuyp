@@ -45,6 +45,8 @@ def check_contracts():
             "extension/popup.css", "templates/compose.html",
             "extension/service_worker.js", "extension/web_bridge.js", "app.py",
             "templates/groups.html",
+            # Phase 10 intentionally hardens environment/deploy configuration.
+            "render.yaml", ".env.example",
         }:
             continue
         assert contract(ROOT / relative) == digest, f"Business contract changed: {relative}"

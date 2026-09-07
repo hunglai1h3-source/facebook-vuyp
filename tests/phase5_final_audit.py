@@ -51,6 +51,7 @@ EXPECTED_ROUTES = {
     ('POST', '/api/agent/status'), ('GET', '/api/agent/control'),
     ('POST', '/api/agent/control/ack'), ('GET', '/api/agent/image/<filename>'),
     ('GET', '/customer-info'), ('POST', '/new-customer-session'), ('GET', '/health'),
+    ('GET', '/ready'),
 }
 
 

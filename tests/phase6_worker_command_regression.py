@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def load_app(temp):
     os.environ.update(
+        APP_ENV="development",
         DATA_ROOT=str(Path(temp) / "data"),
         USERS_FILE=str(Path(temp) / "users.json"),
         DATABASE_URL="",
         SECRET_KEY="phase6-test-secret",
+        ENABLE_LEGACY_ADMIN_AUTH="false",
     )
     spec = importlib.util.spec_from_file_location("app", ROOT / "app.py")
     module = importlib.util.module_from_spec(spec)

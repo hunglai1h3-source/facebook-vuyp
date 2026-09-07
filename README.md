@@ -5,8 +5,8 @@ Production deployment, backup, restore and incident procedures are documented in
 ## Kiến trúc
 
 - **Render Web Service**: Flask UI/API, tài khoản FB POST PRO, chiến dịch, lịch sử, pairing.
-- **Render PostgreSQL**: tài khoản người dùng.
-- **Persistent Disk**: bài viết, danh sách Group, ảnh, job và device state.
+- **Render PostgreSQL**: nguồn dữ liệu production duy nhất cho user, bài viết, Group, campaign/task, worker/device, mapping, logs, quota và settings.
+- **`DATA_ROOT`**: chỉ dùng làm cache/fallback tạm trong development hoặc recovery; production không phụ thuộc filesystem ephemeral để giữ dữ liệu khách hàng.
 - **FB POST PRO Connector (Chrome Extension)**: chạy trên Chrome của khách, dùng chính Facebook đang đăng nhập trên `facebook.com`.
 - Server **không nhận mật khẩu Facebook và không nhận giá trị cookie Facebook**. Extension chỉ gửi boolean `facebook_logged_in`.
 
@@ -43,11 +43,11 @@ Mở `http://127.0.0.1:5000`.
 
 Repo đã có `render.yaml`.
 
-- Web service chạy `gunicorn app:app --workers 1 --threads 8 --timeout 120`.
-- Region: Singapore.
-- Persistent disk: `/var/data/fbpostpro`.
-- PostgreSQL được tạo cùng Blueprint.
-- `ADMIN_PASSWORD` cần tự nhập trên Render khi Blueprint yêu cầu.
+- Web service chạy Gunicorn trên instance always-on và dùng health check `/ready`.
+- PostgreSQL là storage production duy nhất cho user, group, campaign, task, device, image, log và settings.
+- `DATA_ROOT=/tmp/fbpostpro` chỉ là cache/fallback tạm; không chứa dữ liệu production cần giữ.
+- Auto-deploy được tắt để operator backup trước migration rồi deploy thủ công.
+- Admin production dùng role `admin`; legacy `ADMIN_PASSWORD` bị tắt mặc định.
 
 Có thể deploy bằng **New → Blueprint** và chọn repository chứa file này.
 

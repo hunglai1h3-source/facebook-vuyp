@@ -91,10 +91,37 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=IS_PRODUCTION,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_NAME="fbpostpro_session",
+    SESSION_REFRESH_EACH_REQUEST=False,
 )
 if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-trusted_hosts = [item.strip() for item in os.environ.get("ALLOWED_HOSTS", "").split(",") if item.strip()]
+
+
+def normalize_trusted_host(value):
+    """Accept host[:port] or a leading-dot subdomain pattern, never URLs/wildcards."""
+    value = str(value or "").strip().lower().rstrip(".")
+    if not value or any(marker in value for marker in ("://", "/", "\\", "@", "*")):
+        return ""
+    if not re.fullmatch(r"\.?[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?", value):
+        return ""
+    return value
+
+
+raw_trusted_hosts = [item.strip() for item in os.environ.get("ALLOWED_HOSTS", "").split(",") if item.strip()]
+trusted_hosts = [normalize_trusted_host(item) for item in raw_trusted_hosts]
+invalid_trusted_hosts = [item for item, normalized in zip(raw_trusted_hosts, trusted_hosts) if not normalized]
+trusted_hosts = [item for item in trusted_hosts if item]
+render_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+normalized_render_hostname = normalize_trusted_host(render_hostname)
+if render_hostname and not normalized_render_hostname:
+    invalid_trusted_hosts.append("RENDER_EXTERNAL_HOSTNAME")
+if normalized_render_hostname and normalized_render_hostname not in trusted_hosts:
+    trusted_hosts.append(normalized_render_hostname)
+if IS_PRODUCTION and invalid_trusted_hosts:
+    raise RuntimeError("Production ALLOWED_HOSTS contains an invalid host value.")
+if IS_PRODUCTION and not trusted_hosts:
+    raise RuntimeError("Production requires ALLOWED_HOSTS or RENDER_EXTERNAL_HOSTNAME.")
 if trusted_hosts:
     app.config["TRUSTED_HOSTS"] = trusted_hosts
 
@@ -164,17 +191,75 @@ MAX_JSON_REQUEST_BYTES = 2 * 1024 * 1024
 try:
     OPERATIONAL_LOG_RETENTION_DAYS = min(3650, max(1, int(os.environ.get("OPERATIONAL_LOG_RETENTION_DAYS", "30"))))
     AUDIT_LOG_RETENTION_DAYS = min(3650, max(30, int(os.environ.get("AUDIT_LOG_RETENTION_DAYS", "365"))))
+    LOG_CLEANUP_BATCH_SIZE = min(100000, max(100, int(os.environ.get("LOG_CLEANUP_BATCH_SIZE", "10000"))))
 except ValueError:
-    OPERATIONAL_LOG_RETENTION_DAYS, AUDIT_LOG_RETENTION_DAYS = 30, 365
+    OPERATIONAL_LOG_RETENTION_DAYS, AUDIT_LOG_RETENTION_DAYS, LOG_CLEANUP_BATCH_SIZE = 30, 365, 10000
 LOG_CLEANUP_LOCK = threading.Lock()
 LOG_CLEANUP_NEXT_AT = 0.0
+AUTH_RATE_LOCK = threading.Lock()
+AUTH_RATE_BUCKETS = {}
+
+
+def auth_rate_allowed(scope, limit, window_seconds):
+    """Use PostgreSQL atomically in production; local development uses process memory."""
+    scope = str(scope)[:32]
+    client_identity = str(request.remote_addr or "unknown")[:80]
+    if postgres_enabled():
+        rate_key = hashlib.sha256(f"{scope}|{client_identity}".encode("utf-8")).hexdigest()
+        try:
+            init_persistence_tables()
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO fbpostpro_rate_limits
+                            (rate_key, scope, window_started_at, request_count, updated_at)
+                        VALUES (%s, %s, NOW(), 1, NOW())
+                        ON CONFLICT (rate_key) DO UPDATE SET
+                            request_count = CASE
+                                WHEN fbpostpro_rate_limits.window_started_at <= NOW() - (%s * INTERVAL '1 second') THEN 1
+                                ELSE fbpostpro_rate_limits.request_count + 1
+                            END,
+                            window_started_at = CASE
+                                WHEN fbpostpro_rate_limits.window_started_at <= NOW() - (%s * INTERVAL '1 second') THEN NOW()
+                                ELSE fbpostpro_rate_limits.window_started_at
+                            END,
+                            scope = EXCLUDED.scope,
+                            updated_at = NOW()
+                        RETURNING request_count
+                        """,
+                        (rate_key, scope, int(window_seconds), int(window_seconds)),
+                    )
+                    count = int((cur.fetchone() or {}).get("request_count", limit + 1))
+                conn.commit()
+            return count <= int(limit)
+        except Exception:
+            app.logger.exception("shared_rate_limit_unavailable scope=%s", scope)
+            if IS_PRODUCTION:
+                return False
+
+    now = time.monotonic()
+    key = (scope, client_identity)
+    with AUTH_RATE_LOCK:
+        recent = [stamp for stamp in AUTH_RATE_BUCKETS.get(key, []) if now - stamp < window_seconds]
+        if len(recent) >= limit:
+            AUTH_RATE_BUCKETS[key] = recent
+            return False
+        recent.append(now)
+        AUTH_RATE_BUCKETS[key] = recent
+        if len(AUTH_RATE_BUCKETS) > 10000:
+            stale_before = now - max(window_seconds, 3600)
+            for bucket_key in list(AUTH_RATE_BUCKETS)[:2000]:
+                if not AUTH_RATE_BUCKETS[bucket_key] or AUTH_RATE_BUCKETS[bucket_key][-1] < stale_before:
+                    AUTH_RATE_BUCKETS.pop(bucket_key, None)
+        return True
 
 
 @app.before_request
 def production_request_guard():
     incoming_request_id = str(request.headers.get("X-Request-ID", ""))[:80]
     g.request_id = incoming_request_id if re.fullmatch(r"[A-Za-z0-9_.:-]{8,80}", incoming_request_id) else "req_" + uuid.uuid4().hex[:24]
-    if IS_PRODUCTION:
+    if IS_PRODUCTION and request.path not in {"/health", "/ready"}:
         try:
             maybe_cleanup_expired_logs()
         except Exception:
@@ -208,6 +293,12 @@ def production_response_headers(response):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if IS_PRODUCTION:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; "
+            "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        )
     if request.path.startswith("/admin") or request.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
     return response
@@ -249,12 +340,13 @@ ADMIN_PASSWORD = os.environ.get(
     "ADMIN_PASSWORD",
     "",
 ).strip()
-LEGACY_ADMIN_AUTH_ENABLED = os.environ.get(
+LEGACY_ADMIN_AUTH_REQUESTED = os.environ.get(
     "ENABLE_LEGACY_ADMIN_AUTH",
     "true" if not IS_PRODUCTION else "false",
 ).strip().lower() in {"1", "true", "yes"}
-if IS_PRODUCTION and LEGACY_ADMIN_AUTH_ENABLED and len(ADMIN_PASSWORD) < 16:
-    raise RuntimeError("Legacy admin auth requires ADMIN_PASSWORD with at least 16 characters in production.")
+LEGACY_ADMIN_AUTH_ENABLED = bool(LEGACY_ADMIN_AUTH_REQUESTED and not IS_PRODUCTION)
+if IS_PRODUCTION and LEGACY_ADMIN_AUTH_REQUESTED:
+    app.logger.warning("legacy_admin_auth_ignored environment=production")
 
 # Cloud Worker dùng token riêng để nhận job từ Web Service.
 # Trên Render, đặt cùng một CLOUD_WORKER_TOKEN cho Web + Worker.
@@ -262,6 +354,14 @@ CLOUD_WORKER_TOKEN = os.environ.get(
     "CLOUD_WORKER_TOKEN",
     "",
 ).strip()
+if IS_PRODUCTION and CLOUD_WORKER_TOKEN and len(CLOUD_WORKER_TOKEN) < 32:
+    raise RuntimeError("CLOUD_WORKER_TOKEN must contain at least 32 characters in production.")
+
+try:
+    DEVICE_TOKEN_TTL_DAYS = min(365, max(7, int(os.environ.get("DEVICE_TOKEN_TTL_DAYS", "90"))))
+    LEGACY_DEVICE_TOKEN_GRACE_DAYS = min(90, max(1, int(os.environ.get("LEGACY_DEVICE_TOKEN_GRACE_DAYS", "30"))))
+except ValueError:
+    DEVICE_TOKEN_TTL_DAYS, LEGACY_DEVICE_TOKEN_GRACE_DAYS = 90, 30
 
 # Browserbase: mỗi tài khoản FB POST PRO dùng một Context Facebook riêng.
 BROWSERBASE_API_KEY = os.environ.get(
@@ -323,6 +423,17 @@ TASK_TERMINAL_STATUSES = {"successful", "failed", "skipped", "cancelled"}
 TASK_ACTIVE_STATUSES = {"claimed", "running", "paused"}
 DEFAULT_TASK_RETRY_LIMIT = 1
 TASK_LEASE_SECONDS = 300
+try:
+    SCHEDULER_POLL_SECONDS = min(300, max(5, int(os.environ.get("SCHEDULER_POLL_SECONDS", "15"))))
+except ValueError:
+    SCHEDULER_POLL_SECONDS = 15
+SCHEDULER_ENABLED = os.environ.get(
+    "ENABLE_SCHEDULER", "true" if IS_PRODUCTION else "false"
+).strip().lower() in {"1", "true", "yes"}
+SCHEDULER_STOP_EVENT = threading.Event()
+SCHEDULER_THREAD = None
+SCHEDULER_LAST_TICK_AT = ""
+SCHEDULER_LAST_ERROR = ""
 
 AGENT_TERMINAL_STATUSES = {
     "finished",
@@ -411,6 +522,12 @@ def sanitize_device_id(value):
         "",
         str(value or ""),
     )
+
+
+def request_json_object():
+    """Return a JSON object only; worker/browser APIs must not trust other JSON shapes."""
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else None
 
 
 def get_customer_id():
@@ -794,6 +911,8 @@ def init_persistence_tables():
     with PERSISTENCE_INIT_LOCK:
         if PERSISTENCE_TABLES_READY:
             return
+        applied_migrations = []
+        skipped_constraints = []
         with postgres_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -804,6 +923,47 @@ def init_persistence_tables():
                         description TEXT NOT NULL DEFAULT ''
                     )
                     """
+                )
+                # Serialize startup migrations across web instances without a new service.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext('fbpostpro_schema_migrations'))")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_migration_issues (
+                        issue_key VARCHAR(120) PRIMARY KEY,
+                        issue_type VARCHAR(80) NOT NULL,
+                        object_name VARCHAR(120) NOT NULL,
+                        affected_count INTEGER NOT NULL DEFAULT 0,
+                        sample_data JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        resolved_at TIMESTAMPTZ
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_backup_receipts (
+                        receipt_id VARCHAR(80) PRIMARY KEY,
+                        migration_id VARCHAR(100) NOT NULL DEFAULT 'routine',
+                        backup_name VARCHAR(255) NOT NULL,
+                        sha256 VARCHAR(64) NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_rate_limits (
+                        rate_key VARCHAR(64) PRIMARY KEY,
+                        scope VARCHAR(32) NOT NULL,
+                        window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        request_count INTEGER NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_rate_limits_updated ON fbpostpro_rate_limits (updated_at)"
                 )
                 cur.execute(
                     """
@@ -974,19 +1134,71 @@ def init_persistence_tables():
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_tasks_campaign ON fbpostpro_campaign_tasks (campaign_id, status)"
                 )
                 cur.execute(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_fbpostpro_one_active_account_task
-                    ON fbpostpro_campaign_tasks (customer_id, account_id)
-                    WHERE status IN ('claimed', 'running', 'paused')
-                    """
+                    """SELECT customer_id, account_id, COUNT(*) AS duplicate_count,
+                              COUNT(*) OVER() AS issue_count,
+                              (ARRAY_AGG(task_id ORDER BY task_id))[1:20] AS record_ids
+                       FROM fbpostpro_campaign_tasks
+                       WHERE status IN ('claimed','running','paused')
+                       GROUP BY customer_id, account_id HAVING COUNT(*) > 1
+                       ORDER BY COUNT(*) DESC LIMIT 20"""
                 )
+                active_task_duplicates = cur.fetchall()
+                if active_task_duplicates:
+                    skipped_constraints.append("idx_fbpostpro_one_active_account_task")
+                    cur.execute(
+                        """INSERT INTO fbpostpro_migration_issues
+                               (issue_key, issue_type, object_name, affected_count, sample_data,
+                                detected_at, last_seen_at, resolved_at)
+                           VALUES (%s, %s, %s, %s, %s::jsonb, NOW(), NOW(), NULL)
+                           ON CONFLICT (issue_key) DO UPDATE SET
+                               affected_count=EXCLUDED.affected_count,
+                               sample_data=EXCLUDED.sample_data, last_seen_at=NOW(), resolved_at=NULL""",
+                        ("duplicate_active_account_tasks", "legacy_duplicate",
+                         "idx_fbpostpro_one_active_account_task", int(active_task_duplicates[0]["issue_count"]),
+                         json.dumps(active_task_duplicates, ensure_ascii=False, default=str)),
+                    )
+                else:
+                    cur.execute(
+                        """CREATE UNIQUE INDEX IF NOT EXISTS idx_fbpostpro_one_active_account_task
+                           ON fbpostpro_campaign_tasks (customer_id, account_id)
+                           WHERE status IN ('claimed', 'running', 'paused')"""
+                    )
+                    cur.execute(
+                        """UPDATE fbpostpro_migration_issues SET resolved_at=NOW(), last_seen_at=NOW()
+                           WHERE issue_key='duplicate_active_account_tasks' AND resolved_at IS NULL"""
+                    )
                 cur.execute(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_fbpostpro_one_account_per_device
-                    ON fbpostpro_accounts (customer_id, device_id)
-                    WHERE device_id <> ''
-                    """
+                    """SELECT customer_id, device_id, COUNT(*) AS duplicate_count,
+                              COUNT(*) OVER() AS issue_count,
+                              (ARRAY_AGG(account_id ORDER BY account_id))[1:20] AS record_ids
+                       FROM fbpostpro_accounts WHERE device_id <> ''
+                       GROUP BY customer_id, device_id HAVING COUNT(*) > 1
+                       ORDER BY COUNT(*) DESC LIMIT 20"""
                 )
+                account_device_duplicates = cur.fetchall()
+                if account_device_duplicates:
+                    skipped_constraints.append("idx_fbpostpro_one_account_per_device")
+                    cur.execute(
+                        """INSERT INTO fbpostpro_migration_issues
+                               (issue_key, issue_type, object_name, affected_count, sample_data,
+                                detected_at, last_seen_at, resolved_at)
+                           VALUES (%s, %s, %s, %s, %s::jsonb, NOW(), NOW(), NULL)
+                           ON CONFLICT (issue_key) DO UPDATE SET
+                               affected_count=EXCLUDED.affected_count,
+                               sample_data=EXCLUDED.sample_data, last_seen_at=NOW(), resolved_at=NULL""",
+                        ("duplicate_account_device_bindings", "legacy_duplicate",
+                         "idx_fbpostpro_one_account_per_device", int(account_device_duplicates[0]["issue_count"]),
+                         json.dumps(account_device_duplicates, ensure_ascii=False, default=str)),
+                    )
+                else:
+                    cur.execute(
+                        """CREATE UNIQUE INDEX IF NOT EXISTS idx_fbpostpro_one_account_per_device
+                           ON fbpostpro_accounts (customer_id, device_id) WHERE device_id <> ''"""
+                    )
+                    cur.execute(
+                        """UPDATE fbpostpro_migration_issues SET resolved_at=NOW(), last_seen_at=NOW()
+                           WHERE issue_key='duplicate_account_device_bindings' AND resolved_at IS NULL"""
+                    )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS fbpostpro_operational_logs (
@@ -1035,19 +1247,51 @@ def init_persistence_tables():
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_customer_data_key ON fbpostpro_customer_data (data_key)"
                 )
                 cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_devices_lookup ON fbpostpro_customer_data USING GIN (data) WHERE data_key='devices'"
+                )
+                cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_tasks_account_status ON fbpostpro_campaign_tasks (customer_id, account_id, status, created_at DESC)"
                 )
                 cur.execute(
-                    """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
-                       VALUES ('phase09_admin_operations_v1', 'Admin quota, operational log and audit log schema')
-                       ON CONFLICT (migration_id) DO NOTHING"""
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_tasks_scheduler ON fbpostpro_campaign_tasks (customer_id, status, next_retry_at, created_at)"
                 )
                 cur.execute(
-                    """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
-                       VALUES ('phase10_production_hardening_v1', 'Request IDs, retention support and production indexes')
-                       ON CONFLICT (migration_id) DO NOTHING"""
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_tasks_group ON fbpostpro_campaign_tasks (customer_id, group_url)"
                 )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_engine_lifecycle_due ON fbpostpro_campaign_engine (lifecycle, scheduled_at)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_logs_campaign_created ON fbpostpro_operational_logs (campaign_id, created_at DESC) WHERE campaign_id <> ''"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_logs_device_created ON fbpostpro_operational_logs (device_id, created_at DESC) WHERE device_id <> ''"
+                )
+                migrations = (
+                    ("account_system_v1", "User accounts, role, lock state and quota columns"),
+                    ("phase09_admin_operations_v1", "Admin quota, operational log and audit log schema"),
+                    ("phase10_production_hardening_v1", "Request IDs, retention support and production indexes"),
+                    ("phase10_production_hardening_v2", "Conditional safety constraints and targeted scheduler/log indexes"),
+                    ("phase11_remaining_risk_remediation_v1", "Shared rate limits, backup receipts and persistent migration issue reports"),
+                )
+                for migration_id, description in migrations:
+                    cur.execute(
+                        """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
+                           VALUES (%s, %s) ON CONFLICT (migration_id) DO NOTHING
+                           RETURNING migration_id""",
+                        (migration_id, description),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        applied_migrations.append(row["migration_id"])
             conn.commit()
+        for migration_id in applied_migrations:
+            app.logger.info("schema_migration_applied migration_id=%s", migration_id)
+        for index_name in skipped_constraints:
+            app.logger.warning(
+                "schema_constraint_blocked index=%s reason=existing_duplicate_rows report=fbpostpro_migration_issues operator_action=required",
+                index_name,
+            )
         PERSISTENCE_TABLES_READY = True
 
 
@@ -1559,6 +1803,7 @@ def migrate_json_users_to_postgres():
                 if not user_id or not username or not email or not password_hash:
                     continue
 
+                cur.execute("SAVEPOINT migrate_json_user_row")
                 try:
                     cur.execute(
                         """
@@ -1608,8 +1853,10 @@ def migrate_json_users_to_postgres():
                         imported += 1
                 except Exception:
                     # Một tài khoản legacy trùng username/email không được làm hỏng deploy.
-                    conn.rollback()
+                    cur.execute("ROLLBACK TO SAVEPOINT migrate_json_user_row")
+                    cur.execute("RELEASE SAVEPOINT migrate_json_user_row")
                     continue
+                cur.execute("RELEASE SAVEPOINT migrate_json_user_row")
         conn.commit()
 
     return imported
@@ -1691,6 +1938,7 @@ def require_customer_login():
             "/register",
             "/logout",
             "/health",
+            "/ready",
         }
     ):
         return None
@@ -1725,6 +1973,8 @@ def register():
     error = ""
 
     if request.method == "POST":
+        if not auth_rate_allowed("register", 20, 3600):
+            return "Too many registration attempts. Try again later.", 429
 
         display_name = str(
             request.form.get("display_name", "")
@@ -1779,7 +2029,7 @@ def register():
                     user_id,
                 )
 
-                session.pop("customer_id", None)
+                session.clear()
                 session["user_id"] = user_id
                 session["username"] = username
                 session.permanent = True
@@ -1807,6 +2057,8 @@ def login():
     next_url = request.args.get("next", "")
 
     if request.method == "POST":
+        if not auth_rate_allowed("login", 10, 900):
+            return "Too many login attempts. Try again later.", 429
         next_url = request.form.get("next", "")
         login_value = request.form.get("login", "")
         password = request.form.get("password", "")
@@ -1827,7 +2079,7 @@ def login():
             user_id = user["user_id"]
             update_user_last_login(user_id)
 
-            session.pop("customer_id", None)
+            session.clear()
             session["user_id"] = user_id
             session["username"] = user.get("username", "")
             session.permanent = remember
@@ -1848,9 +2100,7 @@ def login():
 @app.route("/logout")
 def logout():
 
-    session.pop("user_id", None)
-    session.pop("username", None)
-    session.pop("customer_id", None)
+    session.clear()
 
     return redirect(
         url_for("login")
@@ -1875,6 +2125,8 @@ def init_groups_table():
     if not postgres_enabled():
         return
 
+    init_persistence_tables()
+
     with postgres_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1898,6 +2150,12 @@ def init_groups_table():
                 CREATE INDEX IF NOT EXISTS idx_fbpostpro_groups_customer
                 ON fbpostpro_groups (customer_id)
                 """
+            )
+
+            cur.execute(
+                """INSERT INTO fbpostpro_schema_migrations (migration_id, description)
+                   VALUES ('phase07_bulk_groups_v1', 'Persistent tenant-scoped group storage')
+                   ON CONFLICT (migration_id) DO NOTHING"""
             )
 
         conn.commit()
@@ -2808,11 +3066,101 @@ def activate_due_campaigns(customer_id):
         conn.commit()
 
 
+def activate_due_campaigns_all(limit=200):
+    """Promote due PostgreSQL campaigns independently of worker traffic.
+
+    The conditional UPDATE is the dispatch gate: concurrent scheduler instances can
+    observe a campaign, but only one can transition it from scheduled to queued.
+    """
+    global SCHEDULER_LAST_TICK_AT, SCHEDULER_LAST_ERROR
+    if not postgres_enabled():
+        return []
+    init_persistence_tables()
+    activated = []
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH due AS (
+                    SELECT campaign_id
+                    FROM fbpostpro_campaign_engine
+                    WHERE lifecycle='scheduled' AND scheduled_at <= NOW()
+                    ORDER BY scheduled_at ASC, campaign_id ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT %s
+                )
+                UPDATE fbpostpro_campaign_engine AS campaign
+                SET lifecycle='queued', updated_at=NOW()
+                FROM due
+                WHERE campaign.campaign_id=due.campaign_id
+                  AND campaign.lifecycle='scheduled'
+                RETURNING campaign.customer_id, campaign.campaign_id, campaign.scheduled_at
+                """,
+                (min(1000, max(1, int(limit))),),
+            )
+            activated = cur.fetchall()
+            for campaign in activated:
+                cur.execute(
+                    """UPDATE fbpostpro_campaign_tasks SET status='pending', updated_at=NOW()
+                       WHERE customer_id=%s AND campaign_id=%s AND status='scheduled'""",
+                    (campaign["customer_id"], campaign["campaign_id"]),
+                )
+        conn.commit()
+
+    for campaign in activated:
+        customer_id = campaign["customer_id"]
+        tasks = load_engine_tasks(customer_id, campaign["campaign_id"])
+        devices = load_devices(customer_id)
+        assigned_ids = {task.get("device_id", "") for task in tasks if task.get("device_id")}
+        worker_online = any(device_is_online(devices.get(device_id, {})) for device_id in assigned_ids)
+        record_operational_log(
+            customer_id,
+            event_type="scheduled_campaign_queued" if worker_online else "scheduled_campaign_waiting_worker",
+            severity="info" if worker_online else "warning",
+            message=(
+                "Scheduled campaign is due and queued for its assigned worker."
+                if worker_online else
+                "Scheduled campaign is due and queued; all assigned workers are currently offline."
+            ),
+            campaign_id=campaign["campaign_id"],
+        )
+        sync_engine_campaign_state(customer_id, campaign["campaign_id"])
+    SCHEDULER_LAST_TICK_AT = now_iso()
+    SCHEDULER_LAST_ERROR = ""
+    return activated
+
+
+def scheduler_loop():
+    global SCHEDULER_LAST_ERROR, SCHEDULER_LAST_TICK_AT
+    while not SCHEDULER_STOP_EVENT.is_set():
+        try:
+            activate_due_campaigns_all()
+        except Exception as exc:
+            SCHEDULER_LAST_ERROR = type(exc).__name__
+            SCHEDULER_LAST_TICK_AT = now_iso()
+            app.logger.exception("scheduler_tick_failed")
+        SCHEDULER_STOP_EVENT.wait(SCHEDULER_POLL_SECONDS)
+
+
+def start_scheduler_thread():
+    global SCHEDULER_THREAD
+    if not SCHEDULER_ENABLED or not postgres_enabled():
+        return None
+    if SCHEDULER_THREAD and SCHEDULER_THREAD.is_alive():
+        return SCHEDULER_THREAD
+    SCHEDULER_THREAD = threading.Thread(
+        target=scheduler_loop, name="fbpostpro-scheduler", daemon=True
+    )
+    SCHEDULER_THREAD.start()
+    return SCHEDULER_THREAD
+
+
 def expire_stale_engine_tasks(customer_id, device_id=""):
     """Fail uncertain expired claims without replaying a possibly published post."""
     customer_id = sanitize_customer_id(customer_id)
     device_id = sanitize_device_id(device_id)
     expired_task_ids = []
+    expired_details = []
     campaign_ids = set()
     now = utc_now()
     if not postgres_enabled():
@@ -2835,6 +3183,7 @@ def expire_stale_engine_tasks(customer_id, device_id=""):
                 "updated_at": now_iso(),
             })
             expired_task_ids.append(task["task_id"])
+            expired_details.append(dict(task))
             campaign_ids.add(task["campaign_id"])
             changed = True
         if changed:
@@ -2855,16 +3204,29 @@ def expire_stale_engine_tasks(customer_id, device_id=""):
                     WHERE customer_id=%s{where_device}
                       AND status IN ('claimed','running')
                       AND lease_expires_at IS NOT NULL AND lease_expires_at <= NOW()
-                    RETURNING task_id, campaign_id
+                    RETURNING task_id, campaign_id, account_id, group_id, device_id
                     """,
                     tuple(params),
                 )
                 rows = cur.fetchall()
             conn.commit()
         expired_task_ids = [row["task_id"] for row in rows]
+        expired_details = rows
         campaign_ids = {row["campaign_id"] for row in rows}
     for campaign_id in campaign_ids:
         sync_engine_campaign_state(customer_id, campaign_id)
+    for task in expired_details:
+        record_operational_log(
+            customer_id,
+            event_type="task_requires_review",
+            severity="error",
+            message="Worker lease expired; result is uncertain and was not replayed.",
+            campaign_id=task.get("campaign_id", ""),
+            task_id=task.get("task_id", ""),
+            account_id=task.get("account_id", ""),
+            group_id=task.get("group_id", ""),
+            device_id=task.get("device_id", device_id),
+        )
     return set(expired_task_ids)
 
 
@@ -3220,11 +3582,23 @@ def mark_engine_task_interrupted(customer_id, device_id, job, reason):
         return
     task = next((item for item in load_engine_tasks(customer_id, campaign_id) if item.get("task_id") == task_id), None)
     if task and task.get("device_id") == device_id and task.get("status") in TASK_ACTIVE_STATUSES:
+        safe_reason = "Result uncertain; requires review; automatic replay blocked. " + str(reason)
         _update_engine_task(
-            customer_id, task_id, status="failed", last_error=str(reason)[:4000],
+            customer_id, task_id, status="failed", last_error=safe_reason[:4000],
             finished_at=now_iso(), lease_token="", lease_expires_at="",
         )
         sync_engine_campaign_state(customer_id, campaign_id, job)
+        record_operational_log(
+            customer_id,
+            event_type="task_requires_review",
+            severity="error",
+            message=safe_reason,
+            campaign_id=campaign_id,
+            task_id=task_id,
+            account_id=task.get("account_id", ""),
+            group_id=task.get("group_id", ""),
+            device_id=device_id,
+        )
 
 
 def set_engine_campaign_lifecycle(customer_id, campaign_id, lifecycle):
@@ -3372,7 +3746,11 @@ def load_history(
     )
 
 
-SENSITIVE_LOG_KEYS = {"password", "password_hash", "token", "cookie", "cookies", "secret", "session_secret", "agent_token"}
+SENSITIVE_LOG_KEYS = {
+    "password", "password_hash", "token", "token_hash", "cookie", "cookies",
+    "secret", "session_secret", "agent_token", "authorization", "database_url",
+    "api_key", "private_key", "webhook_secret",
+}
 
 
 def _safe_log_value(value):
@@ -3388,11 +3766,13 @@ def _safe_log_value(value):
     if value is None or isinstance(value, (bool, int, float)):
         return value
     text = str(value)[:1000]
-    return re.sub(
+    text = re.sub(
         r"(?i)(password|token|cookie|secret)\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
     )
+    text = re.sub(r"(?i)postgres(?:ql)?://[^@\s]+@", "postgresql://[REDACTED]@", text)
+    return re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
 
 
 def record_operational_log(
@@ -3564,10 +3944,25 @@ def cleanup_expired_logs(now=None):
         init_persistence_tables()
         with postgres_connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM fbpostpro_operational_logs WHERE created_at < %s", (operational_cutoff,))
+                cur.execute(
+                    """DELETE FROM fbpostpro_operational_logs WHERE log_id IN (
+                         SELECT log_id FROM fbpostpro_operational_logs
+                         WHERE created_at < %s ORDER BY created_at ASC LIMIT %s
+                       )""",
+                    (operational_cutoff, LOG_CLEANUP_BATCH_SIZE),
+                )
                 operational_deleted = max(0, cur.rowcount)
-                cur.execute("DELETE FROM fbpostpro_admin_audit_logs WHERE created_at < %s", (audit_cutoff,))
+                cur.execute(
+                    """DELETE FROM fbpostpro_admin_audit_logs WHERE audit_id IN (
+                         SELECT audit_id FROM fbpostpro_admin_audit_logs
+                         WHERE created_at < %s ORDER BY created_at ASC LIMIT %s
+                       )""",
+                    (audit_cutoff, LOG_CLEANUP_BATCH_SIZE),
+                )
                 audit_deleted = max(0, cur.rowcount)
+                cur.execute(
+                    "DELETE FROM fbpostpro_rate_limits WHERE updated_at < NOW() - INTERVAL '2 days'"
+                )
             conn.commit()
         return {"operational_deleted": operational_deleted, "audit_deleted": audit_deleted}
 
@@ -4683,6 +5078,23 @@ def allowed_image(
     )
 
 
+def image_signature_valid(stream, extension):
+    """Reject renamed executable/HTML payloads without adding a heavy image dependency."""
+    try:
+        position = stream.tell()
+        header = stream.read(16)
+        stream.seek(position)
+    except Exception:
+        return False
+    if extension in {".jpg", ".jpeg"}:
+        return header.startswith(b"\xff\xd8\xff")
+    if extension == ".png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if extension == ".webp":
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    return False
+
+
 def save_uploaded_image(
     customer_id,
     image,
@@ -4708,6 +5120,9 @@ def save_uploaded_image(
         .lower()
     )
 
+    if not image_signature_valid(image.stream, extension):
+        return None
+
     filename = (
         "post_"
         + uuid.uuid4().hex
@@ -4716,7 +5131,7 @@ def save_uploaded_image(
 
     if postgres_enabled():
         content = image.stream.read()
-        content_type = image.mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         init_persistence_tables()
         with postgres_connect() as conn:
             with conn.cursor() as cur:
@@ -5838,7 +6253,8 @@ def find_agent(
         with postgres_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT customer_id, data FROM fbpostpro_customer_data WHERE data_key='devices'"
+                    "SELECT customer_id, data FROM fbpostpro_customer_data WHERE data_key='devices' AND data ? %s",
+                    (device_id,),
                 )
                 owner_rows = cur.fetchall()
         customer_ids = [row.get("customer_id", "") for row in owner_rows if isinstance(row.get("data"), dict) and device_id in row.get("data", {})]
@@ -6803,7 +7219,11 @@ def extension_pair_code():
 
 @app.route("/api/extension/pair", methods=["POST"])
 def extension_pair():
-    payload = request.get_json(silent=True) or {}
+    if not auth_rate_allowed("extension_pair", 20, 600):
+        return jsonify({"error": "Too many pairing attempts. Try again later."}), 429
+    payload = request_json_object()
+    if payload is None:
+        return jsonify({"error": "JSON object required."}), 400
     code = re.sub(r"[^A-Z0-9]", "", str(payload.get("code", "")).upper())
     device_name = str(payload.get("device_name", "Chrome của khách")).strip()[:100] or "Chrome của khách"
 
@@ -7048,12 +7468,9 @@ def api_connect_web_status(
 )
 def api_connect_register():
 
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
 
     request_id = str(
         data.get(
@@ -7084,13 +7501,7 @@ def api_connect_register():
                 "expired"
         }), 404
 
-    if secret and not secrets.compare_digest(
-        secret,
-        item.get(
-            "secret",
-            "",
-        ),
-    ):
+    if not secret or not secrets.compare_digest(secret, item.get("secret", "")):
 
         return jsonify({
             "error":
@@ -7131,12 +7542,9 @@ def api_connect_register():
 )
 def api_connect_status():
 
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
 
     request_id = str(
         data.get(
@@ -7211,7 +7619,12 @@ def api_connect_status():
     )
 
     if status == "approved":
-
+        delivered_token = str(item.get("agent_token", ""))
+        if delivered_token:
+            item["agent_token"] = ""
+            item["token_delivered_at"] = now_iso()
+            requests_data[request_id] = item
+            save_connect_requests(requests_data)
         return jsonify({
             "status":
                 "approved",
@@ -7232,9 +7645,7 @@ def api_connect_status():
                 ),
 
             "agent_token":
-                item.get(
-                    "agent_token"
-                ),
+                delivered_token,
         })
 
     return jsonify({
@@ -7291,6 +7702,8 @@ def admin_login():
     error = ""
 
     if request.method == "POST":
+        if not auth_rate_allowed("legacy_admin_login", 10, 900):
+            return "Too many login attempts. Try again later.", 429
 
         password = (
             request.form.get(
@@ -8303,19 +8716,24 @@ def cloud_get_job():
     if not cloud_worker_authorized():
         return jsonify({"error": "Unauthorized"}), 401
 
-    try:
-        customer_dirs = [
-            path
-            for path in CUSTOMERS_ROOT.iterdir()
-            if path.is_dir()
-        ]
-    except Exception:
-        customer_dirs = []
+    if postgres_enabled():
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT customer_id FROM fbpostpro_customer_data
+                       WHERE data_key='jobs' AND jsonb_typeof(data)='object' AND data <> '{}'::jsonb"""
+                )
+                customer_ids = [row.get("customer_id", "") for row in cur.fetchall()]
+    else:
+        try:
+            customer_ids = [path.name for path in CUSTOMERS_ROOT.iterdir() if path.is_dir()]
+        except Exception:
+            customer_ids = []
 
     candidates = []
 
-    for root in customer_dirs:
-        customer_id = root.name
+    for customer_id in customer_ids:
         jobs = load_jobs(customer_id)
 
         for device_id, job in jobs.items():
@@ -8425,6 +8843,10 @@ def cloud_control():
     if not customer_id or not device_id:
         return jsonify({"error": "Missing customer/device"}), 400
 
+    device = load_devices(customer_id).get(device_id)
+    if not isinstance(device, dict) or device.get("mode") != "cloud":
+        return jsonify({"error": "Unknown cloud device"}), 404
+
     control = load_control(customer_id)
 
     return jsonify(
@@ -8451,7 +8873,9 @@ def cloud_status():
     if not cloud_worker_authorized():
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
 
     customer_id = sanitize_customer_id(
         data.get("customer_id", "")
@@ -8461,18 +8885,42 @@ def cloud_status():
     )
     job_id = str(data.get("job_id", "")).strip()
     status = str(data.get("status", "")).strip() or "running"
-    message = str(data.get("message", "")).strip()
-    detail = str(data.get("detail", "")).strip()
+    message = str(data.get("message", "")).strip()[:2000]
+    detail = str(data.get("detail", "")).strip()[:4000]
 
     if not customer_id or not device_id:
         return jsonify({"error": "Missing customer/device"}), 400
 
-    processed = int(data.get("processed", 0) or 0)
-    success = int(data.get("success", 0) or 0)
-    errors = int(data.get("errors", 0) or 0)
+    allowed_statuses = {
+        "claimed", "running", "posting", "delay", "paused", "finished", "success",
+        "finished_with_errors", "error", "stopped", "needs_facebook_session",
+        "needs_facebook_reauth", "facebook_checkpoint",
+    }
+    if status not in allowed_statuses:
+        return jsonify({"error": "Invalid campaign status"}), 400
+    try:
+        processed = int(data.get("processed", 0) or 0)
+        success = int(data.get("success", 0) or 0)
+        errors = int(data.get("errors", 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid campaign counters"}), 400
+    if any(value < 0 or value > MAX_GROUPS_PER_CAMPAIGN + 1 for value in (processed, success, errors)):
+        return jsonify({"error": "Campaign counters out of bounds"}), 400
+
+    device = load_devices(customer_id).get(device_id)
+    if not isinstance(device, dict) or device.get("mode") != "cloud":
+        return jsonify({"error": "Unknown cloud device"}), 404
+
+    jobs = load_jobs(customer_id)
+    job = jobs.get(device_id)
+    if not isinstance(job, dict):
+        return jsonify({"error": "Unknown cloud job"}), 404
+    if job_id and str(job.get("job_id", "")) != job_id:
+        return jsonify({"error": "Stale or unknown job"}), 409
 
     terminal = status in {
         "finished",
+        "success",
         "finished_with_errors",
         "error",
         "stopped",
@@ -8491,16 +8939,10 @@ def cloud_status():
         errors=errors,
     )
 
-    jobs = load_jobs(customer_id)
-    job = jobs.get(device_id)
-
-    if isinstance(job, dict):
-
-        if not job_id or job.get("job_id") == job_id:
-            job["status"] = status
-            job["finished_at"] = now_iso() if terminal else ""
-            jobs[device_id] = job
-            save_jobs(customer_id, jobs)
+    job["status"] = status
+    job["finished_at"] = now_iso() if terminal else ""
+    jobs[device_id] = job
+    save_jobs(customer_id, jobs)
 
     if status in {"finished", "success"}:
         add_history(customer_id, "success", message or "Hoàn tất", detail)
@@ -8531,12 +8973,18 @@ def cloud_control_ack():
     if not cloud_worker_authorized():
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
     customer_id = sanitize_customer_id(data.get("customer_id", ""))
     device_id = sanitize_device_id(data.get("device_id", ""))
 
     if not customer_id or not device_id:
         return jsonify({"error": "Missing customer/device"}), 400
+
+    device = load_devices(customer_id).get(device_id)
+    if not isinstance(device, dict) or device.get("mode") != "cloud":
+        return jsonify({"error": "Unknown cloud device"}), 404
 
     control = load_control(customer_id)
     device_control = control.get(device_id, {})
@@ -8566,7 +9014,9 @@ def agent_heartbeat():
 
     customer_id = auth["customer_id"]
     device_id = auth["device_id"]
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
 
     devices = load_devices(customer_id)
     device = devices.get(device_id, {})
@@ -8802,7 +9252,9 @@ def agent_update_status():
 
     customer_id = auth["customer_id"]
     device_id = auth["device_id"]
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
     status = str(data.get("status", "running")).strip()
     if status not in AGENT_ALLOWED_STATUSES:
         return jsonify({"error": "Invalid campaign status"}), 400
@@ -9016,12 +9468,9 @@ def agent_control_ack():
         ]
     )
 
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
+    data = request_json_object()
+    if data is None:
+        return jsonify({"error": "JSON object required."}), 400
 
     control = (
         load_control(
@@ -9247,6 +9696,12 @@ def file_too_large(
     error
 ):
 
+    if request.path.startswith("/api/"):
+        return jsonify({
+            "error": "Request payload too large.",
+            "request_id": getattr(g, "request_id", "") or "req_unknown",
+        }), 413
+
     flash(
         (
             "Tổng dung lượng ảnh quá lớn. "
@@ -9260,6 +9715,20 @@ def file_too_large(
             "compose"
         )
     )
+
+
+@app.errorhandler(404)
+def resource_not_found(error):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Resource not found."}), 404
+    return "Not found", 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Method not allowed."}), 405
+    return "Method not allowed", 405
 
 
 @app.errorhandler(500)

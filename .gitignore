@@ -10,6 +10,13 @@ chrome_profiles/
 users.json
 connect_requests.json
 pairing_codes.json
+operational_logs.json
+admin_audit_logs.json
+backups/
+*.dump
+*.dump.sha256
+*.partial
+.phase10-*
 
 # Secrets
 .env
