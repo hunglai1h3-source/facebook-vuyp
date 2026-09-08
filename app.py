@@ -366,6 +366,36 @@ LEGACY_ADMIN_AUTH_ENABLED = bool(LEGACY_ADMIN_AUTH_REQUESTED and not IS_PRODUCTI
 if IS_PRODUCTION and LEGACY_ADMIN_AUTH_REQUESTED:
     app.logger.warning("legacy_admin_auth_ignored environment=production")
 
+# Bootstrap/promote admin accounts securely via environment without hardcoded passwords.
+# Can be comma-separated list of usernames or emails.
+ADMIN_USERNAMES = {
+    u.strip().lower()
+    for u in (
+        os.environ.get("ADMIN_USERNAMES", "")
+        + ","
+        + os.environ.get("ADMIN_USERNAME", "")
+    ).split(",")
+    if u.strip()
+}
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in (
+        os.environ.get("ADMIN_EMAILS", "")
+        + ","
+        + os.environ.get("ADMIN_EMAIL", "")
+    ).split(",")
+    if e.strip()
+}
+
+
+def is_configured_admin_identity(username="", email=""):
+    u = str(username or "").strip().lower()
+    e = str(email or "").strip().lower()
+    return bool(
+        (u and u in ADMIN_USERNAMES)
+        or (e and e in ADMIN_EMAILS)
+    )
+
 # Cloud Worker dùng token riêng để nhận job từ Web Service.
 # Trên Render, đặt cùng một CLOUD_WORKER_TOKEN cho Web + Worker.
 CLOUD_WORKER_TOKEN = os.environ.get(
@@ -949,6 +979,10 @@ def init_users_table():
                 """
             )
         conn.commit()
+    try:
+        sync_configured_admin_roles()
+    except Exception:
+        pass
 
 
 def init_persistence_tables():
@@ -1732,15 +1766,19 @@ def create_user_account(
     password_hash,
 ):
 
+    norm_u = normalize_username(username)
+    norm_e = normalize_email(email)
+    role = "admin" if is_configured_admin_identity(norm_u, norm_e) else "user"
+
     if not postgres_enabled():
         users = load_users()
         users[user_id] = {
-            "username": normalize_username(username),
-            "email": normalize_email(email),
+            "username": norm_u,
+            "email": norm_e,
             "display_name": str(display_name or "").strip(),
             "password_hash": password_hash,
             "is_active": True,
-            "role": "user",
+            "role": role,
             "max_facebook_accounts": 1,
             "max_groups": 500,
             "max_campaigns": 100,
@@ -1776,17 +1814,131 @@ def create_user_account(
                     created_at,
                     last_login_at
                 )
-                VALUES (%s, %s, %s, %s, %s, TRUE, 'user', 1, 500, 100, 3, 1, 1000, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s, 1, 500, 100, 3, 1, 1000, NOW(), NOW())
                 """,
                 (
                     user_id,
-                    normalize_username(username),
-                    normalize_email(email),
+                    norm_u,
+                    norm_e,
                     str(display_name or "").strip(),
                     password_hash,
+                    role,
                 ),
             )
         conn.commit()
+
+
+def sync_configured_admin_roles():
+    """Promote configured admin usernames or emails persistently in DB/files."""
+    if not ADMIN_USERNAMES and not ADMIN_EMAILS:
+        return 0
+    promoted_count = 0
+    if postgres_enabled():
+        try:
+            init_users_table()
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE fbpostpro_users
+                        SET role = 'admin'
+                        WHERE role != 'admin'
+                          AND (
+                            LOWER(username) = ANY(%s)
+                            OR LOWER(email) = ANY(%s)
+                          )
+                        RETURNING user_id, username, email
+                        """,
+                        (list(ADMIN_USERNAMES) or [""], list(ADMIN_EMAILS) or [""]),
+                    )
+                    rows = cur.fetchall()
+                conn.commit()
+                promoted_count = len(rows)
+                for r in rows:
+                    app.logger.info("admin_role_bootstrapped user_id=%s username=%s", r.get("user_id"), r.get("username"))
+        except Exception as exc:
+            app.logger.error("sync_configured_admin_roles_failed error_type=%s", type(exc).__name__)
+    else:
+        try:
+            users = load_users()
+            changed = False
+            for uid, u in users.items():
+                if isinstance(u, dict) and u.get("role") != "admin":
+                    if is_configured_admin_identity(u.get("username", ""), u.get("email", "")):
+                        u["role"] = "admin"
+                        changed = True
+                        promoted_count += 1
+            if changed:
+                save_users(users)
+        except Exception:
+            pass
+    return promoted_count
+
+
+def promote_user_to_admin(identifier):
+    """Safely promote a user to role admin by user_id, username, or email.
+
+    Persists to PostgreSQL (or filesystem). Returns (True, user) or (False, error).
+    """
+    clean_id = str(identifier or "").strip()
+    if not clean_id:
+        return False, "Identifier cannot be empty"
+
+    if postgres_enabled():
+        try:
+            init_users_table()
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT user_id, username, email, role, is_active
+                        FROM fbpostpro_users
+                        WHERE user_id = %s
+                           OR LOWER(username) = LOWER(%s)
+                           OR LOWER(email) = LOWER(%s)
+                        LIMIT 1
+                        """,
+                        (clean_id, clean_id, clean_id),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return False, f"User '{clean_id}' not found"
+                    uid = row["user_id"]
+                    cur.execute(
+                        "UPDATE fbpostpro_users SET role = 'admin' WHERE user_id = %s",
+                        (uid,),
+                    )
+                conn.commit()
+            user = find_user_by_id(uid)
+            try:
+                record_operational_log(
+                    uid,
+                    "user_promoted_to_admin",
+                    "info",
+                    f"User {user.get('username')} promoted to role admin.",
+                )
+            except Exception:
+                pass
+            return True, user
+        except Exception as exc:
+            return False, f"Database error: {type(exc).__name__}"
+    else:
+        users = load_users()
+        target_uid = None
+        for uid, u in users.items():
+            if isinstance(u, dict):
+                if (
+                    uid == clean_id
+                    or u.get("username", "").lower() == clean_id.lower()
+                    or u.get("email", "").lower() == clean_id.lower()
+                ):
+                    target_uid = uid
+                    break
+        if not target_uid:
+            return False, f"User '{clean_id}' not found"
+        users[target_uid]["role"] = "admin"
+        save_users(users)
+        return True, users[target_uid]
 
 
 def update_user_last_login(user_id):
@@ -2135,6 +2287,9 @@ def login():
             error = "Tên đăng nhập/email hoặc mật khẩu không đúng."
         else:
             user_id = user["user_id"]
+            if is_configured_admin_identity(user.get("username"), user.get("email")) and user.get("role") != "admin":
+                promote_user_to_admin(user_id)
+                user = find_user_by_id(user_id) or user
             update_user_last_login(user_id)
 
             session.clear()
@@ -10248,6 +10403,7 @@ register_admin_ops(app, {
     "load_operational_logs": load_operational_logs,
     "record_admin_audit": record_admin_audit,
     "load_admin_audit_logs": load_admin_audit_logs,
+    "promote_user_to_admin": promote_user_to_admin,
 })
 
 if psycopg:

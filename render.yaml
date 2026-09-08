@@ -25,6 +25,11 @@ services:
 
       - key: ENABLE_LEGACY_ADMIN_AUTH
         value: "false"
+      # Comma-separated usernames or emails granted role=admin automatically upon registration or startup
+      - key: ADMIN_USERNAMES
+        value: ""
+      - key: ADMIN_EMAILS
+        value: ""
       - key: ENABLE_SCHEDULER
         value: "true"
       - key: SCHEDULER_POLL_SECONDS

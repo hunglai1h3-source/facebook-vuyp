@@ -566,6 +566,47 @@ def register_admin_ops(app, services):
         services["record_admin_audit"](services["get_admin_actor_id"](), "change_quota", "user", user_id, changes)
         return jsonify({"ok": True, "quotas": {key: user[key] for key in limits}})
 
+    @bp.route("/api/admin/users/<user_id>/role", methods=["POST"])
+    @admin_required
+    @services["synchronized_state"]
+    def admin_user_role(user_id):
+        user_id = services["sanitize_customer_id"](user_id)
+        user = services["find_user_by_id"](user_id)
+        if not isinstance(user, dict):
+            return jsonify({"error": "User not found."}), 404
+        payload = request.get_json(silent=True) if request.is_json else request.form
+        if not hasattr(payload, "get") or "role" not in payload:
+            return jsonify({"error": "Thiếu role."}), 400
+        new_role = str(payload.get("role", "")).strip().lower()
+        if new_role not in {"admin", "user"}:
+            return jsonify({"error": "Role must be 'admin' or 'user'."}), 400
+        if new_role == "user" and user.get("role") == "admin" and services["get_admin_actor_id"]() == user_id:
+            return jsonify({"error": "Admin không thể tự hạ quyền của chính mình."}), 409
+        previous = user.get("role", "user")
+        user["role"] = new_role
+        if services["postgres_enabled"]():
+            with services["postgres_connect"]() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE fbpostpro_users SET role=%s WHERE user_id=%s", (new_role, user_id))
+        else:
+            users = services["load_users"]()
+            users[user_id] = user
+            services["save_users"](users)
+        services["record_admin_audit"](
+            services["get_admin_actor_id"](),
+            "promote_admin" if new_role == "admin" else "demote_admin",
+            "user",
+            user_id,
+            {"previous": previous, "role": new_role},
+        )
+        services["record_operational_log"](
+            user_id,
+            "user_role_changed",
+            "warning" if new_role == "admin" else "info",
+            f"Vai trò người dùng đã thay đổi thành {new_role}.",
+        )
+        return jsonify({"ok": True, "user_id": user_id, "role": new_role})
+
     @bp.route("/admin/accounts")
     @admin_required
     def admin_accounts():
