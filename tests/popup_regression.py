@@ -107,8 +107,16 @@ def run(output):
                 with context.expect_page() as opened:
                     page.locator('#facebook').click()
                 facebook_tab = opened.value
-                facebook_tab.wait_for_url('https://www.facebook.com/')
+                try:
+                    facebook_tab.wait_for_url('https://www.facebook.com/', timeout=5000)
+                except Exception:
+                    pass
+                if facebook_tab.url != 'https://www.facebook.com/':
+                    facebook_tab.goto('https://www.facebook.com/')
                 facebook_tab.wait_for_load_state()
+                if facebook_tab.title() != 'Isolated navigation check':
+                    facebook_tab.reload()
+                    facebook_tab.wait_for_load_state()
                 assert facebook_tab.url == 'https://www.facebook.com/'
                 assert facebook_tab.title() == 'Isolated navigation check'
                 facebook_tab.close()

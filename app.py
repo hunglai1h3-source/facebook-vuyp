@@ -3153,6 +3153,14 @@ def activate_due_campaigns_all(limit=200):
     """
     global SCHEDULER_LAST_TICK_AT, SCHEDULER_LAST_ERROR
     if not postgres_enabled():
+        try:
+            customer_ids = [path.name for path in CUSTOMERS_ROOT.iterdir() if path.is_dir()]
+            for customer_id in customer_ids:
+                activate_due_campaigns(customer_id)
+        except Exception:
+            pass
+        SCHEDULER_LAST_TICK_AT = now_iso()
+        SCHEDULER_LAST_ERROR = ""
         return []
     init_persistence_tables()
     activated = []
@@ -3214,6 +3222,9 @@ def scheduler_loop():
     while not SCHEDULER_STOP_EVENT.is_set():
         try:
             activate_due_campaigns_all()
+            expire_stale_engine_tasks_all()
+            SCHEDULER_LAST_ERROR = ""
+            SCHEDULER_LAST_TICK_AT = now_iso()
         except Exception as exc:
             SCHEDULER_LAST_ERROR = type(exc).__name__
             SCHEDULER_LAST_TICK_AT = now_iso()
@@ -3227,6 +3238,7 @@ def start_scheduler_thread():
         return None
     if SCHEDULER_THREAD and SCHEDULER_THREAD.is_alive():
         return SCHEDULER_THREAD
+    SCHEDULER_STOP_EVENT.clear()
     SCHEDULER_THREAD = threading.Thread(
         target=scheduler_loop, name="fbpostpro-scheduler", daemon=True
     )
@@ -3307,6 +3319,56 @@ def expire_stale_engine_tasks(customer_id, device_id=""):
             device_id=task.get("device_id", device_id),
         )
     return set(expired_task_ids)
+
+
+def expire_stale_engine_tasks_all():
+    """Expire stale worker leases across all customers in PostgreSQL or local files."""
+    if not postgres_enabled():
+        try:
+            customer_ids = [path.name for path in CUSTOMERS_ROOT.iterdir() if path.is_dir()]
+            for customer_id in customer_ids:
+                expire_stale_engine_tasks(customer_id)
+        except Exception:
+            pass
+        return
+    rows = []
+    try:
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_campaign_tasks
+                    SET status='failed',
+                        last_error='Worker lease expired; result is uncertain and was not replayed.',
+                        finished_at=NOW(), lease_token='', lease_expires_at=NULL, updated_at=NOW()
+                    WHERE status IN ('claimed','running')
+                      AND lease_expires_at IS NOT NULL AND lease_expires_at <= NOW()
+                    RETURNING customer_id, task_id, campaign_id, account_id, group_id, device_id
+                    """
+                )
+                rows = cur.fetchall()
+            conn.commit()
+    except Exception as exc:
+        app.logger.error("expire_stale_tasks_failed error_type=%s", type(exc).__name__)
+        return
+
+    for task in rows:
+        try:
+            sync_engine_campaign_state(task["customer_id"], task["campaign_id"])
+            record_operational_log(
+                task["customer_id"],
+                event_type="task_requires_review",
+                severity="error",
+                message="Worker lease expired; result is uncertain and was not replayed.",
+                campaign_id=task.get("campaign_id", ""),
+                task_id=task.get("task_id", ""),
+                account_id=task.get("account_id", ""),
+                group_id=task.get("group_id", ""),
+                device_id=task.get("device_id", ""),
+            )
+        except Exception:
+            pass
 
 
 def get_engine_campaign(customer_id, campaign_id):
@@ -5433,6 +5495,17 @@ def device_is_online(
     device,
     max_age=75,
 ):
+    if not isinstance(device, dict):
+        return False
+
+    if device.get("revoked_at") or device.get("status") == "revoked":
+        return False
+
+    expires_raw = device.get("token_expires_at")
+    if expires_raw:
+        expires_dt = parse_iso(expires_raw)
+        if not expires_dt or expires_dt <= utc_now():
+            return False
 
     # Cloud mode không cần heartbeat từ máy khách.
     # Khi Admin đã cấp quyền, phiên Cloud được xem là online
@@ -5461,12 +5534,7 @@ def device_is_online(
         - last_seen
     ).total_seconds()
 
-    return (
-        -5 <= age <= max_age
-        and not device.get('revoked_at')
-        and device.get('status') != 'revoked'
-        and (not device.get('token_expires_at') or (parse_iso(device['token_expires_at']) or datetime.min.replace(tzinfo=timezone.utc)) > utc_now())
-    )
+    return -5 <= age <= max_age
 
 
 def public_device(device):
@@ -7959,17 +8027,65 @@ def admin_devices():
 
     devices_view = []
 
-    try:
-        customer_dirs = [
-            path
-            for path in CUSTOMERS_ROOT.iterdir()
-            if path.is_dir()
-        ]
-    except Exception:
-        customer_dirs = []
+    customer_devices_map = {}
+    fb_states = {}
 
-    for root in customer_dirs:
-        customer_id = root.name
+    if postgres_enabled():
+        try:
+            init_persistence_tables()
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT customer_id, data FROM fbpostpro_customer_data
+                        WHERE data_key='devices' AND jsonb_typeof(data)='object' AND data <> '{}'::jsonb
+                        """
+                    )
+                    for row in cur.fetchall():
+                        cid = row.get("customer_id", "")
+                        d_data = row.get("data")
+                        if isinstance(d_data, str):
+                            try:
+                                d_data = json.loads(d_data)
+                            except Exception:
+                                d_data = {}
+                        if isinstance(d_data, dict):
+                            customer_devices_map[cid] = d_data
+
+                    cur.execute(
+                        """
+                        SELECT customer_id, data FROM fbpostpro_customer_data
+                        WHERE data_key='facebook_state' AND jsonb_typeof(data)='object'
+                        """
+                    )
+                    for row in cur.fetchall():
+                        cid = row.get("customer_id", "")
+                        fb_data = row.get("data")
+                        if isinstance(fb_data, str):
+                            try:
+                                fb_data = json.loads(fb_data)
+                            except Exception:
+                                fb_data = {}
+                        if isinstance(fb_data, dict):
+                            fb_states[cid] = fb_data
+        except Exception as exc:
+            app.logger.error("admin_devices_load_failed error_type=%s", type(exc).__name__)
+    else:
+        try:
+            customer_dirs = [
+                path
+                for path in CUSTOMERS_ROOT.iterdir()
+                if path.is_dir()
+            ]
+        except Exception:
+            customer_dirs = []
+
+        for root in customer_dirs:
+            customer_id = root.name
+            customer_devices_map[customer_id] = load_devices(customer_id)
+            fb_states[customer_id] = get_facebook_state(customer_id)
+
+    for customer_id, devs in customer_devices_map.items():
         user = users.get(customer_id)
         if isinstance(user, dict):
             user = dict(user)
@@ -7977,9 +8093,11 @@ def admin_devices():
         else:
             user = None
 
-        facebook = get_facebook_state(customer_id)
+        facebook = fb_states.get(customer_id) or get_facebook_state(customer_id)
 
-        for device_id, device in load_devices(customer_id).items():
+        for device_id, device in devs.items():
+            if not isinstance(device, dict):
+                continue
             devices_view.append({
                 "customer_id": customer_id,
                 "device_id": device_id,
@@ -7996,12 +8114,18 @@ def admin_devices():
     )
 
     facebook_connected = 0
-    for user_id in users.keys():
-        try:
-            if get_facebook_state(user_id).get("status") == "connected":
-                facebook_connected += 1
-        except Exception:
-            pass
+    if postgres_enabled():
+        facebook_connected = sum(
+            1 for s in fb_states.values()
+            if isinstance(s, dict) and s.get("status") == "connected"
+        )
+    else:
+        for user_id in users.keys():
+            try:
+                if (fb_states.get(user_id) or get_facebook_state(user_id)).get("status") == "connected":
+                    facebook_connected += 1
+            except Exception:
+                pass
 
     stats = {
         "users": len(users),
@@ -8125,6 +8249,12 @@ def admin_approve_device(
 
         "token_hash":
             hash_device_token(cloud_token),
+
+        "token_issued_at":
+            now_iso(),
+
+        "token_expires_at":
+            (utc_now() + timedelta(days=DEVICE_TOKEN_TTL_DAYS)).isoformat(timespec="seconds"),
 
         "mode":
             "cloud",
@@ -9966,7 +10096,6 @@ def ready():
         return jsonify({
             "status": "not_ready",
             "database": "unavailable",
-            "storage": "postgres",
         }), 503
 
     # ============================================================
@@ -9996,6 +10125,12 @@ def ready():
     scheduler_status = "disabled"
 
     if SCHEDULER_ENABLED:
+        if postgres_enabled() and (not SCHEDULER_THREAD or not SCHEDULER_THREAD.is_alive()):
+            try:
+                start_scheduler_thread()
+            except Exception as exc:
+                app.logger.warning("ready_start_scheduler_failed error_type=%s", type(exc).__name__)
+
         if (
             SCHEDULER_THREAD
             and SCHEDULER_THREAD.is_alive()
@@ -10078,8 +10213,11 @@ _admin_ops_spec.loader.exec_module(_admin_ops_module)
 register_admin_ops = _admin_ops_module.register_admin_ops
 
 if postgres_enabled():
-    init_persistence_tables()
-    init_groups_table()
+    try:
+        init_persistence_tables()
+        init_groups_table()
+    except Exception as exc:
+        app.logger.error("startup_persistence_init_deferred error_type=%s", type(exc).__name__)
 
 register_admin_ops(app, {
     "admin_required": admin_required,

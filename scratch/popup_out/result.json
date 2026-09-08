@@ -1,0 +1,97 @@
+{
+  "responsive": [
+    {
+      "state": "online",
+      "width": 320,
+      "overflow": 0
+    },
+    {
+      "state": "online",
+      "width": 360,
+      "overflow": 0
+    },
+    {
+      "state": "online",
+      "width": 390,
+      "overflow": 0
+    },
+    {
+      "state": "online",
+      "width": 768,
+      "overflow": 0
+    },
+    {
+      "state": "online",
+      "width": 1920,
+      "overflow": 0
+    },
+    {
+      "state": "online",
+      "width": 3840,
+      "overflow": 0
+    },
+    {
+      "state": "offline",
+      "width": 320,
+      "overflow": 0
+    },
+    {
+      "state": "offline",
+      "width": 360,
+      "overflow": 0
+    },
+    {
+      "state": "offline",
+      "width": 390,
+      "overflow": 0
+    },
+    {
+      "state": "offline",
+      "width": 768,
+      "overflow": 0
+    },
+    {
+      "state": "offline",
+      "width": 1920,
+      "overflow": 0
+    },
+    {
+      "state": "offline",
+      "width": 3840,
+      "overflow": 0
+    }
+  ],
+  "console_errors": [],
+  "requests": [
+    [
+      "POST",
+      "/register"
+    ],
+    [
+      "GET",
+      "/"
+    ],
+    [
+      "POST",
+      "/api/extension/pair-code"
+    ],
+    [
+      "POST",
+      "/api/extension/pair"
+    ],
+    [
+      "POST",
+      "/api/agent/heartbeat"
+    ],
+    [
+      "GET",
+      "/api/agent/job"
+    ],
+    [
+      "GET",
+      "/api/agent/job"
+    ]
+  ],
+  "native_extension": true,
+  "facebook_navigation": "native tab, blank document fulfilled in test only"
+}

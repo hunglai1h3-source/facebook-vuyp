@@ -1,0 +1,374 @@
+{
+  "navigation": [
+    {
+      "dcl": 34.79999999701977,
+      "load": 36.900000005960464,
+      "response": 10.700000002980232,
+      "resources": 8,
+      "transfer": 40275,
+      "width": 390,
+      "route": "/",
+      "overflow": 0
+    },
+    {
+      "dcl": 29.299999997019768,
+      "load": 42.8999999910593,
+      "response": 6.5,
+      "resources": 10,
+      "transfer": 45650,
+      "width": 390,
+      "route": "/compose",
+      "overflow": 0
+    },
+    {
+      "dcl": 38.29999999701977,
+      "load": 48.29999999701977,
+      "response": 8.900000005960464,
+      "resources": 9,
+      "transfer": 42367,
+      "width": 390,
+      "route": "/groups",
+      "overflow": 0
+    },
+    {
+      "dcl": 25.700000002980232,
+      "load": 27.400000005960464,
+      "response": 5.299999997019768,
+      "resources": 8,
+      "transfer": 35691,
+      "width": 390,
+      "route": "/history",
+      "overflow": 0
+    },
+    {
+      "dcl": 31,
+      "load": 50.19999998807907,
+      "response": 6.5999999940395355,
+      "resources": 8,
+      "transfer": 37691,
+      "width": 390,
+      "route": "/settings",
+      "overflow": 0
+    },
+    {
+      "dcl": 30.69999998807907,
+      "load": 33.29999999701977,
+      "response": 7.699999988079071,
+      "resources": 8,
+      "transfer": 40275,
+      "width": 768,
+      "route": "/",
+      "overflow": 0
+    },
+    {
+      "dcl": 32.6000000089407,
+      "load": 35.70000000298023,
+      "response": 6.200000002980232,
+      "resources": 9,
+      "transfer": 44859,
+      "width": 768,
+      "route": "/compose",
+      "overflow": 0
+    },
+    {
+      "dcl": 35.1000000089407,
+      "load": 38.1000000089407,
+      "response": 9.299999997019768,
+      "resources": 9,
+      "transfer": 42367,
+      "width": 768,
+      "route": "/groups",
+      "overflow": 0
+    },
+    {
+      "dcl": 31.299999997019768,
+      "load": 31.299999997019768,
+      "response": 7.199999988079071,
+      "resources": 8,
+      "transfer": 35691,
+      "width": 768,
+      "route": "/history",
+      "overflow": 0
+    },
+    {
+      "dcl": 33.3999999910593,
+      "load": 37.5,
+      "response": 8.5,
+      "resources": 8,
+      "transfer": 37691,
+      "width": 768,
+      "route": "/settings",
+      "overflow": 0
+    },
+    {
+      "dcl": 32.3999999910593,
+      "load": 34.29999999701977,
+      "response": 9.099999994039536,
+      "resources": 8,
+      "transfer": 40275,
+      "width": 1366,
+      "route": "/",
+      "overflow": 0
+    },
+    {
+      "dcl": 27.899999991059303,
+      "load": 30.299999997019768,
+      "response": 6.5999999940395355,
+      "resources": 9,
+      "transfer": 44859,
+      "width": 1366,
+      "route": "/compose",
+      "overflow": 0
+    },
+    {
+      "dcl": 30.80000001192093,
+      "load": 34.400000005960464,
+      "response": 5.300000011920929,
+      "resources": 9,
+      "transfer": 42367,
+      "width": 1366,
+      "route": "/groups",
+      "overflow": 0
+    },
+    {
+      "dcl": 27.200000002980232,
+      "load": 28.700000002980232,
+      "response": 6.200000002980232,
+      "resources": 8,
+      "transfer": 35691,
+      "width": 1366,
+      "route": "/history",
+      "overflow": 0
+    },
+    {
+      "dcl": 34.79999999701977,
+      "load": 34.79999999701977,
+      "response": 8.900000005960464,
+      "resources": 8,
+      "transfer": 37691,
+      "width": 1366,
+      "route": "/settings",
+      "overflow": 0
+    },
+    {
+      "dcl": 36.5,
+      "load": 36.5,
+      "response": 9.5,
+      "resources": 8,
+      "transfer": 40275,
+      "width": 1920,
+      "route": "/",
+      "overflow": 0
+    },
+    {
+      "dcl": 38.79999999701977,
+      "load": 41.20000000298023,
+      "response": 9.899999991059303,
+      "resources": 9,
+      "transfer": 44859,
+      "width": 1920,
+      "route": "/compose",
+      "overflow": 0
+    },
+    {
+      "dcl": 34.30000001192093,
+      "load": 38.70000000298023,
+      "response": 8.700000002980232,
+      "resources": 9,
+      "transfer": 42367,
+      "width": 1920,
+      "route": "/groups",
+      "overflow": 0
+    },
+    {
+      "dcl": 34.80000001192093,
+      "load": 36.1000000089407,
+      "response": 7.600000008940697,
+      "resources": 8,
+      "transfer": 35691,
+      "width": 1920,
+      "route": "/history",
+      "overflow": 0
+    },
+    {
+      "dcl": 31.400000005960464,
+      "load": 35.30000001192093,
+      "response": 8.5,
+      "resources": 8,
+      "transfer": 37691,
+      "width": 1920,
+      "route": "/settings",
+      "overflow": 0
+    },
+    {
+      "dcl": 38.19999998807907,
+      "load": 38.19999998807907,
+      "response": 9.899999991059303,
+      "resources": 8,
+      "transfer": 40275,
+      "width": 2560,
+      "route": "/",
+      "overflow": 0
+    },
+    {
+      "dcl": 36.5,
+      "load": 39.400000005960464,
+      "response": 10.200000002980232,
+      "resources": 9,
+      "transfer": 44859,
+      "width": 2560,
+      "route": "/compose",
+      "overflow": 0
+    },
+    {
+      "dcl": 36,
+      "load": 38.8999999910593,
+      "response": 8.200000002980232,
+      "resources": 9,
+      "transfer": 42367,
+      "width": 2560,
+      "route": "/groups",
+      "overflow": 0
+    },
+    {
+      "dcl": 30.400000005960464,
+      "load": 31.700000002980232,
+      "response": 7.600000008940697,
+      "resources": 8,
+      "transfer": 35691,
+      "width": 2560,
+      "route": "/history",
+      "overflow": 0
+    },
+    {
+      "dcl": 30.5,
+      "load": 34.20000000298023,
+      "response": 7.5999999940395355,
+      "resources": 8,
+      "transfer": 37691,
+      "width": 2560,
+      "route": "/settings",
+      "overflow": 0
+    },
+    {
+      "dcl": 34.5,
+      "load": 37.69999998807907,
+      "response": 9.399999991059303,
+      "resources": 8,
+      "transfer": 40275,
+      "width": 3840,
+      "route": "/",
+      "overflow": 0
+    },
+    {
+      "dcl": 36.8999999910593,
+      "load": 37,
+      "response": 7.399999991059303,
+      "resources": 9,
+      "transfer": 44859,
+      "width": 3840,
+      "route": "/compose",
+      "overflow": 0
+    },
+    {
+      "dcl": 38.3999999910593,
+      "load": 38.3999999910593,
+      "response": 7,
+      "resources": 9,
+      "transfer": 42367,
+      "width": 3840,
+      "route": "/groups",
+      "overflow": 0
+    },
+    {
+      "dcl": 31.399999991059303,
+      "load": 31.399999991059303,
+      "response": 6,
+      "resources": 8,
+      "transfer": 35691,
+      "width": 3840,
+      "route": "/history",
+      "overflow": 0
+    },
+    {
+      "dcl": 32.3999999910593,
+      "load": 35.69999998807907,
+      "response": 7,
+      "resources": 8,
+      "transfer": 37691,
+      "width": 3840,
+      "route": "/settings",
+      "overflow": 0
+    }
+  ],
+  "fps": [
+    {
+      "frames": 62,
+      "elapsed": 1016.6000000000001,
+      "route": "/",
+      "width": 390,
+      "fps": 60.0,
+      "p95_gap_ms": 16.7,
+      "gaps_over_25ms": 0
+    },
+    {
+      "frames": 62,
+      "elapsed": 1016.6000000000001,
+      "route": "/",
+      "width": 1920,
+      "fps": 60.0,
+      "p95_gap_ms": 16.8,
+      "gaps_over_25ms": 0
+    },
+    {
+      "frames": 62,
+      "elapsed": 1016.6000000000001,
+      "route": "/compose",
+      "width": 390,
+      "fps": 60.0,
+      "p95_gap_ms": 16.7,
+      "gaps_over_25ms": 0
+    },
+    {
+      "frames": 61,
+      "elapsed": 1000,
+      "route": "/compose",
+      "width": 1920,
+      "fps": 60.0,
+      "p95_gap_ms": 16.8,
+      "gaps_over_25ms": 0
+    },
+    {
+      "frames": 61,
+      "elapsed": 1000,
+      "route": "/settings",
+      "width": 390,
+      "fps": 60.0,
+      "p95_gap_ms": 16.7,
+      "gaps_over_25ms": 0
+    },
+    {
+      "frames": 62,
+      "elapsed": 1016.5000000000001,
+      "route": "/settings",
+      "width": 1920,
+      "fps": 60.0,
+      "p95_gap_ms": 16.7,
+      "gaps_over_25ms": 0
+    }
+  ],
+  "max_load_ms": 50.2,
+  "median_load_ms": 36.3,
+  "max_transfer_bytes": 45650,
+  "heap_before": 892592,
+  "heap_after": 947684,
+  "heap_delta": 55092,
+  "listeners": {
+    "menuBtn:click": 1,
+    "overlay:click": 1,
+    "themeBtn:click": 1,
+    "A:click": 5,
+    "document:visibilitychange": 1
+  },
+  "console_errors": []
+}

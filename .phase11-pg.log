@@ -4,3 +4,14 @@
 2026-09-07 16:57:27.407 +07 [8536] LOG:  database system is ready to accept connections
 2026-09-07 17:02:27.388 +07 [6440] LOG:  checkpoint starting: time
 2026-09-07 17:06:59.505 +07 [6440] LOG:  checkpoint complete: wrote 4956 buffers (30.2%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=269.680 s, sync=2.400 s, total=272.118 s; sync files=1504, longest=0.017 s, average=0.002 s; distance=23657 kB, estimate=23657 kB; lsn=0/2F0B990, redo lsn=0/2F0B900
+2026-09-07 22:18:13.263 +07 [2064] FATAL:  role "CodexSandboxOffline" does not exist
+2026-09-07 22:26:24.167 +07 [6440] LOG:  checkpoint starting: time
+2026-09-07 22:27:58.225 +07 [6440] LOG:  checkpoint complete: wrote 864 buffers (5.3%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=93.781 s, sync=0.241 s, total=94.062 s; sync files=300, longest=0.003 s, average=0.001 s; distance=9514 kB, estimate=22243 kB; lsn=0/38602B0, redo lsn=0/3856490
+2026-09-07 22:31:24.243 +07 [6440] LOG:  checkpoint starting: time
+2026-09-07 22:33:45.335 +07 [6440] LOG:  checkpoint complete: wrote 1292 buffers (7.9%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=140.524 s, sync=0.527 s, total=141.093 s; sync files=654, longest=0.003 s, average=0.001 s; distance=6544 kB, estimate=20673 kB; lsn=0/4021618, redo lsn=0/3EBA858
+2026-09-07 22:36:24.358 +07 [6440] LOG:  checkpoint starting: time
+2026-09-07 22:38:49.246 +07 [6440] LOG:  checkpoint complete: wrote 1329 buffers (8.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=144.387 s, sync=0.475 s, total=144.889 s; sync files=474, longest=0.004 s, average=0.001 s; distance=6823 kB, estimate=19288 kB; lsn=0/4588148, redo lsn=0/4564798
+2026-09-08 03:40:55.030 +07 [23036] FATAL:  role "CodexSandboxOffline" does not exist
+2026-09-08 03:44:59.625 +07 [18424] FATAL:  role "CodexSandboxOffline" does not exist
+2026-09-08 03:51:24.749 +07 [6440] LOG:  checkpoint starting: time
+2026-09-08 03:51:32.638 +07 [6440] LOG:  checkpoint complete: wrote 71 buffers (0.4%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=7.756 s, sync=0.100 s, total=7.890 s; sync files=55, longest=0.004 s, average=0.002 s; distance=420 kB, estimate=17401 kB; lsn=0/45CDA30, redo lsn=0/45CD9A0
