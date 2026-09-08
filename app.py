@@ -896,9 +896,12 @@ def postgres_connect():
     try:
         parameters = database_parameters(DATABASE_URL)
         if IS_PRODUCTION and parameters['host'] not in {'localhost', '127.0.0.1', '::1'}:
-            parameters.setdefault('sslmode', 'require')
+            parameters.setdefault('sslmode', os.environ.get('POSTGRES_SSLMODE', 'require'))
             if parameters['sslmode'] not in {'require', 'verify-ca', 'verify-full'}:
-                raise ValueError('Production PostgreSQL requires TLS.')
+                if os.environ.get('ALLOW_INSECURE_POSTGRES', '').lower() in {'true', '1', 'yes'}:
+                    pass
+                else:
+                    raise ValueError('Production PostgreSQL requires TLS.')
         return psycopg.connect(**parameters, row_factory=dict_row,
             application_name='fbpostpro', options='-c statement_timeout=30000 -c lock_timeout=10000')
     except (ValueError, psycopg.OperationalError, psycopg.InterfaceError) as exc:

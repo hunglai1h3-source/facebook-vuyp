@@ -15,16 +15,19 @@ def database_parameters(url):
             "host": parsed.hostname, "port": parsed.port or 5432,
             "dbname": unquote(parsed.path.lstrip("/")),
             "user": unquote(parsed.username or ""), "password": unquote(parsed.password or ""),
-            "connect_timeout": 10,
+            "connect_timeout": int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "15")),
         }
         query = parse_qs(parsed.query)
         for key in ("sslmode", "sslrootcert", "sslcert", "sslkey"):
             if key in query:
                 parameters[key] = query[key][-1]
         if os.environ.get('APP_ENV', '').lower() in {'production', 'prod'} and parameters['host'] not in {'127.0.0.1', 'localhost', '::1'}:
-            parameters.setdefault('sslmode', 'require')
+            parameters.setdefault('sslmode', os.environ.get('POSTGRES_SSLMODE', 'require'))
             if parameters['sslmode'] not in {'require', 'verify-ca', 'verify-full'}:
-                raise ValueError
+                if os.environ.get('ALLOW_INSECURE_POSTGRES', '').lower() in {'true', '1', 'yes'}:
+                    pass
+                else:
+                    raise ValueError
         return parameters
     except (TypeError, ValueError):
         raise ValueError("A valid PostgreSQL DATABASE_URL is required.") from None
