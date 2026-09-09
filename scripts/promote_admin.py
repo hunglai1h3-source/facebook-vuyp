@@ -95,6 +95,23 @@ def promote_user(database_url, identifier, demote=False):
                     "UPDATE fbpostpro_users SET role = %s WHERE user_id = %s",
                     (target_role, uid),
                 )
+                try:
+                    import json
+                    import uuid
+                    cur.execute(
+                        """
+                        INSERT INTO fbpostpro_admin_audit_logs
+                            (audit_id, admin_id, action, target_type, target_id, metadata, created_at)
+                        VALUES (%s, 'cli_bootstrap', 'user_role_updated', 'user', %s, %s::jsonb, NOW())
+                        """,
+                        (
+                            "aud_" + uuid.uuid4().hex[:24],
+                            uid,
+                            json.dumps({"source": "cli_promote_admin", "previous_role": row.get("role", "user"), "new_role": target_role}),
+                        ),
+                    )
+                except Exception:
+                    pass
             conn.commit()
             with conn.cursor() as cur:
                 cur.execute(
