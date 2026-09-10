@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}Quản lý Chiến dịch • FB POST PRO{% endblock %}
+{% block page_title %}Danh sách Chiến dịch{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/campaigns.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="campaigns-shell">
+  <!-- FILTER BAR -->
+  <form method="get" action="{{ url_for('campaigns_view') }}" class="campaign-filter-bar">
+    <input type="search" name="q" value="{{ query }}" placeholder="Tìm theo tên hoặc ID chiến dịch..." aria-label="Tìm chiến dịch">
+    
+    <select name="status" aria-label="Lọc theo trạng thái">
+      <option value="">Tất cả trạng thái</option>
+      <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>Bản nháp (Draft)</option>
+      <option value="scheduled" {% if status_filter == 'scheduled' %}selected{% endif %}>Hẹn lịch (Scheduled)</option>
+      <option value="queued" {% if status_filter == 'queued' %}selected{% endif %}>Chờ chạy (Queued)</option>
+      <option value="running" {% if status_filter == 'running' %}selected{% endif %}>Đang chạy (Running)</option>
+      <option value="paused" {% if status_filter == 'paused' %}selected{% endif %}>Tạm dừng (Paused)</option>
+      <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Hoàn tất (Completed)</option>
+      <option value="failed" {% if status_filter == 'failed' %}selected{% endif %}>Thất bại (Failed)</option>
+      <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Đã hủy (Cancelled)</option>
+    </select>
+
+    <select name="account" aria-label="Lọc theo tài khoản">
+      <option value="">Tất cả tài khoản</option>
+      {% for acc in accounts %}
+      <option value="{{ acc.account_id }}" {% if account_filter == acc.account_id %}selected{% endif %}>{{ acc.display_name }}</option>
+      {% endfor %}
+    </select>
+
+    <input type="date" name="date_from" value="{{ date_from }}" aria-label="Từ ngày" title="Từ ngày">
+    <input type="date" name="date_to" value="{{ date_to }}" aria-label="Đến ngày" title="Đến ngày">
+
+    <select name="sort" aria-label="Sắp xếp">
+      <option value="desc" {% if sort == 'desc' %}selected{% endif %}>Mới nhất trước</option>
+      <option value="asc" {% if sort == 'asc' %}selected{% endif %}>Cũ nhất trước</option>
+    </select>
+
+    <div class="filter-actions">
+      <button class="btn primary sm" type="submit">LỌC</button>
+      <a class="btn ghost sm" href="{{ url_for('campaigns_view') }}">ĐẶT LẠI</a>
+    </div>
+  </form>
+
+  <!-- CAMPAIGNS TABLE CARD -->
+  {% if campaigns %}
+  <div class="campaign-table-container">
+    <table class="campaign-table">
+      <thead>
+        <tr>
+          <th>Tên chiến dịch / ID</th>
+          <th>Trạng thái</th>
+          <th>Phân bổ</th>
+          <th>Tiến độ</th>
+          <th>Ngày tạo</th>
+          <th style="text-align:right">Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for camp in campaigns %}
+        <tr>
+          <td class="camp-name-cell">
+            <a href="{{ url_for('campaign_detail_user_view', campaign_id=camp.campaign_id) }}" style="text-decoration:none; color:inherit">
+              <strong>{{ camp.campaign_name }}</strong>
+            </a>
+            <small>{{ camp.campaign_id }}</small>
+          </td>
+          <td>
+            {% if camp.lifecycle == 'completed' %}
+            <span class="badge green">Hoàn tất</span>
+            {% elif camp.lifecycle in ['running', 'queued'] %}
+            <span class="badge blue"><span class="pulse pulsing"></span> Đang chạy</span>
+            {% elif camp.lifecycle == 'paused' %}
+            <span class="badge amber">Tạm dừng</span>
+            {% elif camp.lifecycle == 'scheduled' %}
+            <span class="badge purple">Hẹn lịch</span>
+            {% elif camp.lifecycle in ['failed', 'partial_failed'] %}
+            <span class="badge red">Sự cố</span>
+            {% elif camp.lifecycle == 'cancelled' %}
+            <span class="badge muted">Đã hủy</span>
+            {% else %}
+            <span class="badge muted">{{ camp.lifecycle }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% set snap_len = camp.account_group_snapshot|length if camp.account_group_snapshot else 0 %}
+            <span style="font-size:12px; color:var(--text2)">{{ snap_len }} tài khoản</span>
+          </td>
+          <td>
+            {% set p_tot = camp.progress.total if (camp.progress and camp.progress.total) else 1 %}
+            {% set p_suc = camp.progress.successful if (camp.progress and camp.progress.successful) else 0 %}
+            {% set p_pct = (p_suc * 100 / p_tot)|round|int %}
+            <div style="font-size:11px; color:var(--text2); margin-bottom:4px">
+              {{ p_suc }}/{{ camp.progress.total if camp.progress else 0 }} nhóm ({{ p_pct }}%)
+            </div>
+            <div class="progress-bar-rail" style="height:4px; max-width:120px" title="{{ p_pct }}%">
+              <div class="progress-bar-fill" style="width:{{ p_pct }}%"></div>
+            </div>
+          </td>
+          <td style="font-size:12px; color:var(--muted); font-family:var(--font-mono)">
+            {{ camp.created_at[:16] if camp.created_at else '' }}
+          </td>
+          <td>
+            <div class="camp-actions-cell" style="justify-content:flex-end">
+              <a class="btn secondary sm" href="{{ url_for('campaign_detail_user_view', campaign_id=camp.campaign_id) }}" title="Xem chi tiết">
+                Chi tiết
+              </a>
+              <form method="post" action="{{ url_for('campaign_clone_action', campaign_id=camp.campaign_id) }}" style="margin:0">
+                <button type="submit" class="btn ghost sm" title="Nhân bản chiến dịch làm bản nháp mới">
+                  Nhân bản
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="pagination-footer">
+      <span>Hiển thị {{ campaigns|length }} / {{ pagination.total }} chiến dịch</span>
+      {% if pagination.pages > 1 %}
+      <div class="pagination-nav">
+        {% if pagination.page > 1 %}
+        <a class="btn secondary sm" href="{{ url_for('campaigns_view', q=query, status=status_filter, account=account_filter, date_from=date_from, date_to=date_to, sort=sort, page=pagination.page-1) }}">Trước</a>
+        {% endif %}
+        <span>Trang {{ pagination.page }} / {{ pagination.pages }}</span>
+        {% if pagination.page < pagination.pages %}
+        <a class="btn secondary sm" href="{{ url_for('campaigns_view', q=query, status=status_filter, account=account_filter, date_from=date_from, date_to=date_to, sort=sort, page=pagination.page+1) }}">Sau</a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="panel card-pad-lg empty-state">
+    <svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+    </svg>
+    <p style="margin-top:12px; font-size:var(--text-base)">Không tìm thấy chiến dịch nào phù hợp với bộ lọc.</p>
+    <div style="display:flex; gap:10px; margin-top:16px">
+      <a class="btn primary" href="{{ url_for('compose') }}">Tạo chiến dịch mới</a>
+      <a class="btn secondary" href="{{ url_for('campaigns_view') }}">Xem tất cả</a>
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

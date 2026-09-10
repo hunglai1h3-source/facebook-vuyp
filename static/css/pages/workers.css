@@ -1,0 +1,160 @@
+/* Workers & Connector Pairing Styles (Phase 12) */
+.workers-shell {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(20px, 2.5vw, 32px);
+  min-width: 0;
+}
+
+/* Pairing Wizard */
+.pairing-wizard-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: clamp(20px, 2.5vw, 32px);
+}
+.pairing-steps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 24px;
+}
+.pairing-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  position: relative;
+}
+.step-num {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-full);
+  background: var(--action-bg);
+  color: var(--on-action);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--weight-bold);
+  font-size: var(--text-sm);
+}
+.pairing-step strong {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.pairing-step p {
+  font-size: var(--text-xs);
+  color: var(--text2);
+  line-height: 1.6;
+}
+
+.pair-code-action-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.pair-code-display {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 2px dashed var(--border2);
+  border-radius: var(--r-md);
+  color: var(--focus-ring);
+  text-align: center;
+  user-select: all;
+}
+
+/* Worker Cards Grid */
+.workers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.worker-card-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: var(--t-fast);
+}
+.worker-card-item:hover {
+  border-color: var(--border2);
+  box-shadow: var(--shadow-sm);
+}
+
+.worker-meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border-radius: var(--r-md);
+}
+.worker-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.worker-meta-row span { color: var(--text2); }
+.worker-meta-row strong { color: var(--text); }
+
+/* Troubleshooting Guide */
+.troubleshoot-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 24px;
+}
+.troubleshoot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+.troubleshoot-item {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px;
+  background: var(--surface2);
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--focus-ring);
+}
+.troubleshoot-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.troubleshoot-text strong {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.troubleshoot-text p {
+  font-size: var(--text-xs);
+  color: var(--text2);
+  line-height: 1.5;
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .pairing-steps-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .workers-grid { grid-template-columns: 1fr; }
+  .pairing-step { padding: 16px; }
+  .pair-code-display { font-size: 20px; }
+}

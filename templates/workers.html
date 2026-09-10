@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}Máy trạm Worker & Extension • FB POST PRO{% endblock %}
+{% block page_title %}Máy trạm / Worker{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workers.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="workers-shell">
+  <!-- 3-STEP PAIRING WIZARD -->
+  <article class="pairing-wizard-card">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Hướng dẫn kết nối</span>
+        <h3 class="section-title">Ghép nối Chrome Extension mới</h3>
+      </div>
+      <span class="badge blue">Bảo mật chuẩn Desktop</span>
+    </div>
+    <p class="section-desc">
+      FB POST PRO kết nối trực tiếp với trình duyệt Chrome của bạn qua Extension. Không lưu mật khẩu hay cookie trên máy chủ.
+    </p>
+
+    <div class="pairing-steps-grid">
+      <!-- Step 1 -->
+      <div class="pairing-step">
+        <span class="step-num">1</span>
+        <strong>Mở trình duyệt Chrome</strong>
+        <p>Mở Google Chrome trên máy tính của bạn và đăng nhập tài khoản Facebook cần tự động hóa trên profile đó.</p>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="pairing-step">
+        <span class="step-num">2</span>
+        <strong>Cài Extension FB POST PRO</strong>
+        <p>Mở tiện ích mở rộng FB POST PRO đã được cài đặt trên thanh công cụ của trình duyệt Chrome.</p>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="pairing-step">
+        <span class="step-num">3</span>
+        <strong>Nhập mã ghép nối 6 chữ số</strong>
+        <p>Bấm nút bên dưới để tạo mã kết nối bảo mật dùng một lần và dán vào tiện ích Chrome.</p>
+
+        <div class="pair-code-action-box">
+          <div id="pairCodeDisplay" class="pair-code-display">------</div>
+          <div style="display:flex; gap:8px">
+            <button type="button" class="btn primary sm w-full" id="btnGenPairCode">
+              Tạo mã kết nối
+            </button>
+            <button type="button" class="btn secondary sm" id="btnCopyPairCode" title="Sao chép mã" style="display:none">
+              Sao chép
+            </button>
+          </div>
+          <span id="pairCodeTimer" style="font-size:11px; color:var(--muted); text-align:center; display:none">Mã có hiệu lực trong 5 phút</span>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- WORKERS GRID -->
+  <div>
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Thiết bị</span>
+        <h3 class="section-title">Danh sách máy trạm đã liên kết</h3>
+      </div>
+      <span class="badge muted">{{ devices|length }} máy trạm</span>
+    </div>
+
+    {% if devices %}
+    <div class="workers-grid">
+      {% for dev in devices %}
+      <div class="worker-card-item">
+        <div class="section-header" style="margin-bottom:0">
+          <div>
+            <strong style="font-size:var(--text-base); color:var(--text)">{{ dev.name or dev.device_id }}</strong>
+            <small style="display:block; font-size:11px; color:var(--muted); font-family:var(--font-mono)">
+              ID: {{ dev.device_id }}
+            </small>
+          </div>
+          <div>
+            {% if dev.status_tag == 'online' %}
+            <span class="badge green"><span class="pulse pulsing"></span> Trực tuyến</span>
+            {% elif dev.status_tag == 'busy' %}
+            <span class="badge blue"><span class="pulse pulsing"></span> Đang xử lý</span>
+            {% else %}
+            <span class="badge red"><span class="pulse"></span> Ngoại tuyến</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="worker-meta-list">
+          <div class="worker-meta-row">
+            <span>Tín hiệu cuối (Last seen):</span>
+            <strong style="font-family:var(--font-mono); font-size:11px">{{ dev.last_seen[:19] if dev.last_seen else 'Chưa có' }}</strong>
+          </div>
+          <div class="worker-meta-row">
+            <span>Phiên bản Extension:</span>
+            <strong>{{ dev.version or '1.0' }}</strong>
+          </div>
+          <div class="worker-meta-row">
+            <span>Tài khoản Facebook liên kết:</span>
+            <strong>{{ dev.bound_accounts|length }} tài khoản</strong>
+          </div>
+        </div>
+
+        {% if dev.bound_accounts %}
+        <div style="font-size:11px; color:var(--text2)">
+          <span style="color:var(--muted); display:block; margin-bottom:4px">Tài khoản quản lý:</span>
+          <div style="display:flex; flex-wrap:wrap; gap:4px">
+            {% for acc in dev.bound_accounts %}
+            <span class="badge muted" style="font-size:11px">{{ acc.display_name }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% else %}
+        <div style="font-size:11px; color:var(--amber); background:var(--amber-tint); padding:6px 10px; border-radius:var(--r-sm)">
+          Chưa có tài khoản Facebook nào gán vào worker này.
+        </div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('disconnect_connector') }}" style="margin-top:auto" onsubmit="return confirm('Bạn có chắc chắn muốn ngắt kết nối máy trạm này?')">
+          <input type="hidden" name="device_id" value="{{ dev.device_id }}">
+          <button type="submit" class="btn danger sm w-full">
+            Ngắt kết nối
+          </button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="panel card-pad-lg empty-state">
+      <svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+      </svg>
+      <p style="margin-top:12px; font-size:var(--text-base)">Chưa có máy trạm nào được kết nối.</p>
+      <p style="color:var(--muted); font-size:var(--text-sm)">Sử dụng bảng Hướng dẫn ghép nối ở phía trên để liên kết Chrome Extension đầu tiên của bạn.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ACTIONABLE OFFLINE TROUBLESHOOTING GUIDE -->
+  <article class="troubleshoot-card">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Hỗ trợ kỹ thuật</span>
+        <h3 class="section-title">Hướng dẫn xử lý khi Worker báo Ngoại tuyến (Offline)</h3>
+      </div>
+    </div>
+
+    <div class="troubleshoot-list">
+      <div class="troubleshoot-item">
+        <div class="troubleshoot-icon">💻</div>
+        <div class="troubleshoot-text">
+          <strong>1. Kiểm tra trình duyệt Chrome trên máy tính cá nhân</strong>
+          <p>Đảm bảo cửa sổ trình duyệt Chrome vẫn đang mở. Nếu máy tính ở chế độ ngủ (Sleep) hoặc tắt màn hình, các tác vụ nền có thể bị tạm ngưng.</p>
+        </div>
+      </div>
+
+      <div class="troubleshoot-item">
+        <div class="troubleshoot-icon">🧩</div>
+        <div class="troubleshoot-text">
+          <strong>2. Kiểm tra biểu tượng Extension FB POST PRO</strong>
+          <p>Nhìn vào góc trên bên phải thanh công cụ Chrome. Bấm vào icon FB POST PRO để mở popup. Nếu biểu tượng màu xám hoặc ghi "Chưa kết nối", bấm nút "Kết nối lại".</p>
+        </div>
+      </div>
+
+      <div class="troubleshoot-item">
+        <div class="troubleshoot-icon">🌐</div>
+        <div class="troubleshoot-text">
+          <strong>3. Kiểm tra kết nối mạng Internet</strong>
+          <p>Worker cần kết nối mạng liên tục để nhận và đồng bộ trạng thái chiến dịch với máy chủ đám mây. Đảm bảo đường truyền Wi-Fi/LAN của máy tính hoạt động ổn định.</p>
+        </div>
+      </div>
+
+      <div class="troubleshoot-item">
+        <div class="troubleshoot-icon">🔑</div>
+        <div class="troubleshoot-text">
+          <strong>4. Ghép nối lại bằng mã kết nối mới</strong>
+          <p>Nếu phiên làm việc bị ngắt quá 24 giờ, bấm "Tạo mã kết nối" ở đầu trang này và nhập lại mã 6 số vào Extension để kích hoạt phiên làm việc mới an toàn.</p>
+        </div>
+      </div>
+    </div>
+  </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const btnGenPairCode = document.getElementById('btnGenPairCode');
+const btnCopyPairCode = document.getElementById('btnCopyPairCode');
+const pairCodeDisplay = document.getElementById('pairCodeDisplay');
+const pairCodeTimer = document.getElementById('pairCodeTimer');
+
+btnGenPairCode?.addEventListener('click', async () => {
+  btnGenPairCode.disabled = true;
+  btnGenPairCode.textContent = 'Đang tạo...';
+  try {
+    const res = await fetch('/api/extension/pair-code', { method: 'POST' });
+    const data = await res.json();
+    if (data.code) {
+      pairCodeDisplay.textContent = data.code;
+      btnCopyPairCode.style.display = 'inline-flex';
+      pairCodeTimer.style.display = 'block';
+      showToast('Đã tạo mã kết nối thành công!', 'success');
+    } else {
+      showToast(data.error || 'Không thể tạo mã kết nối', 'error');
+    }
+  } catch(e) {
+    showToast('Lỗi mạng khi tạo mã kết nối', 'error');
+  } finally {
+    btnGenPairCode.disabled = false;
+    btnGenPairCode.textContent = 'Tạo mã mới';
+  }
+});
+
+btnCopyPairCode?.addEventListener('click', () => {
+  const code = pairCodeDisplay.textContent.trim();
+  if (!code || code === '------') return;
+  navigator.clipboard.writeText(code).then(() => {
+    btnCopyPairCode.textContent = 'Đã sao chép!';
+    showToast('Đã sao chép mã kết nối vào clipboard', 'success');
+    setTimeout(() => { btnCopyPairCode.textContent = 'Sao chép'; }, 2000);
+  });
+});
+</script>
+{% endblock %}

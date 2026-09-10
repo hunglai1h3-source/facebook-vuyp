@@ -17,12 +17,34 @@
         <div class="import-actions"><label class="file-picker" for="groupFile"><span>Chọn TXT/CSV</span><input id="groupFile" type="file" name="group_file" accept=".txt,.csv,text/plain,text/csv"></label><button class="btn primary" type="submit">IMPORT GROUP</button></div>
       </form>
       {% if import_result %}
-      <div class="import-result" role="status"><strong>{{ import_result.added }} đã thêm</strong><span>{{ import_result.duplicates }} trùng</span><span>{{ import_result.invalid }} không hợp lệ</span>{% if import_result.invalid_samples %}<details><summary>Xem URL lỗi</summary><ul>{% for item in import_result.invalid_samples %}<li>{{ item }}</li>{% endfor %}</ul></details>{% endif %}</div>
+      <div class="import-result" role="status">
+        <span class="import-badge success">✓ {{ import_result.added }} đã thêm</span>
+        {% if import_result.duplicates > 0 %}
+        <span class="import-badge warning">⚠ {{ import_result.duplicates }} trùng lặp</span>
+        {% else %}
+        <span class="import-badge muted">0 trùng lặp</span>
+        {% endif %}
+        {% if import_result.invalid > 0 %}
+        <span class="import-badge danger">✕ {{ import_result.invalid }} không hợp lệ</span>
+        {% endif %}
+        {% if import_result.invalid_samples %}
+        <details><summary>Xem URL lỗi ({{ import_result.invalid_samples|length }})</summary><ul>{% for item in import_result.invalid_samples %}<li>{{ item }}</li>{% endfor %}</ul></details>
+        {% endif %}
+      </div>
       {% endif %}
       <div class="single-add-legacy"><strong>Chỉ thêm một Group</strong><form method="post" action="{{ url_for('add_group') }}" class="add-group-form"><div class="group-input-box"><input type="url" name="group_url" placeholder="https://www.facebook.com/groups/ten-nhom" required></div><button class="btn secondary" type="submit">THÊM</button></form></div>
     </article>
     <article class="panel card-pad-lg account-card">
-      <div class="section-header"><div><span class="eyebrow">Facebook accounts</span><h3 class="section-title">Account nhận Group</h3></div><span class="badge muted">{{ accounts|length }} account</span></div>
+      <div class="section-header">
+        <div>
+          <span class="eyebrow">Facebook accounts</span>
+          <h3 class="section-title">Account nhận Group</h3>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <span class="badge muted">{{ accounts|length }} account</span>
+          <a href="{{ url_for('accounts_view') }}" class="btn secondary sm" style="text-decoration: none;">Xem chi tiết &rarr;</a>
+        </div>
+      </div>
       <form method="post" action="{{ url_for('add_facebook_account') }}" class="account-add-form">
         <div class="form-group"><label for="accountName">Tên hiển thị</label><input id="accountName" name="display_name" maxlength="120" placeholder="Ví dụ: Account A" required></div>
         <div class="form-group"><label for="facebookUserId">Facebook ID (không bắt buộc)</label><input id="facebookUserId" name="facebook_user_id" maxlength="80" placeholder="UID hoặc tên nhận diện"></div>

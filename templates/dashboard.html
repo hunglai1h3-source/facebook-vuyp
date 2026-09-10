@@ -37,64 +37,151 @@
     </div>
   </div>
 
-  <!-- KPI STATS GRID -->
+  <!-- QUICK ACTION TOOLBAR (PHASE 12) -->
+  <div class="quick-actions-bar">
+    <span class="quick-action-label">Thao tác nhanh:</span>
+    <a class="quick-action-btn primary" href="{{ url_for('compose') }}">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+      Tạo chiến dịch mới
+    </a>
+    <a class="quick-action-btn" href="{{ url_for('groups') }}">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Nhập nhóm mục tiêu
+    </a>
+    <a class="quick-action-btn" href="{{ url_for('accounts_view') }}">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+      Quản lý tài khoản
+    </a>
+    <a class="quick-action-btn" href="{{ url_for('workers_view') }}">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      Kết nối Worker
+    </a>
+    <a class="quick-action-btn" href="{{ url_for('campaigns_view') }}">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+      Lịch sử chiến dịch
+    </a>
+  </div>
+
+  <!-- 8 KPI STATS GRID (PHASE 12) -->
   <div class="stats-grid">
+    <!-- 1. Total Accounts -->
+    <article class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Tài khoản Facebook</span>
+        <span class="stat-icon-wrap icon-indigo">
+          <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+          </svg>
+        </span>
+      </div>
+      <div class="stat-num">{{ total_accounts or 0 }}</div>
+      <div class="stat-sub">Tài khoản kết nối hệ thống</div>
+    </article>
+
+    <!-- 2. Total Groups -->
     <article class="stat-card">
       <div class="stat-head">
         <span class="stat-label">Tổng Groups</span>
-        <span class="stat-icon-wrap icon-indigo">
+        <span class="stat-icon-wrap icon-blue">
           <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
           </svg>
         </span>
       </div>
       <div class="stat-num">{{ total_groups or 0 }}</div>
-      <div class="stat-sub">Danh sách nhóm mục tiêu</div>
+      <div class="stat-sub">Nhóm Facebook mục tiêu</div>
     </article>
 
+    <!-- 3. Total Campaigns -->
     <article class="stat-card">
       <div class="stat-head">
-        <span class="stat-label">Đăng thành công</span>
+        <span class="stat-label">Tổng chiến dịch</span>
+        <span class="stat-icon-wrap icon-indigo">
+          <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+          </svg>
+        </span>
+      </div>
+      <div class="stat-num">{{ total_campaigns or 0 }}</div>
+      <div class="stat-sub">Chiến dịch đã khởi tạo</div>
+    </article>
+
+    <!-- 4. Running Campaigns -->
+    <article class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Đang chạy</span>
+        <span class="stat-icon-wrap icon-blue">
+          <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+        </span>
+      </div>
+      <div class="stat-num" style="color:var(--blue)">{{ running_campaigns or 0 }}</div>
+      <div class="stat-sub">Chiến dịch đang hoạt động</div>
+    </article>
+
+    <!-- 5. Scheduled Campaigns -->
+    <article class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Hẹn lịch</span>
+        <span class="stat-icon-wrap icon-indigo">
+          <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+        </span>
+      </div>
+      <div class="stat-num">{{ scheduled_campaigns or 0 }}</div>
+      <div class="stat-sub">Chờ đến giờ khởi chạy</div>
+    </article>
+
+    <!-- 6. Completed Campaigns -->
+    <article class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Đã hoàn tất</span>
         <span class="stat-icon-wrap icon-emerald">
           <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
         </span>
       </div>
-      <div class="stat-num">{{ success_count or 0 }}</div>
-      <div class="stat-sub">Lượt đăng thành công</div>
+      <div class="stat-num text-green">{{ completed_campaigns or 0 }}</div>
+      <div class="stat-sub">Chiến dịch hoàn thành 100%</div>
     </article>
 
+    <!-- 7. Failed Campaigns -->
     <article class="stat-card">
       <div class="stat-head">
-        <span class="stat-label">Tỷ lệ thành công</span>
-        <span class="stat-icon-wrap icon-blue">
-          <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
-          </svg>
-        </span>
-      </div>
-      <div class="stat-num">{{ success_rate or 0 }}%</div>
-      <div class="stat-sub">Hiệu suất theo lịch sử</div>
-    </article>
-
-    <article class="stat-card">
-      <div class="stat-head">
-        <span class="stat-label">Lỗi ghi nhận</span>
+        <span class="stat-label">Sự cố / Lỗi</span>
         <span class="stat-icon-wrap icon-rose">
           <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
         </span>
       </div>
-      <div class="stat-num">{{ error_count or 0 }}</div>
-      <div class="stat-sub">Cần kiểm tra hoặc thử lại</div>
+      <div class="stat-num text-red">{{ failed_campaigns or 0 }}</div>
+      <div class="stat-sub">Cần kiểm tra hoặc chạy lại</div>
+    </article>
+
+    <!-- 8. Workers & Today's Tasks -->
+    <article class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Worker / Hôm nay</span>
+        <span class="stat-icon-wrap icon-emerald">
+          <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+          </svg>
+        </span>
+      </div>
+      <div class="stat-num" style="font-size:24px; padding-top:4px">
+        <span style="color:var(--green)">{{ online_devices }}</span> / {{ online_devices + offline_devices }} <span style="font-size:14px; color:var(--muted)">online</span>
+      </div>
+      <div class="stat-sub">Hôm nay: {{ tasks_success_today }} thành công, {{ tasks_failed_today }} lỗi</div>
     </article>
   </div>
 
-  <!-- TWO-COLUMN MAIN SECTION -->
+  <!-- TWO-COLUMN MAIN SECTION: ACTIVE CAMPAIGN & CONNECTOR -->
   <div class="dash-grid-2">
-    <!-- CAMPAIGN STATUS -->
+    <!-- ACTIVE CAMPAIGN STATUS & CONTROLS -->
     <article class="panel card-pad-lg">
       <div class="section-header">
         <div>
@@ -104,6 +191,10 @@
         {% if campaign_state and campaign_state.running %}
         <span class="badge blue">
           <span class="pulse pulsing"></span> ĐANG CHẠY
+        </span>
+        {% elif campaign_state and campaign_state.status == 'paused' %}
+        <span class="badge amber">
+          <span class="pulse"></span> TẠM DỪNG
         </span>
         {% else %}
         <span class="badge muted">
@@ -156,6 +247,36 @@
           <span class="mini-value text-red">{{ (campaign_state.errors if campaign_state and campaign_state.errors else 0) }}</span>
         </div>
       </div>
+
+      <!-- CAMPAIGN CONTROLS (PAUSE / RESUME / STOP) -->
+      {% if campaign_state and (campaign_state.running or campaign_state.status == 'paused') %}
+      <div class="campaign-control-actions">
+        {% if campaign_state.status == 'paused' %}
+        <form method="post" action="{{ url_for('resume_campaign') }}">
+          <input type="hidden" name="next" value="{{ url_for('dashboard') }}">
+          <button type="submit" class="btn primary sm">
+            <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            Tiếp tục chạy
+          </button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('pause_campaign') }}">
+          <input type="hidden" name="next" value="{{ url_for('dashboard') }}">
+          <button type="submit" class="btn secondary sm">
+            <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            Tạm dừng
+          </button>
+        </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('stop_campaign') }}" onsubmit="return confirm('Bạn có chắc chắn muốn dừng chiến dịch này? Mọi tác vụ còn lại sẽ được hủy an toàn.')">
+          <input type="hidden" name="next" value="{{ url_for('dashboard') }}">
+          <button type="submit" class="btn danger sm">
+            <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+            Dừng chiến dịch
+          </button>
+        </form>
+      </div>
+      {% endif %}
     </article>
 
     <!-- CONNECTOR CARD -->
@@ -188,14 +309,89 @@
         </div>
       </div>
 
-      <a class="btn secondary w-full" href="{{ url_for('settings') }}" style="margin-top:14px">
-        <span>Quản lý kết nối Connector</span>
-        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <div style="display:flex; gap:10px; margin-top:14px">
+        <a class="btn secondary w-full" href="{{ url_for('workers_view') }}">
+          <span>Quản lý Máy trạm Worker</span>
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </a>
+      </div>
+    </article>
+  </div>
+
+  <!-- RECENT CAMPAIGNS CARD (PHASE 12) -->
+  <article class="panel card-pad-lg recent-campaigns-card">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Chiến dịch</span>
+        <h3 class="section-title">Chiến dịch gần đây</h3>
+      </div>
+      <a class="view-all-link" href="{{ url_for('campaigns_view') }}">
+        <span>Xem tất cả chiến dịch</span>
+        <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
         </svg>
       </a>
-    </article>
-  </div>
+    </div>
+
+    {% if recent_campaigns %}
+    <div class="recent-campaigns-table">
+      {% for camp in recent_campaigns %}
+      <div class="recent-camp-row">
+        <div class="recent-camp-title">
+          <strong>{{ camp.campaign_name }}</strong>
+          <small>{{ camp.campaign_id }} • {{ camp.created_at[:16] if camp.created_at else '' }}</small>
+        </div>
+        <div>
+          {% if camp.lifecycle == 'completed' %}
+          <span class="badge green">Hoàn tất</span>
+          {% elif camp.lifecycle in ['running', 'queued'] %}
+          <span class="badge blue">Đang chạy</span>
+          {% elif camp.lifecycle == 'paused' %}
+          <span class="badge amber">Tạm dừng</span>
+          {% elif camp.lifecycle == 'scheduled' %}
+          <span class="badge purple">Hẹn lịch</span>
+          {% elif camp.lifecycle in ['failed', 'partial_failed'] %}
+          <span class="badge red">Sự cố</span>
+          {% else %}
+          <span class="badge muted">{{ camp.lifecycle }}</span>
+          {% endif %}
+        </div>
+        <div class="recent-camp-counts">
+          <span style="font-size:12px; color:var(--text2)">{{ camp.progress.successful if camp.progress else 0 }}/{{ camp.progress.total if camp.progress else 0 }} nhóm</span>
+        </div>
+        <div class="recent-camp-progress">
+          {% set p_tot = camp.progress.total if (camp.progress and camp.progress.total) else 1 %}
+          {% set p_suc = camp.progress.successful if (camp.progress and camp.progress.successful) else 0 %}
+          {% set p_pct = (p_suc * 100 / p_tot)|round|int %}
+          <div class="progress-bar-rail" style="height:5px" title="{{ p_pct }}%">
+            <div class="progress-bar-fill" style="width:{{ p_pct }}%"></div>
+          </div>
+        </div>
+        <div class="recent-camp-actions">
+          <a class="btn secondary sm" href="{{ url_for('campaign_detail_user_view', campaign_id=camp.campaign_id) }}" title="Xem chi tiết">
+            Chi tiết
+          </a>
+          <form method="post" action="{{ url_for('campaign_clone_action', campaign_id=camp.campaign_id) }}" style="margin:0">
+            <button type="submit" class="btn ghost sm" title="Nhân bản chiến dịch làm bản nháp">
+              Nhân bản
+            </button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <svg width="34" height="34" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+      </svg>
+      <p>Chưa có chiến dịch nào được tạo. Hãy tạo chiến dịch đầu tiên của bạn!</p>
+      <a class="btn primary sm" href="{{ url_for('compose') }}" style="margin-top:12px">Tạo chiến dịch ngay</a>
+    </div>
+    {% endif %}
+  </article>
 
   <!-- RECENT ACTIVITY TIMELINE -->
   <article class="panel card-pad-lg">

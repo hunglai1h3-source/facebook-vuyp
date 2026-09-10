@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Chi tiết Chiến dịch • FB POST PRO{% endblock %}
+{% block page_title %}Chi tiết Chiến dịch{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/campaigns.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="campaign-detail-shell">
+  <!-- DETAIL HEADER CARD -->
+  <div class="detail-header-card">
+    <div class="section-header" style="margin-bottom:0">
+      <div>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px">
+          <a class="btn secondary sm" href="{{ url_for('campaigns_view') }}" title="Quay lại">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+            </svg>
+            Danh sách
+          </a>
+          <span class="eyebrow">Chi tiết chiến dịch</span>
+        </div>
+        <h2 class="section-title" style="font-size:clamp(20px,2.2vw,30px)">{{ campaign.campaign_name }}</h2>
+        <p style="font-family:var(--font-mono); font-size:12px; color:var(--muted); margin-top:4px">
+          ID: {{ campaign.campaign_id }} • Khởi tạo: {{ campaign.created_at[:19] if campaign.created_at else '' }}
+        </p>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
+        <!-- Status Badge -->
+        {% if campaign.lifecycle == 'completed' %}
+        <span class="badge green" style="padding:6px 12px; font-size:13px">Hoàn tất</span>
+        {% elif campaign.lifecycle in ['running', 'queued'] %}
+        <span class="badge blue" style="padding:6px 12px; font-size:13px"><span class="pulse pulsing"></span> Đang chạy</span>
+        {% elif campaign.lifecycle == 'paused' %}
+        <span class="badge amber" style="padding:6px 12px; font-size:13px">Tạm dừng</span>
+        {% elif campaign.lifecycle == 'scheduled' %}
+        <span class="badge purple" style="padding:6px 12px; font-size:13px">Hẹn lịch</span>
+        {% elif campaign.lifecycle in ['failed', 'partial_failed'] %}
+        <span class="badge red" style="padding:6px 12px; font-size:13px">Sự cố</span>
+        {% elif campaign.lifecycle == 'cancelled' %}
+        <span class="badge muted" style="padding:6px 12px; font-size:13px">Đã hủy</span>
+        {% else %}
+        <span class="badge muted" style="padding:6px 12px; font-size:13px">{{ campaign.lifecycle }}</span>
+        {% endif %}
+
+        <!-- Direct Controls -->
+        {% if campaign.lifecycle in ['running', 'queued'] %}
+        <form method="post" action="{{ url_for('pause_campaign') }}" style="margin:0">
+          <input type="hidden" name="next" value="{{ url_for('campaign_detail_user_view', campaign_id=campaign.campaign_id) }}">
+          <button type="submit" class="btn secondary sm">Tạm dừng</button>
+        </form>
+        {% elif campaign.lifecycle == 'paused' %}
+        <form method="post" action="{{ url_for('resume_campaign') }}" style="margin:0">
+          <input type="hidden" name="next" value="{{ url_for('campaign_detail_user_view', campaign_id=campaign.campaign_id) }}">
+          <button type="submit" class="btn primary sm">Tiếp tục chạy</button>
+        </form>
+        {% endif %}
+
+        {% if campaign.lifecycle in ['running', 'queued', 'paused', 'scheduled'] %}
+        <form method="post" action="{{ url_for('stop_campaign') }}" style="margin:0" onsubmit="return confirm('Bạn có chắc muốn hủy chiến dịch này? Tác vụ chưa thực hiện sẽ bị hủy.')">
+          <input type="hidden" name="next" value="{{ url_for('campaign_detail_user_view', campaign_id=campaign.campaign_id) }}">
+          <button type="submit" class="btn danger sm">Hủy chiến dịch</button>
+        </form>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('campaign_clone_action', campaign_id=campaign.campaign_id) }}" style="margin:0">
+          <button type="submit" class="btn secondary sm" title="Nhân bản chiến dịch làm bản nháp mới">
+            Nhân bản làm bản nháp
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- META GRID -->
+    <div class="detail-meta-grid">
+      <div class="meta-item">
+        <span>Tổng số nhóm</span>
+        <strong>{{ campaign.progress.total if campaign.progress else 0 }} Groups</strong>
+      </div>
+      <div class="meta-item">
+        <span>Đăng thành công</span>
+        <strong style="color:var(--green)">{{ campaign.progress.successful if campaign.progress else 0 }} bài</strong>
+      </div>
+      <div class="meta-item">
+        <span>Thất bại / Lỗi</span>
+        <strong style="color:var(--red)">{{ campaign.progress.failed if campaign.progress else 0 }} bài</strong>
+      </div>
+      <div class="meta-item">
+        <span>Thời gian giãn cách (Delay)</span>
+        <strong>{{ campaign.payload.min_delay if campaign.payload else 1 }} – {{ campaign.payload.max_delay if campaign.payload else 3 }} phút</strong>
+      </div>
+      {% if campaign.scheduled_at %}
+      <div class="meta-item">
+        <span>Thời gian hẹn chạy</span>
+        <strong>{{ campaign.scheduled_at[:16] }}</strong>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- OVERALL PROGRESS BAR -->
+    {% set p_tot = campaign.progress.total if (campaign.progress and campaign.progress.total) else 1 %}
+    {% set p_suc = campaign.progress.successful if (campaign.progress and campaign.progress.successful) else 0 %}
+    {% set p_pct = (p_suc * 100 / p_tot)|round|int %}
+    <div style="margin-top:20px">
+      <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text2); margin-bottom:6px">
+        <span>Tiến độ hoàn thành</span>
+        <strong>{{ p_pct }}%</strong>
+      </div>
+      <div class="progress-bar-rail" style="height:8px">
+        <div class="progress-bar-fill" style="width:{{ p_pct }}%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASK BREAKDOWN TABLE -->
+  <div class="task-breakdown-card">
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Nhiệm vụ chi tiết</span>
+        <h3 class="section-title">Danh sách bài đăng theo Group</h3>
+      </div>
+      <span class="badge muted">{{ tasks|length }} tác vụ</span>
+    </div>
+
+    {% if tasks %}
+    <div class="campaign-table-container">
+      <table class="task-table">
+        <thead>
+          <tr>
+            <th style="width:40px">#</th>
+            <th>Tài khoản Facebook</th>
+            <th>Nhóm mục tiêu (Group)</th>
+            <th>Trạng thái</th>
+            <th>Thời gian / Thời lượng</th>
+            <th>Thử lại</th>
+            <th>Thông báo lỗi</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for task in tasks %}
+          <tr>
+            <td style="color:var(--muted); font-family:var(--font-mono)">{{ loop.index }}</td>
+            <td>
+              {% set acc = accounts.get(task.account_id) %}
+              <strong>{{ acc.display_name if acc else task.account_id }}</strong>
+            </td>
+            <td>
+              <a href="{{ task.group_url }}" target="_blank" rel="noopener noreferrer" class="group-url-link" style="font-size:12px; max-width:240px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="{{ task.group_url }}">
+                {{ task.group_url }}
+              </a>
+            </td>
+            <td>
+              {% if task.status == 'successful' %}
+              <span class="badge green">Thành công</span>
+              {% elif task.status == 'running' %}
+              <span class="badge blue"><span class="pulse pulsing"></span> Đang đăng</span>
+              {% elif task.status == 'pending' %}
+              <span class="badge muted">Chờ đến lượt</span>
+              {% elif task.status == 'paused' %}
+              <span class="badge amber">Tạm dừng</span>
+              {% elif task.status == 'retry_wait' %}
+              <span class="badge purple">Chờ thử lại</span>
+              {% elif task.status == 'failed' %}
+              <span class="badge red">Thất bại</span>
+              {% elif task.status == 'cancelled' %}
+              <span class="badge muted">Đã hủy</span>
+              {% else %}
+              <span class="badge muted">{{ task.status }}</span>
+              {% endif %}
+            </td>
+            <td style="font-family:var(--font-mono); color:var(--text2); font-size:11px">
+              {% if task.finished_at %}
+                {{ task.finished_at[11:19] }}
+                {% if task.duration_sec %}
+                <span style="color:var(--muted)">({{ task.duration_sec }}s)</span>
+                {% endif %}
+              {% elif task.started_at %}
+                Bắt đầu {{ task.started_at[11:19] }}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td style="font-family:var(--font-mono); font-size:11px">
+              {{ task.retry_count or 0 }} / {{ task.max_retries or 2 }}
+            </td>
+            <td>
+              {% if task.last_error %}
+              <div class="task-error-text" title="{{ task.last_error }}">
+                {{ task.friendly_error }}
+              </div>
+              {% else %}
+              <span style="color:var(--muted)">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding:20px; text-align:center; color:var(--muted)">
+      Chưa có tác vụ nào được khởi tạo cho chiến dịch này.
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -51,6 +51,14 @@
           </div>
           Soạn bài &amp; Đăng
         </a>
+        <a class="nav-link {{ 'active' if page == 'campaigns' else '' }}" href="{{ url_for('campaigns_view') }}">
+          <div class="nav-link-icon-wrap">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="15" height="15">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+            </svg>
+          </div>
+          Quản lý Chiến dịch
+        </a>
         <a class="nav-link {{ 'active' if page == 'groups' else '' }}" href="{{ url_for('groups') }}">
           <div class="nav-link-icon-wrap">
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="15" height="15">
@@ -65,12 +73,28 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
           </div>
-          Lịch sử
+          Lịch sử hoạt động
         </a>
       </div>
 
       <div class="nav-section">
         <div class="nav-section-label">Hệ thống</div>
+        <a class="nav-link {{ 'active' if page == 'accounts' else '' }}" href="{{ url_for('accounts_view') }}">
+          <div class="nav-link-icon-wrap">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="15" height="15">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+            </svg>
+          </div>
+          Tài khoản Facebook
+        </a>
+        <a class="nav-link {{ 'active' if page == 'workers' else '' }}" href="{{ url_for('workers_view') }}">
+          <div class="nav-link-icon-wrap">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="15" height="15">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+          </div>
+          Máy trạm / Worker
+        </a>
         <a class="nav-link {{ 'active' if page == 'settings' else '' }}" href="{{ url_for('settings') }}">
           <div class="nav-link-icon-wrap">
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="15" height="15">
@@ -80,6 +104,16 @@
           </div>
           Cài đặt &amp; Connector
         </a>
+        {% if current_user and current_user.role == 'admin' %}
+        <a class="nav-link" href="{{ url_for('admin_ops.admin_dashboard') }}">
+          <div class="nav-link-icon-wrap" style="color:var(--amber)">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="15" height="15">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+            </svg>
+          </div>
+          Quản trị hệ thống
+        </a>
+        {% endif %}
       </div>
     </nav>
 
@@ -118,6 +152,25 @@
       </div>
 
       <div class="topbar-right">
+        <!-- Notification Center Bell -->
+        <div class="notif-wrapper" id="notifWrapper">
+          <button class="notif-btn" id="notifBtn" aria-label="Thông báo" title="Thông báo hệ thống">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+            </svg>
+            <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+          </button>
+          <div class="notif-dropdown" id="notifDropdown">
+            <div class="notif-header">
+              <span>Thông báo</span>
+              <button type="button" class="notif-mark-all" id="notifMarkAll">Đọc tất cả</button>
+            </div>
+            <div class="notif-list" id="notifList">
+              <div class="notif-empty">Đang tải thông báo...</div>
+            </div>
+          </div>
+        </div>
+
         <button class="theme-btn" id="themeBtn" title="Chuyển giao diện">
           <svg id="iconSun" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
           <svg id="iconMoon" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="display:none"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
@@ -219,6 +272,98 @@ document.querySelectorAll('.nav-link').forEach(link => {
     }
   });
 });
+
+// ─── NOTIFICATION CENTER (PHASE 12) ───
+const notifBtn = document.getElementById('notifBtn');
+const notifDropdown = document.getElementById('notifDropdown');
+const notifBadge = document.getElementById('notifBadge');
+const notifList = document.getElementById('notifList');
+const notifMarkAll = document.getElementById('notifMarkAll');
+
+async function fetchNotifications() {
+  try {
+    const res = await fetch('/api/notifications');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.success) return;
+    const unread = data.unread_count || 0;
+    if (unread > 0) {
+      notifBadge.textContent = unread > 99 ? '99+' : unread;
+      notifBadge.style.display = 'flex';
+    } else {
+      notifBadge.style.display = 'none';
+    }
+    const notifs = data.notifications || [];
+    if (!notifs.length) {
+      notifList.innerHTML = '<div class="notif-empty">Không có thông báo nào.</div>';
+      return;
+    }
+    notifList.innerHTML = notifs.map(n => `
+      <div class="notif-item ${n.is_read ? '' : 'unread'} cat-${n.category || 'info'}" data-id="${n.notification_id}">
+        <span class="notif-item-icon"></span>
+        <div class="notif-item-body">
+          <div class="notif-item-title">${escapeHtml(n.title)}</div>
+          <div class="notif-item-msg">${escapeHtml(n.message)}</div>
+          <span class="notif-item-time">${formatTimeAgo(n.created_at)}</span>
+        </div>
+      </div>
+    `).join('');
+
+    notifList.querySelectorAll('.notif-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.getAttribute('data-id');
+        if (!item.classList.contains('unread')) return;
+        try {
+          await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
+          item.classList.remove('unread');
+          fetchNotifications();
+        } catch(e){}
+      });
+    });
+  } catch(e){}
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+function formatTimeAgo(dtStr) {
+  if (!dtStr) return '';
+  try {
+    const d = new Date(dtStr);
+    const diffSec = Math.floor((new Date() - d) / 1000);
+    if (diffSec < 60) return 'Vừa xong';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)} phút trước`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} giờ trước`;
+    return `${Math.floor(diffSec / 86400)} ngày trước`;
+  } catch(e) { return dtStr; }
+}
+
+notifBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  notifDropdown?.classList.toggle('open');
+  if (notifDropdown?.classList.contains('open')) {
+    fetchNotifications();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!notifDropdown?.contains(e.target) && !notifBtn?.contains(e.target)) {
+    notifDropdown?.classList.remove('open');
+  }
+});
+
+notifMarkAll?.addEventListener('click', async () => {
+  try {
+    await fetch('/api/notifications/read-all', { method: 'POST' });
+    fetchNotifications();
+  } catch(e){}
+});
+
+fetchNotifications();
+setInterval(fetchNotifications, 45000);
 </script>
 {% block scripts %}{% endblock %}
 </body>

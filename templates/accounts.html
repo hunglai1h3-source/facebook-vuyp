@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Quản lý Tài khoản Facebook • FB POST PRO{% endblock %}
+{% block page_title %}Tài khoản Facebook{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pages/accounts.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="accounts-shell">
+  <!-- TOP STATS / ADD ACCOUNT CARD -->
+  <div class="dash-grid-2">
+    <!-- ADD ACCOUNT FORM -->
+    <article class="panel card-pad-lg">
+      <div class="section-header">
+        <div>
+          <span class="eyebrow">Thêm mới</span>
+          <h3 class="section-title">Thêm tài khoản Facebook</h3>
+        </div>
+        <span class="badge blue">Đa tài khoản</span>
+      </div>
+      <p class="section-desc">
+        Thêm tài khoản Facebook cá nhân của bạn để phân chia danh sách nhóm và chạy song song trên các Chrome profile khác nhau.
+      </p>
+
+      <form method="post" action="{{ url_for('add_facebook_account') }}" style="margin-top:16px; display:flex; flex-direction:column; gap:12px">
+        <div class="form-group" style="margin-bottom:0">
+          <label for="newAccountName">Tên hiển thị tài khoản</label>
+          <input id="newAccountName" name="display_name" maxlength="120" placeholder="Ví dụ: Facebook Marketing A, Profile Sales..." required>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="newAccountUid">Facebook UID dạng số (Xác minh session thật)</label>
+          <input id="newAccountUid" name="facebook_user_id" maxlength="30" pattern="[0-9]*" inputmode="numeric" placeholder="Ví dụ: 100089283748291">
+          <small style="font-size:11px; color:var(--muted); margin-top:4px; display:block">
+            UID dạng số giúp Extension xác thực đúng phiên đăng nhập Chrome trước khi đăng bài.
+          </small>
+        </div>
+        <button class="btn primary" type="submit" style="margin-top:6px">
+          <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+          THÊM TÀI KHOẢN
+        </button>
+      </form>
+    </article>
+
+    <!-- ACCOUNT SUMMARY INFO -->
+    <article class="panel card-pad-lg">
+      <div class="section-header">
+        <div>
+          <span class="eyebrow">Tổng quan</span>
+          <h3 class="section-title">Trạng thái vận hành</h3>
+        </div>
+        <span class="badge muted">{{ accounts|length }} tài khoản</span>
+      </div>
+
+      <div class="mini-stats-row" style="margin-top:16px">
+        <div class="mini-stat-card">
+          <span class="mini-label">Sẵn sàng</span>
+          <span class="mini-value text-green">
+            {{ accounts|selectattr('computed_status', 'equalto', 'ready')|list|length }}
+          </span>
+        </div>
+        <div class="mini-stat-card">
+          <span class="mini-label">Đang bận</span>
+          <span class="mini-value" style="color:var(--blue)">
+            {{ accounts|selectattr('computed_status', 'equalto', 'busy')|list|length }}
+          </span>
+        </div>
+        <div class="mini-stat-card">
+          <span class="mini-label">Chưa gắn worker</span>
+          <span class="mini-value" style="color:var(--amber)">
+            {{ accounts|selectattr('computed_status', 'equalto', 'unmapped')|list|length }}
+          </span>
+        </div>
+        <div class="mini-stat-card">
+          <span class="mini-label">Worker offline</span>
+          <span class="mini-value text-red">
+            {{ accounts|selectattr('computed_status', 'equalto', 'offline')|list|length }}
+          </span>
+        </div>
+      </div>
+
+      <div style="margin-top:20px; padding:14px; background:var(--surface2); border-radius:var(--r-md); font-size:12px; line-height:1.6; color:var(--text2)">
+        💡 <b>Lưu ý quan trọng:</b> Mỗi tài khoản Facebook cần được liên kết với một Chrome Extension Profile trên máy tính của bạn và có Facebook UID dạng số để hệ thống điều phối tác vụ chính xác.
+      </div>
+    </article>
+  </div>
+
+  <!-- ACCOUNTS LIST -->
+  <div>
+    <div class="section-header">
+      <div>
+        <span class="eyebrow">Danh sách</span>
+        <h3 class="section-title">Tài khoản Facebook đã kết nối</h3>
+      </div>
+    </div>
+
+    {% if accounts %}
+    <div class="accounts-grid">
+      {% for account in accounts %}
+      <div class="account-card-item">
+        <div class="account-header-row">
+          <div class="account-info-wrap">
+            <div class="account-avatar-lg">
+              {{ account.display_name[:1]|upper }}
+            </div>
+            <div class="account-title-text">
+              <strong>{{ account.display_name }}</strong>
+              <small>UID: {{ account.facebook_user_id or 'Chưa có UID' }}</small>
+            </div>
+          </div>
+          <div>
+            {% if account.computed_status == 'ready' %}
+            <span class="badge green">Sẵn sàng</span>
+            {% elif account.computed_status == 'busy' %}
+            <span class="badge blue"><span class="pulse pulsing"></span> Đang chạy</span>
+            {% elif account.computed_status == 'unmapped' %}
+            <span class="badge amber">Chưa gắn worker</span>
+            {% else %}
+            <span class="badge red">Worker ngoại tuyến</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Warning banner if unmapped or offline -->
+        {% if account.computed_status == 'unmapped' %}
+        <div class="account-warning-banner amber">
+          ⚠️ <span>Tài khoản này chưa gắn worker Chrome. Vui lòng chọn Chrome profile bên dưới và bấm Lưu.</span>
+        </div>
+        {% elif account.computed_status == 'offline' %}
+        <div class="account-warning-banner red">
+          🔌 <span>Máy tính chạy Chrome profile cho tài khoản này đang ngoại tuyến. Hãy mở Chrome và bật Extension.</span>
+        </div>
+        {% endif %}
+
+        <!-- Detail Metrics -->
+        <div class="account-details-list">
+          <div class="account-detail-item">
+            <span>Số nhóm mục tiêu gán:</span>
+            <strong>{{ account.group_count }} Groups</strong>
+          </div>
+          <div class="account-detail-item">
+            <span>Chrome Profile / Worker:</span>
+            <strong>{{ account.device.name if account.device else (account.device_id or 'Chưa chọn') }}</strong>
+          </div>
+          <div class="account-detail-item">
+            <span>Trạng thái kết nối máy trạm:</span>
+            <strong>{% if account.device_online %}<span style="color:var(--green)">Trực tuyến (Online)</span>{% else %}<span style="color:var(--red)">Ngoại tuyến</span>{% endif %}</strong>
+          </div>
+        </div>
+
+        <!-- Bind & Update Form -->
+        <form method="post" action="{{ url_for('bind_facebook_account', account_id=account.account_id) }}" class="account-form-section">
+          <div>
+            <label for="uid-field-{{ account.account_id }}">Facebook User ID (UID số):</label>
+            <input id="uid-field-{{ account.account_id }}" name="facebook_user_id" value="{{ account.facebook_user_id or '' }}" maxlength="30" pattern="[0-9]+" inputmode="numeric" placeholder="Nhập UID dạng số..." required>
+          </div>
+          <div>
+            <label for="device-field-{{ account.account_id }}">Gán Chrome Profile Worker:</label>
+            <select id="device-field-{{ account.account_id }}" name="device_id">
+              <option value="">-- Chưa gắn worker --</option>
+              {% for dev in devices %}
+              <option value="{{ dev.device_id }}" {% if account.device_id == dev.device_id %}selected{% endif %}>
+                {{ dev.name or dev.device_id }} • {{ 'Trực tuyến' if dev.online else 'Ngoại tuyến' }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:4px">
+            <button class="btn secondary sm w-full" type="submit">LƯU THAY ĐỔI</button>
+          </div>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="panel card-pad-lg empty-state">
+      <svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+      </svg>
+      <p style="margin-top:12px; font-size:var(--text-base)">Chưa có tài khoản Facebook nào được thêm.</p>
+      <p style="color:var(--muted); font-size:var(--text-sm)">Thêm tài khoản ở form phía trên để bắt đầu gán nhóm và tự động hóa.</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

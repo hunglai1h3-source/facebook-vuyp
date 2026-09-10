@@ -10,178 +10,454 @@
 
 {% block content %}
 <section class="compose-layout">
-  <!-- LEFT: COMPOSER FORM -->
+  <!-- LEFT: 6-STEP CAMPAIGN CREATION WIZARD -->
   <form
     class="panel card-pad-lg composer-form"
     method="post"
-    action="{{ url_for('save_post') }}"
+    action="{{ url_for('run_campaign') }}"
     enctype="multipart/form-data"
+    id="campaignWizardForm"
   >
-    <div class="section-header">
-      <div>
-        <span class="eyebrow">Cấu hình bài đăng</span>
-        <h3 class="section-title">Nội dung & Hình ảnh</h3>
+    <!-- STEPPER PROGRESS BAR -->
+    <div class="wizard-stepper">
+      <div class="wizard-step-node active" data-step-target="1">
+        <span class="step-badge">1</span>
+        <span class="step-name">Nội dung</span>
       </div>
-      <span class="badge blue">Chiến dịch sẵn sàng</span>
+      <div class="wizard-step-line"></div>
+      <div class="wizard-step-node" data-step-target="2">
+        <span class="step-badge">2</span>
+        <span class="step-name">Tài khoản</span>
+      </div>
+      <div class="wizard-step-line"></div>
+      <div class="wizard-step-node" data-step-target="3">
+        <span class="step-badge">3</span>
+        <span class="step-name">Chọn nhóm</span>
+      </div>
+      <div class="wizard-step-line"></div>
+      <div class="wizard-step-node" data-step-target="4">
+        <span class="step-badge">4</span>
+        <span class="step-name">Phân bổ</span>
+      </div>
+      <div class="wizard-step-line"></div>
+      <div class="wizard-step-node" data-step-target="5">
+        <span class="step-badge">5</span>
+        <span class="step-name">Hẹn lịch</span>
+      </div>
+      <div class="wizard-step-line"></div>
+      <div class="wizard-step-node" data-step-target="6">
+        <span class="step-badge">6</span>
+        <span class="step-name">Xác nhận</span>
+      </div>
     </div>
 
-    <!-- CAMPAIGN NAME -->
-    <div class="form-group">
-      <label for="campaign_name">Tên chiến dịch</label>
-      <div class="input-icon-group">
-        <span class="icon-slot">
-          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
-          </svg>
-        </span>
-        <input
-          id="campaign_name"
-          type="text"
-          name="campaign_name"
-          value="{{ settings.campaign_name }}"
-          placeholder="Ví dụ: Giới thiệu sản phẩm mới..."
-          required
-        >
-      </div>
-    </div>
+    <!-- Hidden Action / Schedule Inputs -->
+    <input type="hidden" name="campaign_action" id="campaignActionHidden" value="run">
+    <input type="hidden" name="scheduled_at" id="scheduledUtcHidden" value="">
 
-    <!-- CONTENT TEXTAREA -->
-    <div class="form-group">
-      <div class="label-split">
-        <label for="postContent">Nội dung bài đăng Facebook</label>
-        <span class="label-hint">Hỗ trợ icon, hashtag, link và văn bản tự do</span>
-      </div>
-      <textarea
-        id="postContent"
-        name="content"
-        rows="9"
-        placeholder="Nhập nội dung bạn muốn chia sẻ lên các Group Facebook..."
-      >{{ post_content }}</textarea>
-    </div>
-
-    <!-- MULTIPLE IMAGES UPLOAD -->
-    <div class="form-group">
-      <label>Đính kèm hình ảnh</label>
-      <input
-        type="file"
-        id="images"
-        name="images"
-        accept="image/jpeg,image/png,image/webp"
-        multiple
-        style="display: none;"
-      >
-
-      <div class="dropzone" onclick="document.getElementById('images').click()">
-        <div class="dropzone-icon">
-          <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-          </svg>
+    <!-- ======================================================= -->
+    <!-- STEP 1: CONTENT & IMAGES & DELAY -->
+    <!-- ======================================================= -->
+    <div class="wizard-panel active" data-step="1">
+      <div class="section-header" style="margin-bottom:16px">
+        <div>
+          <span class="eyebrow">Bước 1 / 6</span>
+          <h3 class="section-title">Nội dung bài đăng &amp; Hình ảnh</h3>
         </div>
-        <div class="dropzone-text">
-          <strong>Bấm để tải ảnh lên</strong>
-          <p>Hỗ trợ JPG, PNG, WEBP. Cho phép chọn cùng lúc nhiều file.</p>
-        </div>
-        <button type="button" class="btn secondary sm" style="pointer-events:none">
-          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
-          </svg>
-          Chọn ảnh
-        </button>
+        <span class="badge blue">Cấu hình bài viết</span>
       </div>
 
-      <div class="selected-status-bar">
-        <span id="selectedImageCount" class="selected-pill">Chưa chọn ảnh mới</span>
+      <!-- TEMPLATE PICKER TOOLBAR -->
+      <div class="template-picker-row">
+        <label for="selectTemplate" style="font-size:12px; font-weight:600; color:var(--text2); margin:0">Mẫu chiến dịch:</label>
+        <select id="selectTemplate" aria-label="Chọn mẫu chiến dịch">
+          <option value="">-- Chọn mẫu đã lưu để nạp nhanh --</option>
+          {% for tmpl in templates %}
+          <option value="{{ tmpl.template_id }}" data-payload='{{ tmpl.payload|tojson }}'>
+            {{ tmpl.template_name }}
+          </option>
+          {% endfor %}
+        </select>
+        <button type="button" class="btn secondary sm" id="btnLoadTemplate">NẠP MẪU</button>
+        <button type="button" class="btn ghost sm" id="btnSaveTemplate">LƯU LÀM MẪU MỚI</button>
       </div>
 
-      <!-- PREVIEW CỦA ẢNH MỚI CHỌN -->
-      <div id="newImagePreview" class="gallery-grid"></div>
-    </div>
-
-    <!-- SAVED IMAGES GALLERY -->
-    {% if post_images %}
-    <div class="form-group saved-gallery-wrap">
-      <div class="label-split" style="margin-bottom:12px">
-        <label style="margin:0">
-          Ảnh đã lưu trong chiến dịch
-          <span class="badge muted" style="margin-left:6px">{{ post_images|length }}</span>
-        </label>
-        <button
-          type="submit"
-          form="delete-all-images-form"
-          class="btn danger sm"
-          onclick="return confirm('Bạn có chắc chắn muốn xóa toàn bộ ảnh đã lưu?')"
-        >
-          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-          </svg>
-          Xóa tất cả
-        </button>
-      </div>
-
-      <div class="gallery-grid">
-        {% for image in post_images %}
-        <div class="gallery-card">
-          <img
-            src="{{ url_for('customer_image', filename=image) }}"
-            alt="Ảnh bài đăng"
-            loading="lazy"
-            decoding="async"
-          >
-          <button
-            type="submit"
-            form="delete-image-form-{{ loop.index0 }}"
-            class="del-single-btn"
-            title="Xóa ảnh này"
-            aria-label="Xóa ảnh"
-          >
-            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+      <!-- CAMPAIGN NAME -->
+      <div class="form-group">
+        <label for="campaign_name">Tên chiến dịch</label>
+        <div class="input-icon-group">
+          <span class="icon-slot">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
             </svg>
-          </button>
+          </span>
+          <input
+            id="campaign_name"
+            type="text"
+            name="campaign_name"
+            value="{{ settings.campaign_name }}"
+            placeholder="Ví dụ: Giới thiệu sản phẩm mới..."
+            required
+          >
         </div>
+      </div>
+
+      <!-- CONTENT TEXTAREA -->
+      <div class="form-group">
+        <div class="label-split">
+          <label for="postContent">Nội dung bài đăng Facebook</label>
+          <span class="label-hint">Hỗ trợ icon, hashtag, link và văn bản tự do</span>
+        </div>
+        <textarea
+          id="postContent"
+          name="content"
+          rows="8"
+          placeholder="Nhập nội dung bạn muốn chia sẻ lên các Group Facebook..."
+        >{{ post_content }}</textarea>
+      </div>
+
+      <!-- MULTIPLE IMAGES UPLOAD -->
+      <div class="form-group">
+        <label>Đính kèm hình ảnh</label>
+        <input
+          type="file"
+          id="images"
+          name="images"
+          accept="image/jpeg,image/png,image/webp"
+          multiple
+          style="display: none;"
+        >
+
+        <div class="dropzone" onclick="document.getElementById('images').click()">
+          <div class="dropzone-icon">
+            <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+            </svg>
+          </div>
+          <div class="dropzone-text">
+            <strong>Bấm để tải ảnh lên</strong>
+            <p>Hỗ trợ JPG, PNG, WEBP. Cho phép chọn cùng lúc nhiều file.</p>
+          </div>
+          <button type="button" class="btn secondary sm" style="pointer-events:none">Chọn ảnh</button>
+        </div>
+
+        <div class="selected-status-bar">
+          <span id="selectedImageCount" class="selected-pill">Chưa chọn ảnh mới</span>
+        </div>
+
+        <!-- NEW IMAGES PREVIEW -->
+        <div id="newImagePreview" class="gallery-grid"></div>
+      </div>
+
+      <!-- SAVED IMAGES GALLERY -->
+      {% if post_images %}
+      <div class="form-group saved-gallery-wrap">
+        <div class="label-split" style="margin-bottom:12px">
+          <label style="margin:0">
+            Ảnh đã lưu trong chiến dịch
+            <span class="badge muted" style="margin-left:6px">{{ post_images|length }}</span>
+          </label>
+        </div>
+
+        <div class="gallery-grid">
+          {% for image in post_images %}
+          <div class="gallery-card">
+            <img src="{{ url_for('customer_image', filename=image) }}" alt="Ảnh bài đăng" loading="lazy" decoding="async">
+            <button type="submit" form="delete-image-form-{{ loop.index0 }}" class="del-single-btn" title="Xóa ảnh này" aria-label="Xóa ảnh">
+              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- DELAY SETTINGS -->
+      <div class="delay-section">
+        <div class="delay-intro">
+          <span class="eyebrow">Thời gian giãn cách</span>
+          <h4 class="delay-title">Khoảng delay giữa các bài đăng</h4>
+        </div>
+        <div class="grid2">
+          <div class="form-group" style="margin-bottom:0">
+            <label for="min_delay">Delay tối thiểu (phút)</label>
+            <input id="min_delay" type="number" name="min_delay" min="0" value="{{ settings.min_delay }}" required>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label for="max_delay">Delay tối đa (phút)</label>
+            <input id="max_delay" type="number" name="max_delay" min="0" value="{{ settings.max_delay }}" required>
+          </div>
+        </div>
+      </div>
+
+      <div class="wizard-nav-actions" style="justify-content:flex-end">
+        <button type="button" class="btn primary" data-wizard-next>
+          Tiếp theo: Chọn tài khoản
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- STEP 2: FACEBOOK ACCOUNTS SELECTION -->
+    <!-- ======================================================= -->
+    <div class="wizard-panel" data-step="2">
+      <div class="section-header" style="margin-bottom:16px">
+        <div>
+          <span class="eyebrow">Bước 2 / 6</span>
+          <h3 class="section-title">Chọn tài khoản Facebook thực hiện</h3>
+        </div>
+        <span class="badge blue" id="selectedAccountsCount">0 tài khoản đã chọn</span>
+      </div>
+      <p class="section-desc">
+        Chọn một hoặc nhiều tài khoản Facebook đã liên kết với Chrome profile để tham gia đăng bài.
+      </p>
+
+      {% if accounts %}
+      <div class="account-select-grid">
+        {% for acc in accounts %}
+        {% set dev = devices|selectattr('device_id', 'equalto', acc.device_id)|first if devices else None %}
+        {% set is_online = dev.online if dev else False %}
+        <label class="account-select-card selected">
+          <input type="checkbox" class="account-select-checkbox" value="{{ acc.account_id }}" data-name="{{ acc.display_name }}" data-online="{{ 'true' if is_online else 'false' }}" checked>
+          <div class="account-info-wrap" style="flex:1">
+            <div class="account-avatar" style="width:34px; height:34px; font-size:13px">{{ acc.display_name[:1]|upper }}</div>
+            <div class="account-title-text">
+              <strong>{{ acc.display_name }}</strong>
+              <small>{{ acc.facebook_user_id or 'Chưa có UID' }}</small>
+            </div>
+          </div>
+          <div>
+            {% if not acc.device_id %}
+            <span class="badge amber" style="font-size:10px">Chưa gắn worker</span>
+            {% elif is_online %}
+            <span class="badge green" style="font-size:10px">Online</span>
+            {% else %}
+            <span class="badge red" style="font-size:10px">Offline</span>
+            {% endif %}
+          </div>
+        </label>
         {% endfor %}
       </div>
-    </div>
-    {% endif %}
-
-    <!-- DELAY SETTINGS -->
-    <div class="delay-section">
-      <div class="delay-intro">
-        <span class="eyebrow">Thời gian giãn cách</span>
-        <h4 class="delay-title">Khoảng delay giữa các bài đăng</h4>
+      {% else %}
+      <div class="panel card-pad empty-compact" style="text-align:center">
+        Chưa có tài khoản Facebook nào. Hãy vào <a href="{{ url_for('accounts_view') }}">Quản lý tài khoản</a> để thêm trước khi tiếp tục.
       </div>
-      <div class="grid2">
-        <div class="form-group" style="margin-bottom:0">
-          <label for="min_delay">Delay tối thiểu (phút)</label>
-          <input
-            id="min_delay"
-            type="number"
-            name="min_delay"
-            min="0"
-            value="{{ settings.min_delay }}"
-            required
-          >
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label for="max_delay">Delay tối đa (phút)</label>
-          <input
-            id="max_delay"
-            type="number"
-            name="max_delay"
-            min="0"
-            value="{{ settings.max_delay }}"
-            required
-          >
-        </div>
+      {% endif %}
+
+      <div class="wizard-nav-actions">
+        <button type="button" class="btn secondary" data-wizard-prev>
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Quay lại Bước 1
+        </button>
+        <button type="button" class="btn primary" data-wizard-next>
+          Tiếp theo: Chọn nhóm
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
       </div>
     </div>
 
-    <button type="submit" class="btn primary lg w-full" style="margin-top:10px">
-      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
-      </svg>
-      LƯU CHIẾN DỊCH
-    </button>
+    <!-- ======================================================= -->
+    <!-- STEP 3: FACEBOOK GROUPS SELECTION -->
+    <!-- ======================================================= -->
+    <div class="wizard-panel" data-step="3">
+      <div class="section-header" style="margin-bottom:16px">
+        <div>
+          <span class="eyebrow">Bước 3 / 6</span>
+          <h3 class="section-title">Chọn nhóm Facebook mục tiêu</h3>
+        </div>
+        <span class="badge blue" id="selectedGroupsCount">{{ groups|length }} / {{ groups|length }} nhóm đã chọn</span>
+      </div>
+
+      <div class="group-select-toolbar">
+        <input type="search" id="wizardGroupSearch" placeholder="Tìm theo URL nhóm..." style="height:36px; padding:0 10px; border-radius:var(--r-sm); border:1px solid var(--border2); background:var(--surface); color:var(--text); font-size:12px; flex:1 1 180px">
+        <select id="wizardGroupFilter" style="height:36px; padding:0 10px; border-radius:var(--r-sm); border:1px solid var(--border2); background:var(--surface); color:var(--text); font-size:12px">
+          <option value="all">Tất cả nhóm</option>
+          <option value="assigned">Đã gán tài khoản</option>
+          <option value="unassigned">Chưa gán tài khoản</option>
+        </select>
+        <button type="button" class="btn secondary sm" id="btnSelectAllGroups">Chọn tất cả</button>
+        <button type="button" class="btn ghost sm" id="btnDeselectAllGroups">Bỏ chọn</button>
+      </div>
+
+      {% if groups %}
+      <div class="group-select-list">
+        {% for group in groups %}
+        <label class="group-select-item" data-url="{{ group.url if group is mapping else group }}" data-has-account="{{ 'true' if (group is mapping and group.account_id) else 'false' }}">
+          <input type="checkbox" class="group-select-checkbox" value="{{ group.url if group is mapping else group }}" data-account="{{ group.account_id if group is mapping else '' }}" checked>
+          <span style="font-size:12px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+            {{ group.url if group is mapping else group }}
+          </span>
+          {% if group is mapping and group.account_id %}
+          {% set matched_acc = accounts|selectattr('account_id', 'equalto', group.account_id)|first %}
+          <span class="badge muted" style="font-size:10px">{{ matched_acc.display_name if matched_acc else group.account_id }}</span>
+          {% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="panel card-pad empty-compact" style="text-align:center">
+        Chưa có nhóm nào. Hãy vào <a href="{{ url_for('groups') }}">Quản lý Groups</a> để import nhóm trước.
+      </div>
+      {% endif %}
+
+      <div class="wizard-nav-actions">
+        <button type="button" class="btn secondary" data-wizard-prev>
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Quay lại Bước 2
+        </button>
+        <button type="button" class="btn primary" data-wizard-next>
+          Tiếp theo: Phân bổ
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- STEP 4: ASSIGNMENT REVIEW & EVEN SPLIT -->
+    <!-- ======================================================= -->
+    <div class="wizard-panel" data-step="4">
+      <div class="section-header" style="margin-bottom:16px">
+        <div>
+          <span class="eyebrow">Bước 4 / 6</span>
+          <h3 class="section-title">Phân bổ nhóm cho tài khoản</h3>
+        </div>
+        <span class="badge blue">Cân bằng tải</span>
+      </div>
+
+      <div class="assignment-review-toolbar">
+        <button type="button" class="btn primary sm" id="btnWizardEvenDistribute">
+          ⚡ Chia đều nhóm cho các tài khoản
+        </button>
+        <div id="assignmentSummaryBadges" style="display:flex; flex-wrap:wrap; gap:6px"></div>
+      </div>
+
+      <div class="assignment-review-table" id="assignmentReviewList">
+        <!-- Rendered dynamically by campaign-wizard.js -->
+      </div>
+
+      <div class="wizard-nav-actions">
+        <button type="button" class="btn secondary" data-wizard-prev>
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Quay lại Bước 3
+        </button>
+        <button type="button" class="btn primary" data-wizard-next>
+          Tiếp theo: Hẹn lịch
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- STEP 5: SCHEDULING OPTIONS -->
+    <!-- ======================================================= -->
+    <div class="wizard-panel" data-step="5">
+      <div class="section-header" style="margin-bottom:16px">
+        <div>
+          <span class="eyebrow">Bước 5 / 6</span>
+          <h3 class="section-title">Thời gian &amp; Chế độ khởi chạy</h3>
+        </div>
+        <span class="badge blue">Lịch trình linh hoạt</span>
+      </div>
+
+      <div class="schedule-options-grid">
+        <div class="schedule-option-card selected" data-action="run">
+          <strong style="font-size:var(--text-sm); color:var(--text)">🚀 Chạy ngay lập tức</strong>
+          <p style="font-size:12px; color:var(--text2); margin:0; line-height:1.5">Chiến dịch sẽ vào hàng đợi và worker sẽ bắt đầu đăng bài ngay khi sẵn sàng.</p>
+        </div>
+        <div class="schedule-option-card" data-action="schedule">
+          <strong style="font-size:var(--text-sm); color:var(--text)">⏰ Hẹn lịch tương lai</strong>
+          <p style="font-size:12px; color:var(--text2); margin:0; line-height:1.5">Chọn ngày và giờ cụ thể. Hệ thống sẽ tự động kích hoạt khi đến thời điểm.</p>
+        </div>
+        <div class="schedule-option-card" data-action="draft">
+          <strong style="font-size:var(--text-sm); color:var(--text)">💾 Lưu bản nháp (Draft)</strong>
+          <p style="font-size:12px; color:var(--text2); margin:0; line-height:1.5">Lưu trữ cấu hình chiến dịch để kích hoạt thủ công sau này.</p>
+        </div>
+      </div>
+
+      <div id="wizardScheduleDateField" class="campaign-schedule-field" style="display:none; margin-top:16px">
+        <label for="scheduledLocal">Chọn ngày / giờ hẹn chạy <span>(theo giờ máy tính bạn)</span>:</label>
+        <input id="scheduledLocal" type="datetime-local">
+      </div>
+
+      <div class="wizard-nav-actions">
+        <button type="button" class="btn secondary" data-wizard-prev>
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Quay lại Bước 4
+        </button>
+        <button type="button" class="btn primary" data-wizard-next>
+          Tiếp theo: Xem trước &amp; Xác nhận
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- STEP 6: PREVIEW & CONFIRM & VALIDATION GUARD -->
+    <!-- ======================================================= -->
+    <div class="wizard-panel" data-step="6">
+      <div class="section-header" style="margin-bottom:16px">
+        <div>
+          <span class="eyebrow">Bước 6 / 6</span>
+          <h3 class="section-title">Xem trước &amp; Xác nhận chiến dịch</h3>
+        </div>
+        <span class="badge green">Kiểm tra an toàn</span>
+      </div>
+
+      <!-- VALIDATION GUARD NOTICE -->
+      <div class="validation-guard-box" id="validationGuardBox"></div>
+
+      <!-- SUMMARY CARDS -->
+      <div class="detail-meta-grid" style="margin-top:0; padding-top:0; border-top:0">
+        <div class="meta-item">
+          <span>Tên chiến dịch</span>
+          <strong id="previewCampName">-</strong>
+        </div>
+        <div class="meta-item">
+          <span>Tài khoản thực hiện</span>
+          <strong id="previewAccounts">-</strong>
+        </div>
+        <div class="meta-item">
+          <span>Số lượng nhóm</span>
+          <strong id="previewGroupsCount">-</strong>
+        </div>
+        <div class="meta-item">
+          <span>Khoảng chờ (Delay)</span>
+          <strong id="previewDelay">-</strong>
+        </div>
+        <div class="meta-item">
+          <span>Chế độ chạy</span>
+          <strong id="previewMode">-</strong>
+        </div>
+      </div>
+
+      <!-- PREVIEW POST CONTENT -->
+      <div style="margin-top:16px; padding:16px; background:var(--surface2); border-radius:var(--r-md); border:1px solid var(--border)">
+        <span style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted); letter-spacing:0.06em; display:block; margin-bottom:6px">Xem trước nội dung:</span>
+        <p id="previewContent" style="font-size:13px; color:var(--text); line-height:1.6; white-space:pre-wrap; margin:0">-</p>
+      </div>
+
+      <!-- SUBMIT / LAUNCH BUTTONS -->
+      <div class="wizard-nav-actions">
+        <button type="button" class="btn secondary" data-wizard-prev>
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Chỉnh sửa các bước trước
+        </button>
+
+        <div style="display:flex; gap:8px">
+          <button type="button" class="btn secondary" id="btnSaveTemplateConfirm">
+            Lưu làm mẫu mới
+          </button>
+          <button type="submit" formaction="{{ url_for('save_post') }}" class="btn secondary">
+            Lưu thay đổi
+          </button>
+          <button type="submit" id="btnStartCampaign" class="btn primary lg" {% if campaign_state and campaign_state.running %}disabled{% endif %}>
+            <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            BẮT ĐẦU CHIẾN DỊCH
+          </button>
+        </div>
+      </div>
+    </div>
   </form>
 
   <!-- FORM XÓA ẢNH ĐỘC LẬP: tránh lồng form vào form lưu chiến dịch -->
@@ -194,7 +470,7 @@
   ></form>
   {% endfor %}
 
-  <!-- FORM XÓA TOÀN BỘ ẢNH (GIỮ NGUYÊN FORM ĐỘC LẬP) -->
+  <!-- FORM XÓA TOÀN BỘ ẢNH -->
   <form
     id="delete-all-images-form"
     method="post"
@@ -202,15 +478,17 @@
     style="display: none;"
   ></form>
 
-  <!-- RIGHT: SUMMARY & RUN CONTROLS -->
+  <!-- RIGHT: REALTIME MONITORING & CONTROLS -->
   <aside class="panel card-pad-lg campaign-sidebar" data-campaign-monitor data-status-url="{{ url_for('campaign_status') }}">
     <div class="section-header">
       <div>
-        <span class="eyebrow">Tổng quan</span>
-        <h3 class="section-title">Chiến dịch</h3>
+        <span class="eyebrow">Trạng thái</span>
+        <h3 class="section-title">Chiến dịch hiện tại</h3>
       </div>
       {% if campaign_state and campaign_state.running %}
       <span class="badge blue"><span class="pulse pulsing"></span> ĐANG CHẠY</span>
+      {% elif campaign_state and campaign_state.status == 'paused' %}
+      <span class="badge amber">TẠM DỪNG</span>
       {% else %}
       <span class="badge muted">SẴN SÀNG</span>
       {% endif %}
@@ -218,7 +496,7 @@
 
     <div class="summary-list">
       <div class="summary-item">
-        <span>Nhóm đăng (Groups)</span>
+        <span>Nhóm đã cấu hình</span>
         <strong>{{ groups|length }} nhóm</strong>
       </div>
       <div class="summary-item">
@@ -230,30 +508,6 @@
         <strong>{{ settings.min_delay }} – {{ settings.max_delay }} phút</strong>
       </div>
     </div>
-
-    <!-- THUMBNAIL STRIP -->
-    {% if post_images %}
-    <div class="thumb-strip-wrap">
-      <span class="thumb-strip-title">Xem trước ảnh:</span>
-      <div class="thumb-strip">
-        {% for image in post_images[:6] %}
-        <div class="thumb-box">
-          <img
-            src="{{ url_for('customer_image', filename=image) }}"
-            alt="Thumbnail"
-            loading="lazy"
-            decoding="async"
-          >
-        </div>
-        {% endfor %}
-      </div>
-      {% if post_images|length > 6 %}
-      <div class="thumb-more-note">
-        + {{ post_images|length - 6 }} ảnh khác
-      </div>
-      {% endif %}
-    </div>
-    {% endif %}
 
     <!-- CONNECTOR STATUS BOX -->
     <div class="aside-connector-box" data-worker-card>
@@ -274,64 +528,34 @@
         <span>Tiến độ</span>
         <strong data-progress-count>{{ campaign_state.processed or 0 }}/{{ campaign_state.total or groups|length }}</strong>
       </div>
-      <div class="campaign-progress-track"><span data-progress-bar style="width: {{ ((campaign_state.processed or 0) * 100 / (campaign_state.total or groups|length or 1))|round|int }}%"></span></div>
+      <div class="campaign-progress-track">
+        <span data-progress-bar style="width: {{ ((campaign_state.processed or 0) * 100 / (campaign_state.total or groups|length or 1))|round|int }}%"></span>
+      </div>
       <div class="campaign-result-row">
         <span>Thành công <strong data-success-count>{{ campaign_state.success or 0 }}</strong></span>
         <span>Thất bại <strong data-error-count>{{ campaign_state.errors or 0 }}</strong></span>
       </div>
     </div>
 
-    <!-- ACTION BUTTONS -->
-    <form method="post" action="{{ url_for('run_campaign') }}" class="campaign-launch-form" data-campaign-launch>
-      <div class="campaign-schedule-field">
-        <label for="scheduledLocal">Hẹn ngày / giờ <span>(theo thiết bị)</span></label>
-        <input id="scheduledLocal" type="datetime-local" data-scheduled-local>
-        <input type="hidden" name="scheduled_at" data-scheduled-utc>
-      </div>
-      <button type="submit" name="campaign_action" value="run" class="btn primary lg w-full" {% if campaign_state and campaign_state.running %}disabled{% endif %}>
-        <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M8 5v14l11-7z"/>
-        </svg>
-        CHẠY CHIẾN DỊCH
-      </button>
-      <div class="campaign-launch-secondary">
-        <button type="submit" name="campaign_action" value="schedule" class="btn secondary w-full" {% if campaign_state and campaign_state.running %}disabled{% endif %}>HẸN LỊCH</button>
-        <button type="submit" name="campaign_action" value="draft" class="btn secondary w-full" {% if campaign_state and campaign_state.running %}disabled{% endif %}>LƯU NHÁP</button>
-      </div>
-    </form>
-
-    {% if campaign_state and campaign_state.running %}
-    <div class="campaign-secondary-actions">
+    <!-- DIRECT ACTION BUTTONS (WHEN RUNNING) -->
+    {% if campaign_state and (campaign_state.running or campaign_state.status == 'paused') %}
+    <div class="campaign-secondary-actions" style="display:flex; flex-direction:column; gap:8px; margin-top:16px">
       {% if campaign_state.status == 'paused' or campaign_state.status == 'waiting_worker' %}
-      <form method="post" action="{{ url_for('resume_campaign') }}">
-        <button type="submit" class="btn secondary w-full" data-resume-campaign>TIẾP TỤC</button>
+      <form method="post" action="{{ url_for('resume_campaign') }}" style="margin:0">
+        <button type="submit" class="btn primary w-full" data-resume-campaign>TIẾP TỤC</button>
       </form>
       {% else %}
-      <form method="post" action="{{ url_for('pause_campaign') }}">
+      <form method="post" action="{{ url_for('pause_campaign') }}" style="margin:0">
         <button type="submit" class="btn secondary w-full" data-pause-campaign>TẠM DỪNG</button>
       </form>
       {% endif %}
+      <form method="post" action="{{ url_for('stop_campaign') }}" style="margin:0" onsubmit="return confirm('Bạn có chắc muốn dừng chiến dịch hiện tại?')">
+        <button type="submit" class="btn danger w-full">DỪNG CHIẾN DỊCH</button>
+      </form>
     </div>
-    <form method="post" action="{{ url_for('stop_campaign') }}" style="margin-top:8px">
-      <button type="submit" class="btn danger w-full">
-        <svg width="15" height="15" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M6 6h12v12H6z"/>
-        </svg>
-        DỪNG CHIẾN DỊCH
-      </button>
-    </form>
     {% endif %}
-
-    <div class="info-note">
-      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-      </svg>
-      <span>Vui lòng bấm <strong>Lưu chiến dịch</strong> trước khi chạy. Mỗi account phải được gắn với đúng Connector/Chrome profile đang mở phiên Facebook tương ứng.</span>
-    </div>
   </aside>
 </section>
-
-
 
 <!-- CLIENT-SIDE MULTIPLE IMAGE PREVIEW SCRIPT -->
 <script>
@@ -385,5 +609,6 @@ imageInput?.addEventListener("change", function () {
   });
 });
 </script>
+<script defer src="{{ url_for('static', filename='js/campaign-wizard.js') }}"></script>
 <script defer src="{{ url_for('static', filename='js/campaign-control.js') }}"></script>
 {% endblock %}

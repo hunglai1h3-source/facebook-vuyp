@@ -1,0 +1,185 @@
+/* Campaigns & Detail Styles (Phase 12) */
+.campaigns-shell, .campaign-detail-shell {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(16px, 2vw, 24px);
+  min-width: 0;
+}
+
+.campaign-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.campaign-filter-bar input[type="search"],
+.campaign-filter-bar input[type="date"],
+.campaign-filter-bar select {
+  height: 38px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: var(--text-xs);
+  min-width: 140px;
+}
+.campaign-filter-bar input[type="search"] {
+  flex: 1 1 200px;
+}
+.campaign-filter-bar .filter-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.campaign-table-container {
+  overflow-x: auto;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.campaign-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--text-sm);
+}
+.campaign-table th {
+  background: var(--surface2);
+  padding: 12px 16px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.campaign-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.campaign-table tr:last-child td {
+  border-bottom: 0;
+}
+.campaign-table tr:hover td {
+  background: var(--hover);
+}
+
+.camp-name-cell strong {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.camp-name-cell small {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.camp-actions-cell {
+  white-space: nowrap;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.pagination-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text2);
+}
+.pagination-nav {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Campaign Detail */
+.detail-header-card {
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+}
+.detail-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.meta-item span {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.meta-item strong {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.task-breakdown-card {
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+}
+.task-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+  margin-top: 16px;
+}
+.task-table th {
+  background: var(--surface2);
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.task-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.task-table tr:hover td {
+  background: var(--hover);
+}
+.task-error-text {
+  font-size: 11px;
+  color: var(--red);
+  background: var(--red-tint);
+  padding: 4px 8px;
+  border-radius: var(--r-xs);
+  margin-top: 4px;
+  display: inline-block;
+  max-width: 320px;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  .campaign-filter-bar { flex-direction: column; align-items: stretch; }
+  .campaign-filter-bar input, .campaign-filter-bar select { width: 100%; min-height: 44px; }
+  .campaign-table th:nth-child(3), .campaign-table td:nth-child(3),
+  .campaign-table th:nth-child(5), .campaign-table td:nth-child(5) {
+    display: none;
+  }
+  .task-table th:nth-child(4), .task-table td:nth-child(4) { display: none; }
+}
