@@ -41,11 +41,11 @@
       <!-- Step 3 -->
       <div class="pairing-step">
         <span class="step-num">3</span>
-        <strong>Nhập mã ghép nối 6 chữ số</strong>
+        <strong>Nhập mã ghép nối 8 ký tự</strong>
         <p>Bấm nút bên dưới để tạo mã kết nối bảo mật dùng một lần và dán vào tiện ích Chrome.</p>
 
         <div class="pair-code-action-box">
-          <div id="pairCodeDisplay" class="pair-code-display">------</div>
+          <div id="pairCodeDisplay" class="pair-code-display">--------</div>
           <div style="display:flex; gap:8px">
             <button type="button" class="btn primary sm w-full" id="btnGenPairCode">
               Tạo mã kết nối
@@ -54,7 +54,7 @@
               Sao chép
             </button>
           </div>
-          <span id="pairCodeTimer" style="font-size:11px; color:var(--muted); text-align:center; display:none">Mã có hiệu lực trong 5 phút</span>
+          <span id="pairCodeTimer" style="font-size:11px; color:var(--muted); text-align:center; display:none">Mã có hiệu lực trong 10 phút</span>
         </div>
       </div>
     </div>
@@ -124,6 +124,7 @@
 
         <form method="post" action="{{ url_for('disconnect_connector') }}" style="margin-top:auto" onsubmit="return confirm('Bạn có chắc chắn muốn ngắt kết nối máy trạm này?')">
           <input type="hidden" name="device_id" value="{{ dev.device_id }}">
+          <input type="hidden" name="next" value="{{ url_for('workers_view') }}">
           <button type="submit" class="btn danger sm w-full">
             Ngắt kết nối
           </button>
@@ -180,7 +181,7 @@
         <div class="troubleshoot-icon">🔑</div>
         <div class="troubleshoot-text">
           <strong>4. Ghép nối lại bằng mã kết nối mới</strong>
-          <p>Nếu phiên làm việc bị ngắt quá 24 giờ, bấm "Tạo mã kết nối" ở đầu trang này và nhập lại mã 6 số vào Extension để kích hoạt phiên làm việc mới an toàn.</p>
+          <p>Nếu phiên làm việc bị ngắt quá 24 giờ, bấm "Tạo mã kết nối" ở đầu trang này và nhập lại mã 8 ký tự vào Extension để kích hoạt phiên làm việc mới an toàn.</p>
         </div>
       </div>
     </div>
@@ -219,12 +220,35 @@ btnGenPairCode?.addEventListener('click', async () => {
 
 btnCopyPairCode?.addEventListener('click', () => {
   const code = pairCodeDisplay.textContent.trim();
-  if (!code || code === '------') return;
+  if (!code || code === '--------' || code === '------') return;
   navigator.clipboard.writeText(code).then(() => {
     btnCopyPairCode.textContent = 'Đã sao chép!';
     showToast('Đã sao chép mã kết nối vào clipboard', 'success');
     setTimeout(() => { btnCopyPairCode.textContent = 'Sao chép'; }, 2000);
   });
+});
+
+// Auto-poll workers status every 8s
+async function pollWorkersStatus() {
+  try {
+    const res = await fetch('/api/workers', {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.success && Array.isArray(data.workers)) {
+      const currentCount = document.querySelectorAll('.worker-card-item').length;
+      if (data.workers.length !== currentCount) {
+        window.location.reload();
+      }
+    }
+  } catch (e) {
+    // network glitch, ignore
+  }
+}
+setInterval(pollWorkersStatus, 8000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollWorkersStatus();
 });
 </script>
 {% endblock %}

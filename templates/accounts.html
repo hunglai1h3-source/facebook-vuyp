@@ -26,6 +26,7 @@
       </p>
 
       <form method="post" action="{{ url_for('add_facebook_account') }}" style="margin-top:16px; display:flex; flex-direction:column; gap:12px">
+        <input type="hidden" name="next" value="{{ url_for('accounts_view') }}">
         <div class="form-group" style="margin-bottom:0">
           <label for="newAccountName">Tên hiển thị tài khoản</label>
           <input id="newAccountName" name="display_name" maxlength="120" placeholder="Ví dụ: Facebook Marketing A, Profile Sales..." required>
@@ -74,9 +75,9 @@
           </span>
         </div>
         <div class="mini-stat-card">
-          <span class="mini-label">Worker offline</span>
+          <span class="mini-label">Worker ngoại tuyến</span>
           <span class="mini-value text-red">
-            {{ accounts|selectattr('computed_status', 'equalto', 'offline')|list|length }}
+            {{ accounts|selectattr('computed_status', 'in', ['offline', 'unavailable'])|list|length }}
           </span>
         </div>
       </div>
@@ -117,16 +118,22 @@
             <span class="badge blue"><span class="pulse pulsing"></span> Đang chạy</span>
             {% elif account.computed_status == 'unmapped' %}
             <span class="badge amber">Chưa gắn worker</span>
+            {% elif account.computed_status == 'unavailable' %}
+            <span class="badge red">Profile không khả dụng</span>
             {% else %}
             <span class="badge red">Worker ngoại tuyến</span>
             {% endif %}
           </div>
         </div>
 
-        <!-- Warning banner if unmapped or offline -->
+        <!-- Warning banner if unmapped, unavailable, or offline -->
         {% if account.computed_status == 'unmapped' %}
         <div class="account-warning-banner amber">
           ⚠️ <span>Tài khoản này chưa gắn worker Chrome. Vui lòng chọn Chrome profile bên dưới và bấm Lưu.</span>
+        </div>
+        {% elif account.computed_status == 'unavailable' %}
+        <div class="account-warning-banner red">
+          ⚠️ <span>Chrome Profile hoặc Worker đã bị ngắt / không khả dụng. Vui lòng chọn worker khác bên dưới.</span>
         </div>
         {% elif account.computed_status == 'offline' %}
         <div class="account-warning-banner red">
@@ -152,6 +159,11 @@
 
         <!-- Bind & Update Form -->
         <form method="post" action="{{ url_for('bind_facebook_account', account_id=account.account_id) }}" class="account-form-section">
+          <input type="hidden" name="next" value="{{ url_for('accounts_view') }}">
+          <div>
+            <label for="name-field-{{ account.account_id }}">Tên hiển thị tài khoản:</label>
+            <input id="name-field-{{ account.account_id }}" name="display_name" value="{{ account.display_name }}" maxlength="120" placeholder="Tên hiển thị..." required>
+          </div>
           <div>
             <label for="uid-field-{{ account.account_id }}">Facebook User ID (UID số):</label>
             <input id="uid-field-{{ account.account_id }}" name="facebook_user_id" value="{{ account.facebook_user_id or '' }}" maxlength="30" pattern="[0-9]+" inputmode="numeric" placeholder="Nhập UID dạng số..." required>
@@ -162,7 +174,7 @@
               <option value="">-- Chưa gắn worker --</option>
               {% for dev in devices %}
               <option value="{{ dev.device_id }}" {% if account.device_id == dev.device_id %}selected{% endif %}>
-                {{ dev.name or dev.device_id }} • {{ 'Trực tuyến' if dev.online else 'Ngoại tuyến' }}
+                {{ dev.name or dev.device_id }} • {{ 'Trực tuyến' if dev.online or dev.is_online else 'Ngoại tuyến' }}
               </option>
               {% endfor %}
             </select>
@@ -170,6 +182,15 @@
           <div style="display:flex; gap:8px; margin-top:4px">
             <button class="btn secondary sm w-full" type="submit">LƯU THAY ĐỔI</button>
           </div>
+        </form>
+
+        <!-- Safe Delete Form -->
+        <form method="post" action="{{ url_for('delete_facebook_account_action', account_id=account.account_id) }}" style="margin-top:8px" onsubmit="return confirm('Bạn có chắc chắn muốn xóa tài khoản Facebook {{ account.display_name }}? Hệ thống sẽ hủy phân nhóm tương ứng.')">
+          <input type="hidden" name="next" value="{{ url_for('accounts_view') }}">
+          <button class="btn sm w-full" type="submit" style="background:transparent; border:1px solid rgba(239,68,68,0.3); color:var(--red); font-size:11px; padding:6px 10px; border-radius:var(--r-sm); display:flex; align-items:center; justify-content:center; gap:6px; cursor:pointer">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            XÓA TÀI KHOẢN NÀY
+          </button>
         </form>
       </div>
       {% endfor %}
@@ -185,4 +206,32 @@
     {% endif %}
   </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-poll accounts status every 10s to keep online/offline/busy badges updated
+let pollAccountsTimer = null;
+async function refreshAccountsStatus() {
+  try {
+    const res = await fetch('/api/accounts', {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.success && Array.isArray(data.accounts)) {
+      const currentCount = document.querySelectorAll('.account-card-item').length;
+      if (currentCount > 0 && data.accounts.length !== currentCount) {
+        window.location.reload();
+      }
+    }
+  } catch (e) {
+    // network glitch, ignore
+  }
+}
+pollAccountsTimer = setInterval(refreshAccountsStatus, 10000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshAccountsStatus();
+});
+</script>
 {% endblock %}

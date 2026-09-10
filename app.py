@@ -2775,6 +2775,13 @@ def load_facebook_accounts(customer_id):
     ]
 
 
+def get_facebook_account(customer_id, account_id):
+    customer_id = sanitize_customer_id(customer_id)
+    account_id = str(account_id or "").strip()
+    accounts = load_facebook_accounts(customer_id)
+    return next((a for a in accounts if a.get("account_id") == account_id), None)
+
+
 def create_facebook_account(customer_id, display_name, facebook_user_id=""):
     customer_id = sanitize_customer_id(customer_id)
     display_name = str(display_name or "").strip()[:120]
@@ -2878,6 +2885,124 @@ def bind_facebook_account_device(customer_id, account_id, device_id, facebook_us
     account["browser_profile_id"] = f"chrome-profile:{device_id}" if device_id else ""
     account["updated_at"] = now_iso()
     return account
+
+
+def update_facebook_account(customer_id, account_id, display_name=None, facebook_user_id=None, device_id=None):
+    customer_id = sanitize_customer_id(customer_id)
+    account_id = str(account_id or "").strip()
+    accounts = load_facebook_accounts(customer_id)
+    account = next((item for item in accounts if item.get("account_id") == account_id), None)
+    if not account:
+        raise ValueError("Facebook account không thuộc tài khoản hiện tại.")
+
+    new_name = account.get("display_name", "")
+    if display_name is not None:
+        new_name = str(display_name or "").strip()[:120]
+        if len(new_name) < 2:
+            raise ValueError("Tên Facebook account phải có ít nhất 2 ký tự.")
+        if any(item.get("display_name", "").casefold() == new_name.casefold() and item.get("account_id") != account_id for item in accounts):
+            raise ValueError("Tên Facebook account đã tồn tại trên một tài khoản khác.")
+
+    new_uid = account.get("facebook_user_id", "")
+    if facebook_user_id is not None:
+        new_uid = str(facebook_user_id or "").strip()
+        if new_uid and not facebook_session_fingerprint(new_uid):
+            raise ValueError("Facebook user ID phải là UID dạng số, không phải tên hiển thị.")
+
+    new_dev_id = account.get("device_id", "")
+    if device_id is not None:
+        new_dev_id = sanitize_device_id(device_id)
+
+    changing_device = new_dev_id != account.get("device_id", "")
+    changing_identity = new_uid != account.get("facebook_user_id", "")
+    if changing_device or changing_identity:
+        for task in load_engine_tasks(customer_id):
+            if task.get("account_id") != account_id:
+                continue
+            if task.get("status") in TASK_ACTIVE_STATUSES or (changing_device and task.get("status") not in TASK_TERMINAL_STATUSES | {"draft"}):
+                raise ValueError("Hãy dừng campaign hiện tại trước khi thay đổi account/profile mapping.")
+
+    devices = load_devices(customer_id)
+    if new_dev_id and new_dev_id not in devices:
+        raise ValueError("Desktop worker không thuộc tài khoản hiện tại.")
+    if new_dev_id and any(
+        item.get("device_id") == new_dev_id and item.get("account_id") != account_id
+        for item in accounts
+    ):
+        raise ValueError("Desktop worker này đã được gắn với Facebook account khác.")
+
+    browser_profile_id = f"chrome-profile:{new_dev_id}" if new_dev_id else ""
+    now_str = now_iso()
+
+    if not postgres_enabled():
+        account["display_name"] = new_name
+        account["facebook_user_id"] = new_uid
+        account["device_id"] = new_dev_id
+        account["browser_profile_id"] = browser_profile_id
+        account["updated_at"] = now_str
+        write_json(customer_accounts_file(customer_id), accounts)
+        return account
+
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE fbpostpro_accounts
+                SET display_name = %s, facebook_user_id = %s, device_id = %s,
+                    browser_profile_id = %s, updated_at = NOW()
+                WHERE customer_id = %s AND account_id = %s
+                """,
+                (new_name, new_uid, new_dev_id, browser_profile_id, customer_id, account_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("Facebook account không tồn tại.")
+        conn.commit()
+
+    account["display_name"] = new_name
+    account["facebook_user_id"] = new_uid
+    account["device_id"] = new_dev_id
+    account["browser_profile_id"] = browser_profile_id
+    account["updated_at"] = now_str
+    return account
+
+
+def delete_facebook_account(customer_id, account_id):
+    customer_id = sanitize_customer_id(customer_id)
+    account_id = str(account_id or "").strip()
+    accounts = load_facebook_accounts(customer_id)
+    account = next((item for item in accounts if item.get("account_id") == account_id), None)
+    if not account:
+        raise ValueError("Facebook account không thuộc tài khoản hiện tại.")
+
+    # Guard: cannot delete if active campaign has pending or running tasks for this account
+    for task in load_engine_tasks(customer_id):
+        if task.get("account_id") == account_id and task.get("status") in TASK_ACTIVE_STATUSES:
+            raise ValueError("Không thể xóa tài khoản Facebook đang có chiến dịch đang chạy. Hãy dừng chiến dịch trước.")
+
+    if not postgres_enabled():
+        filtered = [item for item in accounts if item.get("account_id") != account_id]
+        write_json(customer_accounts_file(customer_id), filtered)
+        assignments = load_group_assignments(customer_id)
+        cleaned_assignments = {g: a for g, a in assignments.items() if a != account_id}
+        if len(cleaned_assignments) != len(assignments):
+            write_json(customer_group_assignments_file(customer_id), cleaned_assignments)
+    else:
+        init_persistence_tables()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM fbpostpro_group_assignments WHERE customer_id = %s AND account_id = %s",
+                    (customer_id, account_id),
+                )
+                cur.execute(
+                    "DELETE FROM fbpostpro_accounts WHERE customer_id = %s AND account_id = %s",
+                    (customer_id, account_id),
+                )
+            conn.commit()
+
+    add_history(customer_id, "info", "Đã xóa Facebook account", account.get("display_name", account_id))
+    return True
 
 
 def load_group_assignments(customer_id):
@@ -7734,10 +7859,13 @@ def import_group_list():
     return redirect(url_for("groups"))
 
 
-@app.route("/groups/accounts", methods=["POST"])
+@app.route("/groups/accounts", methods=["POST"], endpoint="add_facebook_account")
+@app.route("/groups/accounts/add", methods=["POST"])
+@app.route("/accounts/add", methods=["POST"], endpoint="add_facebook_account_direct")
 @synchronized_state
 def add_facebook_account():
     customer_id = get_customer_id()
+    next_url = request.form.get("next") or request.referrer or url_for("accounts_view")
     try:
         account = create_facebook_account(
             customer_id,
@@ -7746,29 +7874,53 @@ def add_facebook_account():
         )
     except ValueError as exc:
         flash(str(exc), "warning")
-        return redirect(url_for("groups"))
+        return redirect(next_url)
     add_history(customer_id, "info", "Đã thêm Facebook account", account["display_name"])
     flash("Đã thêm Facebook account.", "success")
-    return redirect(url_for("groups"))
+    return redirect(next_url)
 
 
-@app.route("/groups/accounts/<account_id>/bind", methods=["POST"])
+@app.route("/groups/accounts/<account_id>/bind", methods=["POST"], endpoint="bind_facebook_account")
+@app.route("/accounts/<account_id>/bind", methods=["POST"], endpoint="bind_facebook_account_direct")
+@app.route("/accounts/<account_id>/update", methods=["POST"], endpoint="update_facebook_account_action")
 @synchronized_state
 def bind_facebook_account(account_id):
     customer_id = get_customer_id()
+    next_url = request.form.get("next") or request.referrer or url_for("accounts_view")
+    display_name = request.form.get("display_name")
+    facebook_user_id = request.form.get("facebook_user_id")
+    device_id = request.form.get("device_id")
     try:
-        account = bind_facebook_account_device(
-            customer_id, account_id, request.form.get("device_id", ""), request.form.get('facebook_user_id')
+        account = update_facebook_account(
+            customer_id,
+            account_id,
+            display_name=display_name,
+            facebook_user_id=facebook_user_id,
+            device_id=device_id,
         )
     except ValueError as exc:
         flash(str(exc), "warning")
-        return redirect(url_for("groups"))
+        return redirect(next_url)
     add_history(
         customer_id, "info", "Đã cập nhật Chrome profile cho Facebook account",
         f"{account['display_name']} • {account.get('device_id') or 'chưa gắn'}",
     )
-    flash("Đã lưu mapping account → desktop worker/Chrome profile.", "success")
-    return redirect(url_for("groups"))
+    flash("Đã lưu cấu hình tài khoản Facebook và Chrome profile.", "success")
+    return redirect(next_url)
+
+
+@app.route("/accounts/<account_id>/delete", methods=["POST"], endpoint="delete_facebook_account_action")
+@app.route("/groups/accounts/<account_id>/delete", methods=["POST"], endpoint="delete_facebook_account_endpoint")
+@synchronized_state
+def delete_facebook_account_action(account_id):
+    customer_id = get_customer_id()
+    next_url = request.form.get("next") or request.referrer or url_for("accounts_view")
+    try:
+        delete_facebook_account(customer_id, account_id)
+        flash("Đã xóa Facebook account thành công.", "success")
+    except ValueError as exc:
+        flash(str(exc), "warning")
+    return redirect(next_url)
 
 
 @app.route("/groups/assign", methods=["POST"])
@@ -8111,13 +8263,11 @@ def api_campaign_detail(campaign_id):
 # ACCOUNTS & WORKERS (PHASE 12)
 # ============================================================
 
-@app.route("/accounts")
-def accounts_view():
-    customer_id = get_customer_id()
+def get_enriched_accounts(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
     accounts = load_facebook_accounts(customer_id)
     devices = load_devices(customer_id)
     groups = load_groups(customer_id)
-    active_device = get_active_device(customer_id)
 
     account_group_counts = {}
     for g in groups:
@@ -8141,6 +8291,9 @@ def accounts_view():
         if not dev_id:
             status = "unmapped"
             status_label = "Chưa gắn worker"
+        elif dev is None or dev.get("revoked_at") or dev.get("status") == "revoked":
+            status = "unavailable"
+            status_label = "Profile không khả dụng"
         elif not dev_online:
             status = "offline"
             status_label = "Worker ngoại tuyến"
@@ -8151,16 +8304,73 @@ def accounts_view():
             status = "ready"
             status_label = "Sẵn sàng"
 
+        clean_dev = public_device(dev)
         accounts_enriched.append({
             **a,
-            "device": dev,
+            "device": clean_dev,
             "device_online": dev_online,
             "group_count": account_group_counts.get(acc_id, 0),
             "computed_status": status,
             "computed_status_label": status_label,
         })
+    return accounts_enriched
 
-    devices_list = list(devices.values()) if isinstance(devices, dict) else (devices or [])
+
+def get_enriched_workers(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    devices = load_devices(customer_id)
+    accounts = load_facebook_accounts(customer_id)
+
+    device_accounts = {}
+    for a in accounts:
+        d_id = a.get("device_id")
+        if d_id:
+            device_accounts.setdefault(d_id, []).append(a)
+
+    devices_enriched = []
+    if isinstance(devices, dict):
+        device_items = list(devices.items())
+    elif isinstance(devices, list):
+        device_items = [(d.get("device_id", ""), d) for d in devices if isinstance(d, dict)]
+    else:
+        device_items = []
+
+    for dev_id, d in device_items:
+        if not isinstance(d, dict):
+            continue
+        dev_id = dev_id or d.get("device_id", "")
+        online = device_is_online(d)
+        state = d.get("state", "idle")
+        if not online:
+            status_tag = "offline"
+            status_label = "Ngoại tuyến"
+        elif state == "busy":
+            status_tag = "busy"
+            status_label = "Đang xử lý"
+        else:
+            status_tag = "online"
+            status_label = "Trực tuyến"
+
+        clean_d = public_device(d)
+        devices_enriched.append({
+            **clean_d,
+            "device_id": dev_id,
+            "online": online,
+            "is_online": online,
+            "status_tag": status_tag,
+            "status_label": status_label,
+            "bound_accounts": device_accounts.get(dev_id, []),
+        })
+    return devices_enriched
+
+
+@app.route("/accounts")
+def accounts_view():
+    customer_id = get_customer_id()
+    accounts_enriched = get_enriched_accounts(customer_id)
+    devices_list = get_enriched_workers(customer_id)
+    groups = load_groups(customer_id)
+    active_device = get_active_device(customer_id)
 
     return render_template(
         "accounts.html",
@@ -8177,39 +8387,8 @@ def accounts_view():
 @app.route("/workers")
 def workers_view():
     customer_id = get_customer_id()
-    devices = load_devices(customer_id)
-    accounts = load_facebook_accounts(customer_id)
+    devices_enriched = get_enriched_workers(customer_id)
     active_device = get_active_device(customer_id)
-
-    device_accounts = {}
-    for a in accounts:
-        d_id = a.get("device_id")
-        if d_id:
-            device_accounts.setdefault(d_id, []).append(a)
-
-    devices_list = list(devices.values()) if isinstance(devices, dict) else (devices or [])
-    devices_enriched = []
-    for d in devices_list:
-        dev_id = d.get("device_id")
-        online = device_is_online(d)
-        state = d.get("state", "idle")
-        if not online:
-            status_tag = "offline"
-            status_label = "Ngoại tuyến"
-        elif state == "busy":
-            status_tag = "busy"
-            status_label = "Đang xử lý"
-        else:
-            status_tag = "online"
-            status_label = "Trực tuyến"
-
-        devices_enriched.append({
-            **d,
-            "is_online": online,
-            "status_tag": status_tag,
-            "status_label": status_label,
-            "bound_accounts": device_accounts.get(dev_id, []),
-        })
 
     return render_template(
         "workers.html",
@@ -8219,6 +8398,66 @@ def workers_view():
         agent_online=(active_device is not None),
         settings=load_settings(customer_id),
     )
+
+
+@app.route("/api/accounts", methods=["GET", "POST"])
+@synchronized_state
+def api_accounts():
+    customer_id = get_customer_id()
+    if request.method == "GET":
+        return jsonify({"success": True, "accounts": get_enriched_accounts(customer_id)})
+
+    data = request.get_json(silent=True) or request.form.to_dict()
+    display_name = data.get("display_name", "")
+    facebook_user_id = data.get("facebook_user_id", "")
+    try:
+        account = create_facebook_account(customer_id, display_name, facebook_user_id)
+        return jsonify({"success": True, "account": account}), 201
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+
+@app.route("/api/accounts/<account_id>", methods=["GET", "PUT", "POST", "DELETE"])
+@synchronized_state
+def api_account_detail(account_id):
+    customer_id = get_customer_id()
+    if request.method == "DELETE":
+        try:
+            delete_facebook_account(customer_id, account_id)
+            return jsonify({"success": True, "message": "Đã xóa tài khoản Facebook thành công."})
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+    if request.method in {"PUT", "POST"}:
+        data = request.get_json(silent=True) or request.form.to_dict()
+        try:
+            account = update_facebook_account(
+                customer_id,
+                account_id,
+                display_name=data.get("display_name"),
+                facebook_user_id=data.get("facebook_user_id"),
+                device_id=data.get("device_id"),
+            )
+            return jsonify({"success": True, "account": account})
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+    accounts = get_enriched_accounts(customer_id)
+    account = next((a for a in accounts if a.get("account_id") == account_id), None)
+    if not account:
+        return jsonify({"success": False, "error": "Tài khoản không tồn tại."}), 404
+    return jsonify({"success": True, "account": account})
+
+
+@app.route("/api/workers", methods=["GET"])
+def api_workers():
+    customer_id = get_customer_id()
+    settings_data = load_settings(customer_id)
+    return jsonify({
+        "success": True,
+        "workers": get_enriched_workers(customer_id),
+        "active_device_id": settings_data.get("active_device_id", ""),
+    })
 
 
 # ============================================================
@@ -8457,6 +8696,7 @@ def extension_pair():
             "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
         }), 409
     devices[device_id] = {
+        "device_id": device_id,
         "name": device_name,
         "token_hash": hash_device_token(token),
         'token_issued_at': now_iso(),
@@ -8495,12 +8735,20 @@ def extension_pair():
     })
 
 
-@app.route("/connector/disconnect", methods=["POST"])
+@app.route("/connector/disconnect", methods=["POST"], endpoint="connector_disconnect")
+@app.route("/workers/disconnect", methods=["POST"], endpoint="disconnect_connector")
 @synchronized_state
 def connector_disconnect():
     customer_id = get_customer_id()
     settings_data = load_settings(customer_id)
-    device_id = sanitize_device_id(settings_data.get("active_device_id", ""))
+    target_device_id = sanitize_device_id(request.form.get("device_id") or "")
+    active_device_id = sanitize_device_id(settings_data.get("active_device_id", ""))
+    device_id = target_device_id or active_device_id
+    if not device_id:
+        devices = load_devices(customer_id)
+        if devices:
+            device_id = next(iter(devices.keys()))
+
     if device_id:
         devices = load_devices(customer_id)
         devices.pop(device_id, None)
@@ -8512,16 +8760,30 @@ def connector_disconnect():
         control.pop(device_id, None)
         save_control(customer_id, control)
 
-    settings_data["active_device_id"] = ""
-    save_settings(customer_id, settings_data)
-    save_facebook_state(
-        customer_id,
-        context_id="chrome_extension",
-        status="disconnected",
-        connected_at=None,
-    )
-    flash("Đã ngắt FB POST PRO Connector khỏi tài khoản này.", "success")
-    return redirect(url_for("settings"))
+        accounts = load_facebook_accounts(customer_id)
+        for acc in accounts:
+            if acc.get("device_id") == device_id:
+                try:
+                    update_facebook_account(customer_id, acc["account_id"], device_id="")
+                except Exception:
+                    pass
+
+    remaining_devices = load_devices(customer_id)
+    if not target_device_id or target_device_id == active_device_id:
+        settings_data["active_device_id"] = next(iter(remaining_devices.keys()), "") if remaining_devices else ""
+        save_settings(customer_id, settings_data)
+        save_facebook_state(
+            customer_id,
+            context_id="chrome_extension",
+            status="disconnected" if not remaining_devices else "connected",
+            connected_at=None,
+        )
+
+    flash("Đã ngắt kết nối máy trạm khỏi tài khoản này.", "success")
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"success": True, "message": "Đã ngắt kết nối máy trạm."})
+    next_url = request.form.get("next") or request.referrer or url_for("workers_view")
+    return redirect(next_url)
 
 
 @app.route("/api/facebook/status", methods=["GET"])
