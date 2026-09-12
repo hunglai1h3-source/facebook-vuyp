@@ -49,6 +49,14 @@
     }
   }
 
+  let pollTimer = null;
+  function scheduleNextPoll(running) {
+    if (stopped) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    const delay = running ? 3000 : 12000;
+    pollTimer = setTimeout(refresh, delay);
+  }
+
   async function refresh() {
     if (stopped || document.visibilityState === 'hidden') return;
     try {
@@ -58,10 +66,13 @@
         return;
       }
       if (!response.ok) throw new Error(`Campaign status ${response.status}`);
-      render(await response.json());
+      const data = await response.json();
+      render(data);
+      scheduleNextPoll(Boolean(data.running));
     } catch (error) {
       if (worker) worker.textContent = 'Không thể cập nhật trạng thái server';
       console.warn('campaign status', error);
+      scheduleNextPoll(false);
     }
   }
 
@@ -84,5 +95,4 @@
     }
   });
   refresh();
-  window.setInterval(refresh, 3000);
 })();

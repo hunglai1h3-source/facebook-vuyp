@@ -228,8 +228,9 @@ btnCopyPairCode?.addEventListener('click', () => {
   });
 });
 
-// Auto-poll workers status every 8s
+// Auto-poll workers status every 15s
 async function pollWorkersStatus() {
+  if (document.hidden) return;
   try {
     const res = await fetch('/api/workers', {
       headers: { 'Accept': 'application/json' }
@@ -246,7 +247,7 @@ async function pollWorkersStatus() {
     // network glitch, ignore
   }
 }
-setInterval(pollWorkersStatus, 8000);
+setInterval(pollWorkersStatus, 15000);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) pollWorkersStatus();
 });

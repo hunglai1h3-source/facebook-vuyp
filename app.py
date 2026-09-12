@@ -40,6 +40,7 @@ import json
 import csv
 import mimetypes
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -891,6 +892,164 @@ def postgres_enabled():
     return bool(DATABASE_URL)
 
 
+class SimpleConnectionPool:
+    """Thread-safe connection pool using queue.Queue for psycopg connections."""
+    def __init__(self, min_size=2, max_size=10, timeout=15):
+        self.min_size = min_size
+        self.max_size = max_size
+        self.timeout = timeout
+        self.pool = queue.Queue(maxsize=max_size)
+        self.current_size = 0
+        self.lock = threading.Lock()
+
+    def _create_raw_connection(self):
+        parameters = database_parameters(DATABASE_URL)
+        if IS_PRODUCTION and parameters.get('host') not in {'localhost', '127.0.0.1', '::1'}:
+            parameters.setdefault('sslmode', os.environ.get('POSTGRES_SSLMODE', 'require'))
+            if parameters['sslmode'] not in {'require', 'verify-ca', 'verify-full'}:
+                if os.environ.get('ALLOW_INSECURE_POSTGRES', '').lower() in {'true', '1', 'yes'}:
+                    pass
+                else:
+                    raise ValueError('Production PostgreSQL requires TLS.')
+        return psycopg.connect(
+            **parameters,
+            row_factory=dict_row,
+            application_name='fbpostpro',
+            options='-c statement_timeout=30000 -c lock_timeout=10000',
+        )
+
+    def getconn(self, timeout=None):
+        if timeout is None:
+            timeout = self.timeout
+        while True:
+            try:
+                conn = self.pool.get_nowait()
+                if not conn.closed and not getattr(conn, "broken", False):
+                    return conn
+                with self.lock:
+                    self.current_size = max(0, self.current_size - 1)
+            except queue.Empty:
+                break
+
+        with self.lock:
+            if self.current_size < self.max_size:
+                conn = self._create_raw_connection()
+                self.current_size += 1
+                return conn
+
+        try:
+            conn = self.pool.get(timeout=timeout)
+            if not conn.closed and not getattr(conn, "broken", False):
+                return conn
+            with self.lock:
+                self.current_size = max(0, self.current_size - 1)
+                conn = self._create_raw_connection()
+                self.current_size += 1
+                return conn
+        except queue.Empty:
+            raise DatabaseUnavailable("Database connection pool timeout.")
+
+    def putconn(self, conn, failed=False):
+        if conn is None:
+            return
+        if failed or conn.closed or getattr(conn, "broken", False):
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self.lock:
+                self.current_size = max(0, self.current_size - 1)
+            return
+        try:
+            conn.rollback()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self.lock:
+                self.current_size = max(0, self.current_size - 1)
+            return
+        try:
+            self.pool.put_nowait(conn)
+        except queue.Full:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self.lock:
+                self.current_size = max(0, self.current_size - 1)
+
+    def close_all(self):
+        while not self.pool.empty():
+            try:
+                conn = self.pool.get_nowait()
+                conn.close()
+            except Exception:
+                pass
+        with self.lock:
+            self.current_size = 0
+
+
+GLOBAL_DB_POOL = None
+DB_POOL_LOCK = threading.Lock()
+
+
+def get_db_pool():
+    global GLOBAL_DB_POOL
+    if GLOBAL_DB_POOL is None:
+        with DB_POOL_LOCK:
+            if GLOBAL_DB_POOL is None:
+                GLOBAL_DB_POOL = SimpleConnectionPool(min_size=2, max_size=10, timeout=15)
+    return GLOBAL_DB_POOL
+
+
+def reset_db_pool():
+    global GLOBAL_DB_POOL
+    with DB_POOL_LOCK:
+        if GLOBAL_DB_POOL is not None:
+            try:
+                GLOBAL_DB_POOL.close_all()
+            except Exception:
+                pass
+            GLOBAL_DB_POOL = None
+
+
+class PooledConnectionContext:
+    def __init__(self, conn, is_request_scoped=False):
+        self.conn = conn
+        self.is_request_scoped = is_request_scoped
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        failed = exc_type is not None
+        if failed:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+        else:
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+        if not self.is_request_scoped:
+            pool = get_db_pool()
+            pool.putconn(self.conn, failed=failed)
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+    def close(self):
+        if self.is_request_scoped and has_request_context():
+            if getattr(g, "db_conn", None) is self.conn:
+                g.db_conn = None
+        pool = get_db_pool()
+        pool.putconn(self.conn)
+
+
 def postgres_connect():
 
     if not postgres_enabled():
@@ -902,19 +1061,42 @@ def postgres_connect():
         )
 
     try:
-        parameters = database_parameters(DATABASE_URL)
-        if IS_PRODUCTION and parameters['host'] not in {'localhost', '127.0.0.1', '::1'}:
-            parameters.setdefault('sslmode', os.environ.get('POSTGRES_SSLMODE', 'require'))
-            if parameters['sslmode'] not in {'require', 'verify-ca', 'verify-full'}:
-                if os.environ.get('ALLOW_INSECURE_POSTGRES', '').lower() in {'true', '1', 'yes'}:
+        pool = get_db_pool()
+        if has_request_context():
+            req_conn = getattr(g, "db_conn", None)
+            if req_conn is not None:
+                if not req_conn.closed and not getattr(req_conn, "broken", False):
+                    return PooledConnectionContext(req_conn, is_request_scoped=True)
+                try:
+                    pool.putconn(req_conn, failed=True)
+                except Exception:
                     pass
-                else:
-                    raise ValueError('Production PostgreSQL requires TLS.')
-        return psycopg.connect(**parameters, row_factory=dict_row,
-            application_name='fbpostpro', options='-c statement_timeout=30000 -c lock_timeout=10000')
+                g.db_conn = None
+
+            conn = pool.getconn()
+            g.db_conn = conn
+            return PooledConnectionContext(conn, is_request_scoped=True)
+        else:
+            conn = pool.getconn()
+            return PooledConnectionContext(conn, is_request_scoped=False)
     except (ValueError, psycopg.OperationalError, psycopg.InterfaceError) as exc:
         app.logger.error('database_connection_failed error_type=%s action=verify_DATABASE_URL_DNS_TLS', type(exc).__name__)
         raise DatabaseUnavailable('Database unavailable; verify DATABASE_URL, DNS and TLS configuration.') from None
+
+
+@app.teardown_appcontext
+def teardown_db(exception=None):
+    conn = getattr(g, "db_conn", None)
+    if conn is not None:
+        g.db_conn = None
+        if GLOBAL_DB_POOL is not None:
+            failed = bool(exception)
+            if failed:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            GLOBAL_DB_POOL.putconn(conn, failed=failed)
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -1186,6 +1368,9 @@ def init_persistence_tables():
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_engine_due ON fbpostpro_campaign_engine (customer_id, lifecycle, scheduled_at)"
                 )
                 cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_engine_cust_created ON fbpostpro_campaign_engine (customer_id, created_at DESC)"
+                )
+                cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS fbpostpro_campaign_tasks (
                         task_id VARCHAR(80) PRIMARY KEY,
@@ -1229,6 +1414,12 @@ def init_persistence_tables():
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_tasks_campaign ON fbpostpro_campaign_tasks (campaign_id, status)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_tasks_cust_status ON fbpostpro_campaign_tasks (customer_id, status)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_tasks_cust_updated ON fbpostpro_campaign_tasks (customer_id, updated_at DESC)"
                 )
                 cur.execute(
                     """SELECT customer_id, account_id, COUNT(*) AS duplicate_count,
@@ -1822,7 +2013,7 @@ def create_user_account(
             "password_hash": password_hash,
             "is_active": True,
             "role": role,
-            "max_facebook_accounts": 1,
+            "max_facebook_accounts": 10,
             "max_groups": 500,
             "max_campaigns": 100,
             "max_devices": 3,
@@ -1857,7 +2048,7 @@ def create_user_account(
                     created_at,
                     last_login_at
                 )
-                VALUES (%s, %s, %s, %s, %s, TRUE, %s, 1, 500, 100, 3, 1, 1000, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s, 10, 500, 100, 3, 1, 1000, NOW(), NOW())
                 """,
                 (
                     user_id,
@@ -2488,6 +2679,12 @@ def load_groups(customer_id):
     if not customer_id:
         return []
 
+    if has_request_context():
+        cache_key = f"_req_cache_groups_{customer_id}"
+        cached = getattr(g, cache_key, None)
+        if cached is not None:
+            return list(cached)
+
     # ========================================
     # LOCAL FALLBACK
     # ========================================
@@ -2501,13 +2698,17 @@ def load_groups(customer_id):
         if not path.exists():
             return []
 
-        return [
+        res = [
             normalize_group_url(x)
             for x in path.read_text(
                 encoding="utf-8"
             ).splitlines()
             if normalize_group_url(x)
         ]
+        if has_request_context():
+            cache_key = f"_req_cache_groups_{customer_id}"
+            setattr(g, cache_key, list(res))
+        return res
 
     # ========================================
     # POSTGRES
@@ -2532,11 +2733,15 @@ def load_groups(customer_id):
 
             rows = cur.fetchall()
 
-    return [
+    res = [
         row["group_url"]
         for row in rows
         if row.get("group_url")
     ]
+    if has_request_context():
+        cache_key = f"_req_cache_groups_{customer_id}"
+        setattr(g, cache_key, list(res))
+    return res
 
 
 def save_groups(
@@ -2578,6 +2783,10 @@ def save_groups(
         clean_groups.append(
             group
         )
+
+    if has_request_context():
+        cache_key = f"_req_cache_groups_{customer_id}"
+        setattr(g, cache_key, list(clean_groups))
 
     # ========================================
     # LOCAL FALLBACK
@@ -2734,16 +2943,31 @@ def migrate_groups_file_to_postgres(
 # FACEBOOK ACCOUNTS + GROUP ASSIGNMENTS
 # ============================================================
 
+def _invalidate_fb_accounts_cache(customer_id):
+    if has_request_context():
+        cache_key = f"_req_cache_fb_accounts_{customer_id}"
+        if hasattr(g, cache_key):
+            delattr(g, cache_key)
+
+
 def load_facebook_accounts(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     if not customer_id:
         return []
+    if has_request_context():
+        cache_key = f"_req_cache_fb_accounts_{customer_id}"
+        cached = getattr(g, cache_key, None)
+        if cached is not None:
+            return [dict(a) for a in cached]
     if not postgres_enabled():
         data = read_json(customer_accounts_file(customer_id), [])
         accounts = data if isinstance(data, list) else []
         for account in accounts:
             if account.get("device_id") and not account.get("browser_profile_id"):
                 account["browser_profile_id"] = f"chrome-profile:{account['device_id']}"
+        if has_request_context():
+            cache_key = f"_req_cache_fb_accounts_{customer_id}"
+            setattr(g, cache_key, [dict(a) for a in accounts])
         return accounts
 
     init_persistence_tables()
@@ -2760,19 +2984,23 @@ def load_facebook_accounts(customer_id):
                 (customer_id,),
             )
             rows = cur.fetchall()
-    return [
+    res = [
         {
             "account_id": row.get("account_id", ""),
             "display_name": row.get("display_name", ""),
             "facebook_user_id": row.get("facebook_user_id", ""),
             "status": row.get("status", "ready"),
             "device_id": row.get("device_id", ""),
-            "browser_profile_id": row.get("browser_profile_id", ""),
+            "browser_profile_id": row.get("browser_profile_id", "") or (f"chrome-profile:{row.get('device_id')}" if row.get("device_id") else ""),
             "created_at": _serialize_dt(row.get("created_at")),
             "updated_at": _serialize_dt(row.get("updated_at")),
         }
         for row in rows
     ]
+    if has_request_context():
+        cache_key = f"_req_cache_fb_accounts_{customer_id}"
+        setattr(g, cache_key, [dict(a) for a in res])
+    return res
 
 
 def get_facebook_account(customer_id, account_id):
@@ -2782,34 +3010,46 @@ def get_facebook_account(customer_id, account_id):
     return next((a for a in accounts if a.get("account_id") == account_id), None)
 
 
-def create_facebook_account(customer_id, display_name, facebook_user_id=""):
+def create_facebook_account(customer_id, display_name, facebook_user_id="", device_id=""):
     customer_id = sanitize_customer_id(customer_id)
-    display_name = str(display_name or "").strip()[:120]
-    facebook_user_id = re.sub(r"[^A-Za-z0-9_.-]", "", str(facebook_user_id or ""))[:80]
+    facebook_user_id = str(facebook_user_id or "").strip()[:40]
+    if facebook_user_id and not facebook_session_fingerprint(facebook_user_id):
+        raise ValueError("Facebook user ID phải là UID dạng số, không phải tên hiển thị.")
+    device_id = sanitize_device_id(device_id)
     if not customer_id or len(display_name) < 2:
         raise ValueError("Tên Facebook account phải có ít nhất 2 ký tự.")
 
     accounts = load_facebook_accounts(customer_id)
     user = find_user_by_id(customer_id) or {}
-    account_limit = max(1, int(user.get("max_facebook_accounts", 1) or 1))
+    raw_limit = user.get("max_facebook_accounts")
+    account_limit = max(10, int(raw_limit if raw_limit is not None else 10))
     if len(accounts) >= account_limit:
         raise ValueError(f"Tài khoản đã đạt giới hạn {account_limit} Facebook account.")
     if any(item.get("display_name", "").casefold() == display_name.casefold() for item in accounts):
         raise ValueError("Tên Facebook account đã tồn tại.")
 
+    devices = load_devices(customer_id)
+    if device_id:
+        if device_id not in devices:
+            raise ValueError("Desktop worker không thuộc tài khoản hiện tại.")
+        if any(item.get("device_id") == device_id for item in accounts):
+            raise ValueError("Desktop worker này đã được gắn với Facebook account khác.")
+
+    browser_profile_id = f"chrome-profile:{device_id}" if device_id else ""
     record = {
         "account_id": "fba_" + uuid.uuid4().hex[:20],
         "display_name": display_name,
         "facebook_user_id": facebook_user_id,
         "status": "ready",
-        "device_id": "",
-        "browser_profile_id": "",
+        "device_id": device_id,
+        "browser_profile_id": browser_profile_id,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
     if not postgres_enabled():
         accounts.append(record)
         write_json(customer_accounts_file(customer_id), accounts)
+        _invalidate_fb_accounts_cache(customer_id)
         return record
 
     init_persistence_tables()
@@ -2819,12 +3059,13 @@ def create_facebook_account(customer_id, display_name, facebook_user_id=""):
                 """
                 INSERT INTO fbpostpro_accounts (
                     account_id, customer_id, display_name, facebook_user_id,
-                    status, device_id, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, 'ready', '', NOW(), NOW())
+                    status, device_id, browser_profile_id, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'ready', %s, %s, NOW(), NOW())
                 """,
-                (record["account_id"], customer_id, display_name, facebook_user_id),
+                (record["account_id"], customer_id, display_name, facebook_user_id, device_id, browser_profile_id),
             )
         conn.commit()
+    _invalidate_fb_accounts_cache(customer_id)
     return record
 
 
@@ -2864,6 +3105,7 @@ def bind_facebook_account_device(customer_id, account_id, device_id, facebook_us
         account["browser_profile_id"] = f"chrome-profile:{device_id}" if device_id else ""
         account["updated_at"] = now_iso()
         write_json(customer_accounts_file(customer_id), accounts)
+        _invalidate_fb_accounts_cache(customer_id)
         return account
 
     init_persistence_tables()
@@ -2884,6 +3126,7 @@ def bind_facebook_account_device(customer_id, account_id, device_id, facebook_us
     account['facebook_user_id'] = identity
     account["browser_profile_id"] = f"chrome-profile:{device_id}" if device_id else ""
     account["updated_at"] = now_iso()
+    _invalidate_fb_accounts_cache(customer_id)
     return account
 
 
@@ -2941,6 +3184,7 @@ def update_facebook_account(customer_id, account_id, display_name=None, facebook
         account["browser_profile_id"] = browser_profile_id
         account["updated_at"] = now_str
         write_json(customer_accounts_file(customer_id), accounts)
+        _invalidate_fb_accounts_cache(customer_id)
         return account
 
     init_persistence_tables()
@@ -2964,6 +3208,7 @@ def update_facebook_account(customer_id, account_id, display_name=None, facebook
     account["device_id"] = new_dev_id
     account["browser_profile_id"] = browser_profile_id
     account["updated_at"] = now_str
+    _invalidate_fb_accounts_cache(customer_id)
     return account
 
 
@@ -3002,6 +3247,7 @@ def delete_facebook_account(customer_id, account_id):
             conn.commit()
 
     add_history(customer_id, "info", "Đã xóa Facebook account", account.get("display_name", account_id))
+    _invalidate_fb_accounts_cache(customer_id)
     return True
 
 
@@ -3223,18 +3469,21 @@ def _engine_task_from_row(row):
     return item
 
 
-def load_engine_campaigns(customer_id):
+def load_engine_campaigns(customer_id, limit=None):
     customer_id = sanitize_customer_id(customer_id)
     if not postgres_enabled():
         data = read_json(customer_engine_campaigns_file(customer_id), [])
-        return data if isinstance(data, list) else []
+        items = data if isinstance(data, list) else []
+        return items[:limit] if (limit and isinstance(limit, int)) else items
     init_persistence_tables()
+    sql = "SELECT * FROM fbpostpro_campaign_engine WHERE customer_id = %s ORDER BY created_at DESC"
+    params = [customer_id]
+    if limit and isinstance(limit, int) and limit > 0:
+        sql += " LIMIT %s"
+        params.append(limit)
     with postgres_connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM fbpostpro_campaign_engine WHERE customer_id = %s ORDER BY created_at DESC",
-                (customer_id,),
-            )
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
     return [_engine_campaign_from_row(row) for row in rows]
 
@@ -4976,6 +5225,13 @@ def duplicate_engine_campaign(customer_id, source_campaign_id):
 def load_settings(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if has_request_context():
+        cache_key = f"_req_cache_settings_{customer_id}"
+        cached = getattr(g, cache_key, None)
+        if cached is not None:
+            return dict(cached)
+
     if postgres_enabled():
         found, data = postgres_customer_data_get(customer_id, "settings")
         if found:
@@ -5050,6 +5306,10 @@ def load_settings(
             "post_images"
         ] = []
 
+    if has_request_context():
+        cache_key = f"_req_cache_settings_{customer_id}"
+        setattr(g, cache_key, dict(settings))
+
     return settings
 
 
@@ -5057,6 +5317,10 @@ def save_settings(
     customer_id,
     settings,
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if has_request_context():
+        cache_key = f"_req_cache_settings_{customer_id}"
+        setattr(g, cache_key, dict(settings) if isinstance(settings, dict) else settings)
     if postgres_enabled():
         postgres_customer_data_set(customer_id, "settings", settings)
     else:
@@ -6190,6 +6454,13 @@ def send_customer_image(customer_id, filename, as_attachment=False):
 def load_devices(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if has_request_context():
+        cache_key = f"_req_cache_devices_{customer_id}"
+        cached = getattr(g, cache_key, None)
+        if cached is not None:
+            return dict(cached)
+
     if postgres_enabled():
         found, data = postgres_customer_data_get(customer_id, "devices")
         if not found:
@@ -6198,20 +6469,21 @@ def load_devices(
     else:
         data = read_json(customer_devices_file(customer_id), {})
 
-    if isinstance(
-        data,
-        dict,
-    ):
-
-        return data
-
-    return {}
+    res = data if isinstance(data, dict) else {}
+    if has_request_context():
+        cache_key = f"_req_cache_devices_{customer_id}"
+        setattr(g, cache_key, dict(res))
+    return res
 
 
 def save_devices(
     customer_id,
     devices,
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if has_request_context():
+        cache_key = f"_req_cache_devices_{customer_id}"
+        setattr(g, cache_key, dict(devices) if isinstance(devices, dict) else devices)
     if postgres_enabled():
         postgres_customer_data_set(customer_id, "devices", devices)
     else:
@@ -7380,7 +7652,7 @@ def dashboard_data(
     error_count = sum(1 for item in history if item.get("status") == "error")
     total_history = success_count + error_count
     success_rate = round(success_count / total_history * 100) if total_history else (100 if tasks_success_today else 0)
-    recent_campaigns = load_engine_campaigns(customer_id)[:5]
+    recent_campaigns = load_engine_campaigns(customer_id, limit=5)
 
     return {
         "groups": groups,
@@ -7871,6 +8143,7 @@ def add_facebook_account():
             customer_id,
             request.form.get("display_name", ""),
             request.form.get("facebook_user_id", ""),
+            request.form.get("device_id", ""),
         )
     except ValueError as exc:
         flash(str(exc), "warning")
@@ -8267,13 +8540,13 @@ def get_enriched_accounts(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     accounts = load_facebook_accounts(customer_id)
     devices = load_devices(customer_id)
-    groups = load_groups(customer_id)
+    assignments = load_group_assignments(customer_id)
 
     account_group_counts = {}
-    for g in groups:
-        acc_id = g.get("account_id")
-        if acc_id:
-            account_group_counts[acc_id] = account_group_counts.get(acc_id, 0) + 1
+    if isinstance(assignments, dict):
+        for group_url, acc_id in assignments.items():
+            if acc_id:
+                account_group_counts[acc_id] = account_group_counts.get(acc_id, 0) + 1
 
     active_tasks = [
         t for t in load_engine_tasks(customer_id)
@@ -8410,8 +8683,9 @@ def api_accounts():
     data = request.get_json(silent=True) or request.form.to_dict()
     display_name = data.get("display_name", "")
     facebook_user_id = data.get("facebook_user_id", "")
+    device_id = data.get("device_id", "")
     try:
-        account = create_facebook_account(customer_id, display_name, facebook_user_id)
+        account = create_facebook_account(customer_id, display_name, facebook_user_id, device_id)
         return jsonify({"success": True, "account": account}), 201
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
@@ -10630,6 +10904,9 @@ def agent_heartbeat():
     device['session_verification_version'] = 1 if data.get('session_verification_version') == 1 else 0
     for field, bound in [('facebook_session_fingerprint', 64), ('browser_profile_id', 120), ('session_context', 180)]:
         device[field] = str(data.get(field, ''))[:bound]
+    raw_fbid = re.sub(r"[^0-9]", "", str(data.get("facebook_user_id", "")))[:30]
+    if raw_fbid:
+        device["facebook_user_id"] = raw_fbid
     devices[device_id] = device
     save_devices(customer_id, devices)
 
@@ -10710,10 +10987,32 @@ def agent_heartbeat():
             connected_at=None,
         )
 
+    accounts = load_facebook_accounts(customer_id)
     bound_account = next(
-        (item for item in load_facebook_accounts(customer_id) if item.get("device_id") == device_id),
+        (item for item in accounts if item.get("device_id") == device_id),
         None,
     )
+    if bound_account and raw_fbid and not bound_account.get("facebook_user_id"):
+        try:
+            bound_account = update_facebook_account(
+                customer_id,
+                bound_account["account_id"],
+                facebook_user_id=raw_fbid,
+            )
+        except Exception:
+            pass
+    elif not bound_account and not accounts and facebook_logged_in and raw_fbid:
+        try:
+            account_name = device.get("name") or "Tài khoản Facebook 1"
+            bound_account = create_facebook_account(
+                customer_id,
+                display_name=account_name,
+                facebook_user_id=raw_fbid,
+                device_id=device_id,
+            )
+        except Exception:
+            pass
+
     return jsonify({
         "ok": True,
         "server_time": now_iso(),

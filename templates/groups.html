@@ -57,7 +57,7 @@
           <div class="account-identity"><strong>{{ account.display_name }}</strong><small>{{ account.facebook_user_id or 'Chưa có Facebook ID' }}</small></div>
           <form method="post" action="{{ url_for('bind_facebook_account', account_id=account.account_id) }}" class="account-device-form">
             <label for="uid-{{ account.account_id }}">Facebook user ID (UID dạng số để xác minh session)</label>
-            <input id="uid-{{ account.account_id }}" name="facebook_user_id" value="{{ account.facebook_user_id }}" maxlength="30" pattern="[0-9]+" inputmode="numeric" required aria-label="Facebook user ID cho {{ account.display_name }}">
+            <input id="uid-{{ account.account_id }}" name="facebook_user_id" value="{{ account.facebook_user_id or '' }}" maxlength="30" pattern="[0-9]*" inputmode="numeric" aria-label="Facebook user ID cho {{ account.display_name }}">
             <label for="device-{{ account.account_id }}">Chrome profile / worker</label>
             <div class="account-device-control">
               <select id="device-{{ account.account_id }}" name="device_id" aria-label="Chrome profile cho {{ account.display_name }}">

@@ -465,6 +465,162 @@ class Phase12AccountsWorkersE2ETest(unittest.TestCase):
         self.assertEqual(acc_b_check["display_name"], "Secret Account B")
         print("PASS test_08: Strict multi-tenant isolation enforced between User A and User B.")
 
+    # ----------------------------------------------------------------------
+    # 9. Group Count Regression: Groups must NOT cause HTTP 500 on /accounts
+    # ----------------------------------------------------------------------
+    def test_09_accounts_page_with_groups_no_500(self):
+        """Regression test: having groups must never crash get_enriched_accounts with AttributeError."""
+        # 1. Add groups to User A
+        group_urls = [
+            "https://www.facebook.com/groups/marketing101",
+            "https://www.facebook.com/groups/salesteam",
+            "https://www.facebook.com/groups/realestate",
+        ]
+        self.module.save_groups(self.user_a_id, group_urls)
+
+        # 2. Add an account
+        acc = self.module.create_facebook_account(self.user_a_id, "Account With Groups", "1000111222333")
+        acc_id = acc["account_id"]
+
+        # 3. Assign 2 of the groups to this account
+        self.module.save_group_assignments(self.user_a_id, [
+            {"group_url": group_urls[0], "account_id": acc_id},
+            {"group_url": group_urls[1], "account_id": acc_id},
+        ])
+
+        # 4. Request /accounts HTML page -> Must be 200 OK (previously threw 500)
+        resp_page = self.client_a.get("/accounts")
+        self.assertEqual(resp_page.status_code, 200)
+        html = resp_page.get_data(as_text=True)
+        self.assertIn("Account With Groups", html)
+        self.assertIn("2 Groups", html)
+
+        # 5. Request /api/accounts -> Must be 200 OK
+        resp_api = self.client_a.get("/api/accounts")
+        self.assertEqual(resp_api.status_code, 200)
+        data = resp_api.get_json()
+        self.assertTrue(data.get("success"))
+        found = next((a for a in data["accounts"] if a["account_id"] == acc_id), None)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.get("group_count"), 2)
+        print("PASS test_09: Accounts page and API return 200 OK with accurate group counts when user has groups.")
+
+    # ----------------------------------------------------------------------
+    # 10. Account Creation with Direct Worker Binding
+    # ----------------------------------------------------------------------
+    def test_10_account_creation_with_direct_worker_binding(self):
+        """Account can be directly bound to a worker on creation."""
+        now_iso = self.module.now_iso()
+        dev_id = "dev-bind-on-create"
+        devices = {
+            dev_id: {
+                "device_id": dev_id,
+                "name": "Direct Bound Worker",
+                "last_seen": now_iso,
+                "state": "idle",
+            }
+        }
+        self.module.save_devices(self.user_a_id, devices)
+
+        # 1. Create account with device_id via API
+        resp = self.client_a.post(
+            "/api/accounts",
+            data=json.dumps({
+                "display_name": "Bound On Create",
+                "facebook_user_id": "100099887766554",
+                "device_id": dev_id,
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        account = resp.get_json().get("account", {})
+        self.assertEqual(account.get("device_id"), dev_id)
+        self.assertEqual(account.get("browser_profile_id"), f"chrome-profile:{dev_id}")
+
+        # 2. Check enriched status
+        enriched = self.module.get_enriched_accounts(self.user_a_id)
+        bound_acc = next((a for a in enriched if a["account_id"] == account["account_id"]), None)
+        self.assertIsNotNone(bound_acc)
+        self.assertEqual(bound_acc.get("computed_status"), "ready")
+        self.assertTrue(bound_acc.get("device_online"))
+        print("PASS test_10: Account created with direct worker binding is properly mapped and ready.")
+
+    # ----------------------------------------------------------------------
+    # 11. Extension Heartbeat UID Auto-Sync & Session Verification
+    # ----------------------------------------------------------------------
+    def test_11_extension_heartbeat_uid_auto_sync(self):
+        """Extension heartbeat sends facebook_user_id and auto-syncs to bound account."""
+        # 1. Pair a worker
+        code_resp = self.client_a.post("/api/extension/pair-code")
+        code = code_resp.get_json()["code"]
+        pair_resp = self.client_a.post(
+            "/api/extension/pair",
+            data=json.dumps({"code": code, "device_name": "Auto Sync Worker"}),
+            content_type="application/json",
+        )
+        dev_id = pair_resp.get_json()["device_id"]
+        token = pair_resp.get_json()["token"]
+        headers = {"X-Device-ID": dev_id, "X-Agent-Token": token}
+
+        # 2. Create an account mapped to this worker but with NO facebook_user_id
+        acc = self.module.create_facebook_account(
+            self.user_a_id,
+            display_name="Account Missing UID",
+            facebook_user_id="",
+            device_id=dev_id,
+        )
+        self.assertEqual(acc.get("facebook_user_id"), "")
+
+        # 3. Extension sends heartbeat with facebook_user_id
+        fbid = "100077665544332"
+        fingerprint = self.module.facebook_session_fingerprint(fbid)
+        hb_resp = self.client_a.post(
+            "/api/agent/heartbeat",
+            headers=headers,
+            data=json.dumps({
+                "facebook_logged_in": True,
+                "facebook_user_id": fbid,
+                "facebook_session_fingerprint": fingerprint,
+                "session_verification_version": 1,
+                "browser_profile_id": f"chrome-profile:{dev_id}",
+                "session_context": f"chrome-profile:{dev_id}",
+                "worker_state": "idle",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(hb_resp.status_code, 200)
+        hb_data = hb_resp.get_json()
+        self.assertTrue(hb_data.get("ok"))
+        self.assertEqual(hb_data.get("session_verification_error"), "")
+        self.assertEqual(hb_data.get("assigned_account", {}).get("facebook_user_id"), fbid)
+
+        # 4. Verify account in database now has the UID
+        saved_acc = self.module.get_facebook_account(self.user_a_id, acc["account_id"])
+        self.assertEqual(saved_acc.get("facebook_user_id"), fbid)
+        print("PASS test_11: Extension heartbeat auto-syncs numeric UID to bound account with verified session.")
+
+    # ----------------------------------------------------------------------
+    # 12. Default Multi-Account Quota
+    # ----------------------------------------------------------------------
+    def test_12_default_multi_account_quota(self):
+        """Newly registered user defaults to 10 accounts without needing manual admin limit bump."""
+        # Create a brand new user
+        new_client = self.module.app.test_client()
+        new_user_id = create_authenticated_user(new_client, "user_gamma")
+
+        # Add 3 accounts without any manual max_facebook_accounts modification
+        for i in range(1, 4):
+            resp = new_client.post(
+                "/groups/accounts",
+                data={"display_name": f"Gamma Account {i}", "facebook_user_id": f"100000000000{i}"},
+                follow_redirects=True,
+            )
+            self.assertEqual(resp.status_code, 200)
+
+        accounts = self.module.load_facebook_accounts(new_user_id)
+        self.assertEqual(len(accounts), 3)
+        print("PASS test_12: Newly registered users can create multiple accounts under default quota.")
+
 
 if __name__ == "__main__":
     unittest.main()

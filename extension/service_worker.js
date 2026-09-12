@@ -140,6 +140,12 @@ async function heartbeat(
     return lastHeartbeatResult;
   }
 
+  let identity = '';
+  try {
+    const cookie = await chrome.cookies.get({url: 'https://www.facebook.com/', name: 'c_user'});
+    identity = String(cookie?.value || '');
+    if (!/^[0-9]{1,30}$/.test(identity)) identity = '';
+  } catch (e) {}
   const sessionFingerprint = await facebookSessionFingerprint();
   const fb = Boolean(sessionFingerprint);
 
@@ -171,6 +177,7 @@ async function heartbeat(
             current_job_id:
               currentJobId,
             execution_token: currentJob?.execution_token || '',
+            facebook_user_id: identity,
             facebook_session_fingerprint: sessionFingerprint,
             session_verification_version: 1,
             browser_profile_id: 'chrome-profile:' + c.deviceId,
