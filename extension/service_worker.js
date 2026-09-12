@@ -177,7 +177,6 @@ async function heartbeat(
             current_job_id:
               currentJobId,
             execution_token: currentJob?.execution_token || '',
-            facebook_user_id: identity,
             facebook_session_fingerprint: sessionFingerprint,
             session_verification_version: 1,
             browser_profile_id: 'chrome-profile:' + c.deviceId,
@@ -736,17 +735,27 @@ async function postGroup(
     return {ok: false, code: 'invalid_group', error: 'URL Group không hợp lệ; đã chặn điều hướng.'};
   }
   /*
-   * QUAN TRỌNG:
-   * active:true
-   *
-   * Bản cũ của bạn dùng active:false.
+   * Background Execution:
+   * active: false để không cướp focus của người dùng trên desktop.
+   * Tái sử dụng execution tab duy nhất cho tất cả các nhóm trong chiến dịch.
    */
-  const tab =
-    await chrome.tabs.create({
+  let tab = null;
+  if (currentExecutionTab) {
+    try {
+      tab = await chrome.tabs.get(currentExecutionTab);
+      await chrome.tabs.update(currentExecutionTab, { url, active: false });
+    } catch (e) {
+      tab = null;
+      currentExecutionTab = null;
+    }
+  }
+  if (!tab) {
+    tab = await chrome.tabs.create({
       url,
-      active: true
+      active: false
     });
-  currentExecutionTab = tab.id;
+    currentExecutionTab = tab.id;
+  }
   // Cookies are read from the regular profile. Incognito has a separate store
   // and must never be treated as the same Facebook session.
   if (tab.incognito) {
@@ -780,6 +789,7 @@ async function postGroup(
         '/checkpoint'
       )
     ) {
+      // requires_attention: bring tab to foreground for user intervention
       await chrome.tabs.update(
         tab.id,
         {
@@ -794,6 +804,9 @@ async function postGroup(
         code:
           'checkpoint',
 
+        requires_attention:
+          true,
+
         error:
           'Facebook yêu cầu checkpoint.'
       };
@@ -804,6 +817,7 @@ async function postGroup(
         '/login'
       )
     ) {
+      // requires_attention: bring tab to foreground for user intervention
       await chrome.tabs.update(
         tab.id,
         {
@@ -818,22 +832,17 @@ async function postGroup(
         code:
           'login',
 
+        requires_attention:
+          true,
+
         error:
           'Facebook chưa đăng nhập.'
       };
     }
 
     /*
-     * Đảm bảo tab vẫn đang active.
+     * Không ép active foreground để tránh cướp focus của người dùng trên desktop.
      */
-    await chrome.tabs.update(
-      tab.id,
-      {
-        active:
-          true
-      }
-    );
-
     await sleep(1500);
 
     let res = null;
@@ -1379,15 +1388,31 @@ async function processJob(
       }
     );
   } finally {
-    busy =
-      false;
+    if (currentExecutionTab) {
+      try {
+        await chrome.tabs.remove(currentExecutionTab);
+      } catch (e) {}
+      currentExecutionTab = null;
+    }
+    busy = false;
     currentJobId = '';
     currentJob = null;
     currentOwner = null;
-    currentExecutionTab = null;
     workerState = 'idle';
     lastHeartbeatAt = 0;
+    scheduleNextPoll(1000);
   }
+}
+
+let nextPollTimer = null;
+function scheduleNextPoll(delayMs = 6000) {
+  if (nextPollTimer) {
+    clearTimeout(nextPollTimer);
+    nextPollTimer = null;
+  }
+  nextPollTimer = setTimeout(() => {
+    poll();
+  }, delayMs);
 }
 
 function poll() {
@@ -1485,6 +1510,7 @@ async function pollOnce() {
       };
     }
 
+    scheduleNextPoll(6000);
     return {
       ok: true,
 
@@ -1498,6 +1524,7 @@ async function pollOnce() {
         'Google Chrome'
     };
   } catch (e) {
+    scheduleNextPoll(8000);
     return {
       ok: false,
 

@@ -1357,12 +1357,16 @@ def init_persistence_tables():
                         successful INTEGER NOT NULL DEFAULT 0,
                         failed INTEGER NOT NULL DEFAULT 0,
                         cancelled INTEGER NOT NULL DEFAULT 0,
+                        completion_notified BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         started_at TIMESTAMPTZ,
                         finished_at TIMESTAMPTZ,
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
+                )
+                cur.execute(
+                    "ALTER TABLE fbpostpro_campaign_engine ADD COLUMN IF NOT EXISTS completion_notified BOOLEAN NOT NULL DEFAULT FALSE"
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fbpostpro_campaign_engine_due ON fbpostpro_campaign_engine (customer_id, lifecycle, scheduled_at)"
@@ -3034,6 +3038,10 @@ def create_facebook_account(customer_id, display_name, facebook_user_id="", devi
             raise ValueError("Desktop worker không thuộc tài khoản hiện tại.")
         if any(item.get("device_id") == device_id for item in accounts):
             raise ValueError("Desktop worker này đã được gắn với Facebook account khác.")
+        if not facebook_user_id:
+            dev_fbid = str(devices.get(device_id, {}).get("facebook_user_id") or "").strip()
+            if dev_fbid and facebook_session_fingerprint(dev_fbid):
+                facebook_user_id = dev_fbid
 
     browser_profile_id = f"chrome-profile:{device_id}" if device_id else ""
     record = {
@@ -3079,9 +3087,14 @@ def bind_facebook_account_device(customer_id, account_id, device_id, facebook_us
         raise ValueError("Facebook account không thuộc tài khoản hiện tại.")
     if facebook_user_id is not None:
         facebook_user_id = str(facebook_user_id).strip()
-        if not facebook_session_fingerprint(facebook_user_id):
+        if facebook_user_id and not facebook_session_fingerprint(facebook_user_id):
             raise ValueError('Facebook user ID phải là UID dạng số, không phải tên hiển thị.')
     identity = account.get('facebook_user_id', '') if facebook_user_id is None else facebook_user_id
+    devices = load_devices(customer_id)
+    if not identity and device_id:
+        dev_fbid = str(devices.get(device_id, {}).get("facebook_user_id") or "").strip()
+        if dev_fbid and facebook_session_fingerprint(dev_fbid):
+            identity = dev_fbid
     changing_device = device_id != account.get('device_id', '')
     changing_identity = identity != account.get('facebook_user_id', '')
     if changing_device or changing_identity:
@@ -3090,7 +3103,6 @@ def bind_facebook_account_device(customer_id, account_id, device_id, facebook_us
                 continue
             if task.get('status') in TASK_ACTIVE_STATUSES or (changing_device and task.get('status') not in TASK_TERMINAL_STATUSES | {'draft'}):
                 raise ValueError('Hãy dừng campaign hiện tại trước khi thay đổi account/profile mapping.')
-    devices = load_devices(customer_id)
     if device_id and device_id not in devices:
         raise ValueError("Desktop worker không thuộc tài khoản hiện tại.")
     if device_id and any(
@@ -3155,6 +3167,12 @@ def update_facebook_account(customer_id, account_id, display_name=None, facebook
     new_dev_id = account.get("device_id", "")
     if device_id is not None:
         new_dev_id = sanitize_device_id(device_id)
+
+    devices = load_devices(customer_id)
+    if not new_uid and new_dev_id:
+        dev_fbid = str(devices.get(new_dev_id, {}).get("facebook_user_id") or "").strip()
+        if dev_fbid and facebook_session_fingerprint(dev_fbid):
+            new_uid = dev_fbid
 
     changing_device = new_dev_id != account.get("device_id", "")
     changing_identity = new_uid != account.get("facebook_user_id", "")
@@ -3433,6 +3451,28 @@ def build_account_group_snapshot(customer_id, group_urls):
     return list(buckets.values())
 
 
+def build_snapshot_from_balanced(customer_id, group_urls, account_ids):
+    customer_id = sanitize_customer_id(customer_id)
+    accounts = {item["account_id"]: item for item in load_facebook_accounts(customer_id)}
+    valid_account_ids = [str(aid) for aid in account_ids if str(aid) in accounts]
+    if not valid_account_ids:
+        valid_account_ids = list(accounts.keys())
+    if not valid_account_ids:
+        return []
+    balanced = evenly_assign_groups(group_urls, valid_account_ids)
+    buckets = {}
+    for item in balanced:
+        acc_id = item["account_id"]
+        if acc_id not in buckets:
+            buckets[acc_id] = {
+                "account_id": acc_id,
+                "account_name": accounts.get(acc_id, {}).get("display_name", acc_id),
+                "groups": [],
+            }
+        buckets[acc_id]["groups"].append(item["group_url"])
+    return list(buckets.values())
+
+
 # ============================================================
 # PHASE 8 CAMPAIGN ENGINE
 # ============================================================
@@ -3457,9 +3497,34 @@ def task_group_id(group_url):
 
 def _engine_campaign_from_row(row):
     item = dict(row)
+    item["completion_notified"] = bool(item.get("completion_notified", False))
+    if "lifecycle" in item and "status" not in item:
+        item["status"] = item["lifecycle"]
     for key in ("scheduled_at", "created_at", "started_at", "finished_at", "updated_at"):
         item[key] = _serialize_dt(item.get(key))
     return item
+
+
+def mark_campaign_completion_notified(customer_id, campaign_id):
+    customer_id = sanitize_customer_id(customer_id)
+    campaign_id = str(campaign_id or "").strip()
+    if not customer_id or not campaign_id:
+        return
+    if not postgres_enabled():
+        campaigns = load_engine_campaigns(customer_id)
+        for c in campaigns:
+            if c.get("campaign_id") == campaign_id:
+                c["completion_notified"] = True
+        _save_local_engine(customer_id, campaigns)
+        return
+    init_persistence_tables()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE fbpostpro_campaign_engine SET completion_notified = TRUE, updated_at = NOW() WHERE customer_id = %s AND campaign_id = %s",
+                (customer_id, campaign_id),
+            )
+        conn.commit()
 
 
 def _engine_task_from_row(row):
@@ -3474,6 +3539,9 @@ def load_engine_campaigns(customer_id, limit=None):
     if not postgres_enabled():
         data = read_json(customer_engine_campaigns_file(customer_id), [])
         items = data if isinstance(data, list) else []
+        for item in items:
+            if isinstance(item, dict) and "lifecycle" in item and "status" not in item:
+                item["status"] = item["lifecycle"]
         return items[:limit] if (limit and isinstance(limit, int)) else items
     init_persistence_tables()
     sql = "SELECT * FROM fbpostpro_campaign_engine WHERE customer_id = %s ORDER BY created_at DESC"
@@ -3549,8 +3617,16 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
         if not device_id or device_id not in devices:
             raise ValueError(f"{account.get('display_name', account_id)} chưa được gắn với desktop worker/Chrome profile.")
         browser_profile_id = account.get("browser_profile_id") or f"chrome-profile:{device_id}"
+        if not account.get("facebook_user_id") and devices.get(device_id, {}).get("facebook_user_id"):
+            dev_fbid = str(devices[device_id]["facebook_user_id"]).strip()
+            if dev_fbid and facebook_session_fingerprint(dev_fbid):
+                account["facebook_user_id"] = dev_fbid
+                try:
+                    update_facebook_account(customer_id, account_id, facebook_user_id=dev_fbid)
+                except Exception:
+                    pass
         if IS_PRODUCTION and lifecycle != 'draft' and not facebook_session_fingerprint(account.get('facebook_user_id')):
-            raise ValueError('Facebook account cần Facebook user ID dạng số để xác minh session trước khi chạy hoặc hẹn lịch.')
+            raise ValueError(f"Tài khoản '{account.get('display_name', account_id)}' chưa được xác minh phiên Facebook từ Worker. Hãy mở Facebook trên profile tương ứng.")
         group_list = []
         for group_url in bucket.get("groups", []):
             group_url = normalize_group_url(group_url)
@@ -3586,10 +3662,12 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
         "customer_id": customer_id,
         "campaign_name": str(campaign_name or "Chiến dịch mới")[:MAX_CAMPAIGN_NAME_LENGTH],
         "lifecycle": lifecycle,
+        "status": lifecycle,
         "scheduled_at": scheduled.isoformat(timespec="seconds") if scheduled else "",
         "account_group_snapshot": normalized_snapshot,
         "payload": dict(payload),
         "total": len(seen_groups), "successful": 0, "failed": 0, "cancelled": 0,
+        "completion_notified": False,
         "created_at": now, "started_at": "", "finished_at": "", "updated_at": now,
     }
     task_status = "draft" if lifecycle == "draft" else ("scheduled" if lifecycle == "scheduled" else "pending")
@@ -3644,8 +3722,8 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
                 INSERT INTO fbpostpro_campaign_engine (
                     campaign_id, customer_id, campaign_name, lifecycle, scheduled_at,
                     account_group_snapshot, payload, total, successful, failed,
-                    cancelled, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, 0, 0, 0, NOW(), NOW())
+                    cancelled, completion_notified, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, 0, 0, 0, FALSE, NOW(), NOW())
                 """,
                 (campaign_id, customer_id, campaign["campaign_name"], lifecycle, scheduled,
                  json.dumps(normalized_snapshot, ensure_ascii=False),
@@ -3951,10 +4029,82 @@ def get_engine_campaign(customer_id, campaign_id):
             row = conn.execute('SELECT * FROM fbpostpro_campaign_engine WHERE customer_id=%s AND campaign_id=%s',
                 (sanitize_customer_id(customer_id), str(campaign_id))).fetchone()
         return _engine_campaign_from_row(row) if row else None
-    return next(
+    camp = next(
         (item for item in load_engine_campaigns(customer_id) if item.get("campaign_id") == campaign_id),
         None,
     )
+    if camp and "status" not in camp and "lifecycle" in camp:
+        camp["status"] = camp["lifecycle"]
+    return camp
+
+
+def list_campaign_tasks(customer_id, campaign_id=""):
+    return load_engine_tasks(customer_id, campaign_id)
+
+
+def transition_engine_campaign_status(customer_id, campaign_id, new_status):
+    customer_id = sanitize_customer_id(customer_id)
+    campaign_id = str(campaign_id or "").strip()
+    new_status = str(new_status or "").strip().lower()
+    if not postgres_enabled():
+        campaigns = load_engine_campaigns(customer_id)
+        found = None
+        for item in campaigns:
+            if item.get("campaign_id") == campaign_id:
+                item["lifecycle"] = new_status
+                item["status"] = new_status
+                item["updated_at"] = now_iso()
+                if new_status == "running" and not item.get("started_at"):
+                    item["started_at"] = now_iso()
+                if new_status in {"completed", "partial_failed", "failed", "cancelled"}:
+                    item["finished_at"] = item.get("finished_at") or now_iso()
+                found = item
+                break
+        _save_local_engine(customer_id, campaigns=campaigns)
+        tasks = load_engine_tasks(customer_id, campaign_id)
+        if new_status == "running":
+            for t in tasks:
+                if t.get("status") in {"draft", "scheduled", "pending"}:
+                    t["status"] = "running"
+            _save_local_engine(customer_id, tasks=tasks)
+        elif new_status in {"completed", "successful"}:
+            for t in tasks:
+                if t.get("status") not in TASK_TERMINAL_STATUSES:
+                    t["status"] = "successful"
+            _save_local_engine(customer_id, tasks=tasks)
+        elif new_status == "failed":
+            for t in tasks:
+                if t.get("status") not in TASK_TERMINAL_STATUSES:
+                    t["status"] = "failed"
+            _save_local_engine(customer_id, tasks=tasks)
+        if found:
+            sync_engine_campaign_state(customer_id, campaign_id)
+        return found
+    else:
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE fbpostpro_campaign_engine SET lifecycle=%s, updated_at=NOW() WHERE customer_id=%s AND campaign_id=%s",
+                    (new_status, customer_id, campaign_id),
+                )
+                if new_status == "running":
+                    cur.execute(
+                        "UPDATE fbpostpro_campaign_tasks SET status='running', updated_at=NOW() WHERE customer_id=%s AND campaign_id=%s AND status IN ('draft','scheduled','pending')",
+                        (customer_id, campaign_id),
+                    )
+                elif new_status in {"completed", "successful"}:
+                    cur.execute(
+                        "UPDATE fbpostpro_campaign_tasks SET status='successful', updated_at=NOW() WHERE customer_id=%s AND campaign_id=%s AND status NOT IN ('successful','failed','cancelled','skipped')",
+                        (customer_id, campaign_id),
+                    )
+                elif new_status == "failed":
+                    cur.execute(
+                        "UPDATE fbpostpro_campaign_tasks SET status='failed', updated_at=NOW() WHERE customer_id=%s AND campaign_id=%s AND status NOT IN ('successful','failed','cancelled','skipped')",
+                        (customer_id, campaign_id),
+                    )
+            conn.commit()
+        sync_engine_campaign_state(customer_id, campaign_id)
+        return get_engine_campaign(customer_id, campaign_id)
 
 
 @synchronized_state
@@ -3995,7 +4145,7 @@ def sync_engine_campaign(customer_id, campaign_id):
         elif lifecycle not in {"draft", "scheduled"}:
             lifecycle = "queued"
     changes = {
-        "lifecycle": lifecycle, "successful": successful, "failed": failed,
+        "lifecycle": lifecycle, "status": lifecycle, "successful": successful, "failed": failed,
         "cancelled": cancelled, "updated_at": now_iso(),
     }
     if lifecycle == "running" and not campaign.get("started_at"):
@@ -4075,6 +4225,12 @@ def _update_engine_task(customer_id, task_id, **changes):
             row = cur.fetchone()
         conn.commit()
     return _engine_task_from_row(row) if row else None
+
+
+def update_campaign_task(customer_id, task_id, **changes):
+    if "status" in changes and changes["status"] in {"success", "completed"}:
+        changes["status"] = "successful"
+    return _update_engine_task(customer_id, task_id, **changes)
 
 
 def validate_job_execution(customer_id, device_id, job, payload):
@@ -4237,10 +4393,13 @@ def materialize_next_engine_job(customer_id, device_id):
         'expected_session_fingerprint': facebook_session_fingerprint(next(
             (account.get('facebook_user_id') for account in load_facebook_accounts(customer_id) if account['account_id'] == task['account_id']), '')),
         "engine_campaign_id": campaign["campaign_id"],
+        "campaign_id": campaign["campaign_id"],
         "engine_task_id": task["task_id"],
+        "task_id": task["task_id"],
         "idempotency_key": task["idempotency_key"],
         "account_id": task["account_id"],
         "group_id": task.get("group_id", task_group_id(task["group_url"])),
+        "group_url": task["group_url"],
         "browser_profile_id": task.get("browser_profile_id", ""),
         "session_context": task.get("session_context", ""),
         "account_name": next(
@@ -4282,25 +4441,26 @@ def sync_engine_campaign_state(customer_id, campaign_id, job=None):
     )
     lifecycle = campaign.get("lifecycle")
     if lifecycle in {"completed", "partial_failed", "failed"}:
-        try:
-            camp_name = campaign.get("campaign_name", "Chiến dịch")
-            if lifecycle == "completed":
-                title = "Chiến dịch hoàn tất"
-                msg = f"Chiến dịch '{camp_name}' đã hoàn tất thành công ({progress['successful']}/{progress['total']} nhóm)."
-                cat = "success"
-            elif lifecycle == "partial_failed":
-                title = "Chiến dịch hoàn tất một phần"
-                msg = f"Chiến dịch '{camp_name}': {progress['successful']} thành công, {progress['failed']} lỗi."
-                cat = "warning"
-            else:
-                title = "Chiến dịch gặp lỗi"
-                msg = f"Chiến dịch '{camp_name}' thất bại ({progress['failed']}/{progress['total']} lỗi)."
-                cat = "error"
-            recent_notifs = load_notifications(customer_id, limit=5)
-            if not any(n.get("title") == title and camp_name in n.get("message", "") for n in recent_notifs):
+        if not campaign.get("completion_notified"):
+            try:
+                camp_name = campaign.get("campaign_name", "Chiến dịch")
+                if lifecycle == "completed":
+                    title = "Chiến dịch hoàn thành"
+                    msg = f"Chiến dịch '{camp_name}' đã hoàn tất thành công ({progress['successful']}/{progress['total']} nhóm)."
+                    cat = "success"
+                elif lifecycle == "partial_failed":
+                    title = "Chiến dịch hoàn tất một phần"
+                    msg = f"Chiến dịch '{camp_name}': {progress['successful']} thành công, {progress['failed']} lỗi."
+                    cat = "warning"
+                else:
+                    title = "Chiến dịch gặp lỗi"
+                    msg = f"Chiến dịch '{camp_name}' thất bại ({progress['failed']}/{progress['total']} lỗi)."
+                    cat = "error"
                 create_notification(customer_id, title, msg, category=cat)
-        except Exception:
-            pass
+                mark_campaign_completion_notified(customer_id, campaign_id)
+                campaign["completion_notified"] = True
+            except Exception:
+                pass
     return campaign
 
 
@@ -7723,7 +7883,7 @@ def compose():
     customer_id = get_customer_id()
     settings = load_settings(customer_id)
     active_device = get_active_device(customer_id)
-    accounts = load_facebook_accounts(customer_id)
+    accounts = get_enriched_accounts(customer_id)
     devices = load_devices(customer_id)
     devices_list = list(devices.values()) if isinstance(devices, dict) else (devices or [])
     templates = load_campaign_templates(customer_id)
@@ -8532,6 +8692,259 @@ def api_campaign_detail(campaign_id):
     return jsonify({"success": True, "campaign": campaign, "tasks": tasks})
 
 
+def validate_campaign_preflight(customer_id, account_ids=None, group_urls=None, scheduled_at=None):
+    customer_id = sanitize_customer_id(customer_id)
+    enriched_accounts = {a["account_id"]: a for a in get_enriched_accounts(customer_id)}
+    all_groups = load_groups(customer_id)
+
+    # Target accounts
+    if account_ids is None or len(account_ids) == 0:
+        target_account_ids = [aid for aid, a in enriched_accounts.items() if a.get("group_count", 0) > 0 or a.get("verification_status") == "READY"]
+        if not target_account_ids and enriched_accounts:
+            target_account_ids = list(enriched_accounts.keys())[:1]
+    else:
+        target_account_ids = [str(a) for a in account_ids if str(a) in enriched_accounts]
+
+    # Target groups
+    if group_urls is None or len(group_urls) == 0:
+        target_groups = all_groups
+    else:
+        target_groups = [normalize_group_url(g) for g in group_urls if g]
+
+    checks = []
+    can_run = True
+
+    # 1. Worker Online check
+    worker_offline_accounts = []
+    unmapped_accounts = []
+    unverified_accounts = []
+    mismatched_accounts = []
+    busy_accounts = []
+
+    for aid in target_account_ids:
+        acc = enriched_accounts.get(aid, {})
+        v_status = acc.get("verification_status")
+        if v_status == "PROFILE_UNAVAILABLE":
+            unmapped_accounts.append(acc.get("display_name", aid))
+        elif v_status == "WORKER_OFFLINE":
+            worker_offline_accounts.append(acc.get("display_name", aid))
+        elif v_status == "ACCOUNT_CHANGED":
+            mismatched_accounts.append(acc.get("display_name", aid))
+        elif v_status == "SESSION_UNVERIFIED":
+            unverified_accounts.append(acc.get("display_name", aid))
+        elif v_status == "BUSY":
+            busy_accounts.append(acc.get("display_name", aid))
+
+    if worker_offline_accounts:
+        checks.append({
+            "key": "worker_online", "id": "worker_online",
+            "label": "Máy trạm Worker", "name": "Máy trạm Worker",
+            "status": "FAIL",
+            "message": f"Worker ngoại tuyến: {', '.join(worker_offline_accounts)}"
+        })
+        can_run = False
+    else:
+        checks.append({
+            "key": "worker_online", "id": "worker_online",
+            "label": "Máy trạm Worker", "name": "Máy trạm Worker",
+            "status": "PASS",
+            "message": "Các máy trạm Worker liên quan đang trực tuyến."
+        })
+
+    # 2. Account Ready check
+    if not target_account_ids:
+        checks.append({
+            "key": "account_ready", "id": "account_ready",
+            "label": "Tài khoản Facebook", "name": "Tài khoản Facebook",
+            "status": "FAIL",
+            "message": "Chưa chọn tài khoản Facebook nào cho chiến dịch."
+        })
+        can_run = False
+    elif any(enriched_accounts.get(aid, {}).get("verification_status") not in ("READY", "BUSY", "SESSION_UNVERIFIED") for aid in target_account_ids):
+        not_ready = [enriched_accounts.get(aid, {}).get("display_name", aid) for aid in target_account_ids if enriched_accounts.get(aid, {}).get("verification_status") not in ("READY", "BUSY", "SESSION_UNVERIFIED")]
+        checks.append({
+            "key": "account_ready", "id": "account_ready",
+            "label": "Tài khoản Facebook", "name": "Tài khoản Facebook",
+            "status": "WARN",
+            "message": f"Tài khoản chưa sẵn sàng tối ưu: {', '.join(not_ready)}"
+        })
+    else:
+        checks.append({
+            "key": "account_ready", "id": "account_ready",
+            "label": "Tài khoản Facebook", "name": "Tài khoản Facebook",
+            "status": "PASS",
+            "message": f"{len(target_account_ids)} tài khoản Facebook sẵn sàng."
+        })
+
+    # 3. Profile Mapped check
+    if unmapped_accounts:
+        checks.append({
+            "key": "profile_mapped", "id": "profile_mapped",
+            "label": "Gán Profile / Worker", "name": "Gán Profile / Worker",
+            "status": "FAIL",
+            "message": f"Tài khoản chưa gắn Profile/Worker: {', '.join(unmapped_accounts)}"
+        })
+        can_run = False
+    else:
+        checks.append({
+            "key": "profile_mapped", "id": "profile_mapped",
+            "label": "Gán Profile / Worker", "name": "Gán Profile / Worker",
+            "status": "PASS",
+            "message": "Toàn bộ tài khoản đã được gán Chrome profile hợp lệ."
+        })
+
+    # 4. Session / Identity check
+    if mismatched_accounts:
+        checks.append({
+            "key": "session_verified", "id": "session_verified",
+            "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
+            "status": "FAIL",
+            "message": f"Phát hiện đổi tài khoản Facebook trên Chrome profile của: {', '.join(mismatched_accounts)}."
+        })
+        can_run = False
+    elif unverified_accounts:
+        checks.append({
+            "key": "session_verified", "id": "session_verified",
+            "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
+            "status": "WARN",
+            "message": f"Chưa xác minh phiên Facebook cho: {', '.join(unverified_accounts)}. Extension sẽ tự động thử đọc session khi bắt đầu."
+        })
+    else:
+        checks.append({
+            "key": "session_verified", "id": "session_verified",
+            "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
+            "status": "PASS",
+            "message": "Phiên đăng nhập Facebook đã được xác minh an toàn."
+        })
+
+    # 5. Groups check
+    if not target_groups:
+        checks.append({
+            "key": "groups_valid", "id": "groups_valid",
+            "label": "Danh sách Nhóm", "name": "Danh sách Nhóm",
+            "status": "FAIL",
+            "message": "Chưa có nhóm nào được chọn."
+        })
+        can_run = False
+    elif len(target_groups) > MAX_GROUPS_PER_CAMPAIGN:
+        checks.append({
+            "key": "groups_valid", "id": "groups_valid",
+            "label": "Danh sách Nhóm", "name": "Danh sách Nhóm",
+            "status": "FAIL",
+            "message": f"Vượt quá giới hạn {MAX_GROUPS_PER_CAMPAIGN} nhóm cho một chiến dịch."
+        })
+        can_run = False
+    else:
+        invalid_urls = [g for g in target_groups if not valid_facebook_group_url(g)]
+        if invalid_urls:
+            checks.append({
+                "key": "groups_valid", "id": "groups_valid",
+                "label": "Danh sách Nhóm", "name": "Danh sách Nhóm",
+                "status": "FAIL",
+                "message": f"Có {len(invalid_urls)} URL nhóm không hợp lệ."
+            })
+            can_run = False
+        else:
+            checks.append({
+                "key": "groups_valid", "id": "groups_valid",
+                "label": "Danh sách Nhóm", "name": "Danh sách Nhóm",
+                "status": "PASS",
+                "message": f"{len(target_groups)} nhóm Facebook hợp lệ."
+            })
+
+    # 6. Account Busy check
+    if busy_accounts:
+        checks.append({
+            "key": "account_busy", "id": "account_busy",
+            "label": "Tài khoản sẵn sàng", "name": "Tài khoản sẵn sàng",
+            "status": "FAIL",
+            "message": f"Tài khoản đang bận chạy chiến dịch khác: {', '.join(busy_accounts)}."
+        })
+        can_run = False
+    else:
+        checks.append({
+            "key": "account_busy", "id": "account_busy",
+            "label": "Tài khoản sẵn sàng", "name": "Tài khoản sẵn sàng",
+            "status": "PASS",
+            "message": "Tất cả tài khoản đều sẵn sàng tiếp nhận chiến dịch."
+        })
+
+    # 7. Schedule Check
+    if scheduled_at:
+        try:
+            s_val = parse_utc_datetime(scheduled_at)
+            if not s_val or s_val <= utc_now():
+                checks.append({
+                    "key": "schedule_valid", "id": "schedule_valid",
+                    "label": "Lịch hẹn", "name": "Lịch hẹn",
+                    "status": "FAIL",
+                    "message": "Thời gian hẹn lịch phải ở tương lai."
+                })
+                can_run = False
+            else:
+                checks.append({
+                    "key": "schedule_valid", "id": "schedule_valid",
+                    "label": "Lịch hẹn", "name": "Lịch hẹn",
+                    "status": "PASS",
+                    "message": f"Lịch hẹn hợp lệ ({scheduled_at})."
+                })
+        except Exception:
+            checks.append({
+                "key": "schedule_valid", "id": "schedule_valid",
+                "label": "Lịch hẹn", "name": "Lịch hẹn",
+                "status": "FAIL",
+                "message": "Định dạng thời gian hẹn lịch không hợp lệ."
+            })
+            can_run = False
+    else:
+        checks.append({
+            "key": "schedule_valid", "id": "schedule_valid",
+            "label": "Lịch hẹn", "name": "Lịch hẹn",
+            "status": "PASS",
+            "message": "Chạy ngay lập tức trong nền."
+        })
+
+    overall_status = "BLOCKED" if not can_run else ("WARNING" if any(c["status"] == "WARN" for c in checks) else "READY")
+
+    return {
+        "status": overall_status,
+        "can_run": can_run,
+        "checks": checks,
+        "selected_accounts": [enriched_accounts[aid] for aid in target_account_ids if aid in enriched_accounts],
+        "groups_count": len(target_groups),
+    }
+
+
+@app.route("/api/campaign/preflight", methods=["POST"])
+def api_campaign_preflight():
+    customer_id = get_customer_id()
+    data = request_json_object() if request.is_json else request.form
+    account_ids = None
+    if request.is_json:
+        account_ids = data.get("account_ids") or data.get("accounts") or data.get("selected_accounts")
+    if account_ids is None and "accounts[]" in request.form:
+        account_ids = request.form.getlist("accounts[]")
+    elif account_ids is None and "selected_accounts" in request.form:
+        account_ids = request.form.getlist("selected_accounts")
+    elif account_ids is None and "account_ids" in request.form:
+        account_ids = request.form.getlist("account_ids")
+
+    group_urls = None
+    if request.is_json:
+        group_urls = data.get("group_urls") or data.get("groups") or data.get("selected_groups")
+    if group_urls is None and "groups[]" in request.form:
+        group_urls = request.form.getlist("groups[]")
+    elif group_urls is None and "selected_groups" in request.form:
+        group_urls = request.form.getlist("selected_groups")
+    elif group_urls is None and "group_urls" in request.form:
+        group_urls = request.form.getlist("group_urls")
+
+    scheduled_at = data.get("scheduled_at") or request.form.get("scheduled_at")
+    result = validate_campaign_preflight(customer_id, account_ids, group_urls, scheduled_at)
+    return jsonify(result)
+    return jsonify(result)
+
+
 # ============================================================
 # ACCOUNTS & WORKERS (PHASE 12)
 # ============================================================
@@ -8561,20 +8974,46 @@ def get_enriched_accounts(customer_id):
         dev = devices.get(dev_id) if isinstance(devices, dict) else None
         dev_online = device_is_online(dev) if dev else False
 
+        acc_uid = str(a.get("facebook_user_id") or "").strip()
+        dev_uid = str((dev or {}).get("facebook_user_id") or "").strip()
+        dev_state = str((dev or {}).get("worker_state") or (dev or {}).get("status") or "").lower()
+        dev_logged_in = (dev or {}).get("facebook_logged_in")
+
         if not dev_id:
             status = "unmapped"
+            verification_status = "PROFILE_UNAVAILABLE"
             status_label = "Chưa gắn worker"
         elif dev is None or dev.get("revoked_at") or dev.get("status") == "revoked":
             status = "unavailable"
+            verification_status = "PROFILE_UNAVAILABLE"
             status_label = "Profile không khả dụng"
         elif not dev_online:
             status = "offline"
+            verification_status = "WORKER_OFFLINE"
             status_label = "Worker ngoại tuyến"
+        elif dev_state == "connecting":
+            status = "connecting"
+            verification_status = "CONNECTING"
+            status_label = "Đang kết nối..."
+        elif acc_uid and dev_uid and acc_uid != dev_uid:
+            status = "account_changed"
+            verification_status = "ACCOUNT_CHANGED"
+            status_label = "Tài khoản Facebook đã thay đổi"
+        elif dev_logged_in is False or (dev and dev.get("status") == "needs_login"):
+            status = "session_unverified"
+            verification_status = "SESSION_UNVERIFIED"
+            status_label = "Chưa đăng nhập Facebook"
+        elif not acc_uid and not dev_uid and dev is not None:
+            status = "session_unverified"
+            verification_status = "SESSION_UNVERIFIED"
+            status_label = "Chờ xác minh phiên Facebook"
         elif acc_id in busy_accounts:
             status = "busy"
+            verification_status = "BUSY"
             status_label = "Đang chạy chiến dịch"
         else:
             status = "ready"
+            verification_status = "READY"
             status_label = "Sẵn sàng"
 
         clean_dev = public_device(dev)
@@ -8585,6 +9024,8 @@ def get_enriched_accounts(customer_id):
             "group_count": account_group_counts.get(acc_id, 0),
             "computed_status": status,
             "computed_status_label": status_label,
+            "verification_status": verification_status,
+            "is_ready": (verification_status == "READY"),
         })
     return accounts_enriched
 
@@ -10016,98 +10457,138 @@ def run_campaign():
     if not current_user or not current_user.get('is_active', True):
         return jsonify({'error': 'Account is unavailable.'}), 403
     with FILE_LOCK:
+        is_ajax = request.is_json or request.headers.get("Accept") == "application/json" or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        def _err(msg, code=400, endpoint="compose"):
+            if is_ajax:
+                return jsonify({"success": False, "error": msg}), code
+            flash(msg, "warning")
+            return redirect(url_for(endpoint))
+
         state = get_campaign_state(customer_id)
         if state.get("running"):
-            flash("Chiến dịch đang chạy.", "warning")
-            return redirect(url_for("compose"))
+            return _err("Chiến dịch đang chạy.", code=409, endpoint="compose")
 
-        # Phase 8 uses the persistent task engine whenever Groups have account
-        # assignments. The legacy single-worker path below remains intact for
-        # existing customers that have not configured multi-account mapping.
-        groups_list = load_groups(customer_id)
-        form_content = request.form.get("content")
-        if form_content is not None and form_content.strip():
-            content = form_content.strip()
+        req_data = request_json_object() if request.is_json else request.form
+
+        # Extract content
+        form_content = req_data.get("content")
+        if form_content is not None and str(form_content).strip():
+            content = str(form_content).strip()
             save_post_content(customer_id, content)
         else:
             content = load_post(customer_id).strip()
+
         settings_data = dict(load_settings(customer_id))
-        form_cname = request.form.get("campaign_name")
-        if form_cname and form_cname.strip():
-            settings_data["campaign_name"] = form_cname.strip()
-        if request.form.get("min_delay"):
-            try: settings_data["min_delay"] = max(0, int(request.form.get("min_delay")))
-            except ValueError: pass
-        if request.form.get("max_delay"):
-            try: settings_data["max_delay"] = max(0, int(request.form.get("max_delay")))
-            except ValueError: pass
+        form_cname = req_data.get("campaign_name")
+        if form_cname and str(form_cname).strip():
+            settings_data["campaign_name"] = str(form_cname).strip()
+        if req_data.get("min_delay") is not None:
+            try: settings_data["min_delay"] = max(0, int(req_data.get("min_delay")))
+            except (ValueError, TypeError): pass
+        if req_data.get("max_delay") is not None:
+            try: settings_data["max_delay"] = max(0, int(req_data.get("max_delay")))
+            except (ValueError, TypeError): pass
         save_settings(customer_id, settings_data)
-        account_group_snapshot = build_account_group_snapshot(customer_id, groups_list)
-        campaign_action = str(request.form.get("campaign_action", "run")).strip().lower()
+
+        # Selected groups
+        selected_groups = None
+        if request.is_json:
+            raw_g = req_data.get("groups") or req_data.get("selected_groups") or req_data.get("group_urls")
+            if isinstance(raw_g, list):
+                selected_groups = [normalize_group_url(g) for g in raw_g if g]
+        elif "selected_groups" in request.form or "groups[]" in request.form or "group_urls" in request.form:
+            raw_groups = request.form.getlist("selected_groups") or request.form.getlist("groups[]") or request.form.getlist("group_urls")
+            selected_groups = [normalize_group_url(g) for g in raw_groups if g]
+
+        if not selected_groups:
+            groups_list = load_groups(customer_id)
+        else:
+            groups_list = selected_groups
+
+        # Selected accounts
+        selected_accounts = None
+        if request.is_json:
+            raw_a = req_data.get("accounts") or req_data.get("selected_accounts") or req_data.get("account_ids")
+            if isinstance(raw_a, list):
+                selected_accounts = [str(a) for a in raw_a if a]
+        elif "selected_accounts" in request.form or "accounts[]" in request.form or "account_ids" in request.form:
+            selected_accounts = [str(a) for a in (request.form.getlist("selected_accounts") or request.form.getlist("accounts[]") or request.form.getlist("account_ids")) if a]
+
+        # Check for manual allocation
+        raw_manual_snapshot = req_data.get("account_group_snapshot")
+        account_group_snapshot = None
+        if raw_manual_snapshot:
+            try:
+                if isinstance(raw_manual_snapshot, str):
+                    raw_manual_snapshot = json.loads(raw_manual_snapshot)
+                if isinstance(raw_manual_snapshot, list):
+                    account_group_snapshot = raw_manual_snapshot
+                elif isinstance(raw_manual_snapshot, dict):
+                    acc_map = {}
+                    for g_url, aid in raw_manual_snapshot.items():
+                        acc_map.setdefault(aid, []).append(g_url)
+                    account_group_snapshot = [{"account_id": aid, "groups": grps} for aid, grps in acc_map.items()]
+            except Exception:
+                account_group_snapshot = None
+
+        if not account_group_snapshot:
+            if selected_accounts:
+                account_group_snapshot = build_snapshot_from_balanced(customer_id, groups_list, selected_accounts)
+            else:
+                account_group_snapshot = build_account_group_snapshot(customer_id, groups_list)
+
+        campaign_action = str(req_data.get("campaign_action", "run")).strip().lower()
         uses_engine = any(bucket.get("account_id") for bucket in account_group_snapshot)
 
         if campaign_action not in {"run", "schedule", "draft"}:
-            flash("Hành động campaign không hợp lệ.", "warning")
-            return redirect(url_for("compose"))
+            return _err("Hành động campaign không hợp lệ.", endpoint="compose")
         if campaign_action in {"schedule", "draft"} and not uses_engine:
-            flash("Hãy gán Group cho Facebook account và Chrome profile trước khi hẹn lịch.", "warning")
-            return redirect(url_for("groups"))
+            return _err("Hãy gán Group cho Facebook account và Chrome profile trước khi hẹn lịch.", endpoint="groups")
 
         if uses_engine:
             if not groups_list:
-                flash("Bạn chưa thêm Group.", "warning")
-                return redirect(url_for("groups"))
+                return _err("Bạn chưa thêm Group.", endpoint="groups")
             if len(groups_list) > MAX_GROUPS_PER_CAMPAIGN:
-                flash(f"Một chiến dịch không được vượt quá {MAX_GROUPS_PER_CAMPAIGN} Group.", "warning")
-                return redirect(url_for("groups"))
+                return _err(f"Một chiến dịch không được vượt quá {MAX_GROUPS_PER_CAMPAIGN} Group.", endpoint="groups")
             if any(not valid_facebook_group_url(group) for group in groups_list):
-                flash("Danh sách có link không phải Facebook Group hợp lệ.", "warning")
-                return redirect(url_for("groups"))
+                return _err("Danh sách có link không phải Facebook Group hợp lệ.", endpoint="groups")
             if not content:
-                flash("Bạn chưa nhập nội dung bài đăng.", "warning")
-                return redirect(url_for("compose"))
+                return _err("Bạn chưa nhập nội dung bài đăng.", endpoint="compose")
             try:
                 minimum = max(0, int(settings_data.get("min_delay", 3)))
                 maximum = max(0, int(settings_data.get("max_delay", 7)))
             except (TypeError, ValueError):
-                flash("Cấu hình delay không hợp lệ.", "warning")
-                return redirect(url_for("settings"))
+                return _err("Cấu hình delay không hợp lệ.", endpoint="settings")
             minimum, maximum = sorted((minimum, maximum))
             if maximum > MAX_DELAY_MINUTES:
-                flash("Delay không được vượt quá 1440 phút.", "warning")
-                return redirect(url_for("settings"))
+                return _err("Delay không được vượt quá 1440 phút.", endpoint="settings")
 
             lifecycle = {"run": "queued", "schedule": "scheduled", "draft": "draft"}[campaign_action]
-            scheduled_at = str(request.form.get("scheduled_at", "")).strip()
+            scheduled_at = str(req_data.get("scheduled_at", "")).strip()
             if lifecycle == "scheduled":
                 try:
                     scheduled_value = parse_utc_datetime(scheduled_at)
                 except ValueError as exc:
-                    flash(str(exc), "warning")
-                    return redirect(url_for("compose"))
+                    return _err(str(exc), endpoint="compose")
                 if not scheduled_value or scheduled_value <= utc_now():
-                    flash("Thời gian hẹn chạy phải ở tương lai.", "warning")
-                    return redirect(url_for("compose"))
+                    return _err("Thời gian hẹn chạy phải ở tương lai.", endpoint="compose")
 
             user = find_user_by_id(customer_id) or {}
             campaign_limit = max(1, int(user.get("max_campaigns", 100) or 100))
             task_limit = max(1, int(user.get("max_tasks_per_campaign", MAX_GROUPS_PER_CAMPAIGN) or MAX_GROUPS_PER_CAMPAIGN))
             if len(groups_list) > task_limit:
-                flash(f"Campaign vượt quota {task_limit} task.", "warning")
-                return redirect(url_for("compose"))
+                return _err(f"Campaign vượt quota {task_limit} task.", endpoint="compose")
             active_limit = max(1, int(user.get("max_active_campaigns", 1) or 1))
             active_count = sum(
                 item.get("lifecycle") in {"scheduled", "queued", "running", "paused"}
                 for item in load_engine_campaigns(customer_id)
             )
             if lifecycle != "draft" and active_count >= active_limit:
-                flash(f"Tài khoản đã đạt giới hạn {active_limit} campaign đang hoạt động.", "warning")
-                return redirect(url_for("compose"))
+                return _err(f"Tài khoản đã đạt giới hạn {active_limit} campaign đang hoạt động.", endpoint="compose")
             campaign_count = len(load_campaign_records(customer_id, limit=campaign_limit + 1))
             campaign_count += len(load_engine_campaigns(customer_id))
             if campaign_count >= campaign_limit:
-                flash(f"Tài khoản đã đạt giới hạn {campaign_limit} chiến dịch.", "warning")
-                return redirect(url_for("compose"))
+                return _err(f"Tài khoản đã đạt giới hạn {campaign_limit} chiến dịch.", endpoint="compose")
 
             payload = {
                 "content": content,
@@ -10125,8 +10606,7 @@ def run_campaign():
                     scheduled_at,
                 )
             except ValueError as exc:
-                flash(str(exc), "warning")
-                return redirect(url_for("groups"))
+                return _err(str(exc), endpoint="groups")
 
             update_campaign_state(
                 customer_id,
@@ -10153,10 +10633,20 @@ def run_campaign():
                 message=f"Campaign {campaign['campaign_name']} được tạo ở trạng thái {lifecycle}.",
                 campaign_id=campaign["campaign_id"],
             )
+            if is_ajax:
+                return jsonify({
+                    "success": True,
+                    "campaign_id": campaign["campaign_id"],
+                    "campaign_name": campaign["campaign_name"],
+                    "total": campaign["total"],
+                    "lifecycle": campaign["lifecycle"],
+                    "redirect_url": url_for("campaigns_view"),
+                    "message": "Chiến dịch đã được gửi tới Worker và đang chạy nền."
+                })
             flash(
                 "Đã lưu lịch campaign." if lifecycle == "scheduled"
                 else "Đã lưu campaign nháp." if lifecycle == "draft"
-                else "Đã xếp hàng campaign cho desktop worker.",
+                else "Chiến dịch đã được gửi tới Worker và đang chạy nền.",
                 "success",
             )
             return redirect(url_for("compose"))
@@ -10899,14 +11389,18 @@ def agent_heartbeat():
     device["worker_state"] = worker_state
     device["current_job_id"] = current_job_id
 
-    facebook_logged_in = bool(data.get("facebook_logged_in", False))
-    device["facebook_logged_in"] = facebook_logged_in
+    c_user_val = data.get("c_user") or data.get("facebook_user_id")
+    raw_fbid = re.sub(r"[^0-9]", "", str(c_user_val or ""))[:30]
+    if raw_fbid:
+        device["facebook_user_id"] = raw_fbid
+    if "facebook_logged_in" in data:
+        device["facebook_logged_in"] = bool(data.get("facebook_logged_in", False))
+    elif raw_fbid:
+        device["facebook_logged_in"] = True
+    facebook_logged_in = bool(device.get("facebook_logged_in", False))
     device['session_verification_version'] = 1 if data.get('session_verification_version') == 1 else 0
     for field, bound in [('facebook_session_fingerprint', 64), ('browser_profile_id', 120), ('session_context', 180)]:
         device[field] = str(data.get(field, ''))[:bound]
-    raw_fbid = re.sub(r"[^0-9]", "", str(data.get("facebook_user_id", "")))[:30]
-    if raw_fbid:
-        device["facebook_user_id"] = raw_fbid
     devices[device_id] = device
     save_devices(customer_id, devices)
 

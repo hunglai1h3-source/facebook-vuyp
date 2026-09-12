@@ -334,3 +334,193 @@
   .wizard-nav-actions .btn { min-height: 44px; flex: 1 1 auto; }
 }
 
+/* Quick Mode & Mode Switcher */
+.mode-switch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.mode-toggle-group {
+  display: inline-flex;
+  padding: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+}
+.mode-toggle-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--r-full);
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  transition: var(--t-fast);
+}
+.mode-toggle-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.collapsible-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.collapsible-trigger:hover {
+  background: var(--hover);
+}
+.collapsible-content {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+.quick-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--r-full);
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--blue, #6366f1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Quick Stepper & Panels */
+.quick-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+.quick-panel {
+  display: none;
+  animation: fadeIn 0.2s ease-out;
+}
+.quick-panel.active {
+  display: block;
+}
+
+/* Auto-balance Box */
+.auto-balance-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(59, 130, 246, 0.04));
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: var(--r-md);
+  margin-block: 16px;
+}
+.auto-balance-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.auto-balance-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.auto-balance-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  font-size: 12px;
+  color: var(--text);
+}
+.auto-balance-chip strong {
+  color: var(--action-bg, #4f46e5);
+}
+
+/* Preflight Guard */
+.preflight-card {
+  padding: 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  margin-bottom: 20px;
+}
+.preflight-card.status-ready {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.05);
+}
+.preflight-card.status-warning {
+  border-color: rgba(234, 179, 8, 0.4);
+  background: rgba(234, 179, 8, 0.05);
+}
+.preflight-card.status-blocked {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.05);
+}
+.preflight-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.preflight-checks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+.preflight-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.preflight-check-item.check-pass .check-icon { color: var(--green); }
+.preflight-check-item.check-warn .check-icon { color: var(--amber); }
+.preflight-check-item.check-fail .check-icon { color: var(--red); }
+.preflight-check-item.check-pass { border-left: 3px solid var(--green); }
+.preflight-check-item.check-warn { border-left: 3px solid var(--amber); }
+.preflight-check-item.check-fail { border-left: 3px solid var(--red); }
+
+.bg-run-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 600;
+}
+

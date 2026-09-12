@@ -38,39 +38,58 @@
       <div class="section-header">
         <div>
           <span class="eyebrow">Facebook accounts</span>
-          <h3 class="section-title">Account nhận Group</h3>
+          <h3 class="section-title">Tài khoản Facebook &amp; Phân nhóm</h3>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-          <span class="badge muted">{{ accounts|length }} account</span>
-          <a href="{{ url_for('accounts_view') }}" class="btn secondary sm" style="text-decoration: none;">Xem chi tiết &rarr;</a>
+          <span class="badge muted">{{ accounts|length }} tài khoản</span>
+          <a href="{{ url_for('accounts_view') }}" class="btn secondary sm" style="text-decoration: none;">Quản lý tài khoản &rarr;</a>
         </div>
       </div>
-      <form method="post" action="{{ url_for('add_facebook_account') }}" class="account-add-form">
-        <div class="form-group"><label for="accountName">Tên hiển thị</label><input id="accountName" name="display_name" maxlength="120" placeholder="Ví dụ: Account A" required></div>
-        <div class="form-group"><label for="facebookUserId">Facebook ID (không bắt buộc)</label><input id="facebookUserId" name="facebook_user_id" maxlength="80" placeholder="UID hoặc tên nhận diện"></div>
-        <button class="btn secondary w-full" type="submit">THÊM FACEBOOK ACCOUNT</button>
-      </form>
-      <div class="account-list">
+
+      <p class="section-desc" style="font-size:12px; color:var(--text2); margin-top:4px">
+        Chọn tài khoản để phân bổ các Group bên dưới. Để thêm hoặc chỉnh sửa kết nối worker, hãy chuyển sang trang Tài khoản.
+      </p>
+
+      <div class="account-list" style="margin-top:14px">
         {% for account in accounts %}
-        <div class="account-chip">
-          <span class="account-avatar">{{ account.display_name[:1]|upper }}</span>
-          <div class="account-identity"><strong>{{ account.display_name }}</strong><small>{{ account.facebook_user_id or 'Chưa có Facebook ID' }}</small></div>
-          <form method="post" action="{{ url_for('bind_facebook_account', account_id=account.account_id) }}" class="account-device-form">
-            <label for="uid-{{ account.account_id }}">Facebook user ID (UID dạng số để xác minh session)</label>
-            <input id="uid-{{ account.account_id }}" name="facebook_user_id" value="{{ account.facebook_user_id or '' }}" maxlength="30" pattern="[0-9]*" inputmode="numeric" aria-label="Facebook user ID cho {{ account.display_name }}">
-            <label for="device-{{ account.account_id }}">Chrome profile / worker</label>
-            <div class="account-device-control">
-              <select id="device-{{ account.account_id }}" name="device_id" aria-label="Chrome profile cho {{ account.display_name }}">
-                <option value="">Chưa gắn worker</option>
-                {% for device in devices %}
-                <option value="{{ device.device_id }}" {% if account.device_id == device.device_id %}selected{% endif %}>{{ device.name or device.device_id }} • {{ 'online' if device.online else 'offline' }}</option>
-                {% endfor %}
-              </select>
-              <button class="btn secondary sm" type="submit">LƯU</button>
+        <div class="account-chip" style="padding:10px 12px; border-radius:var(--r-md); background:var(--surface2); border:1px solid var(--border); display:flex; flex-direction:column; gap:8px">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px">
+            <div style="display:flex; align-items:center; gap:10px; min-width:0">
+              <span class="account-avatar" style="width:32px; height:32px; font-size:13px; font-weight:700">{{ account.display_name[:1]|upper }}</span>
+              <div class="account-identity" style="min-width:0">
+                <strong style="font-size:13px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ account.display_name }}</strong>
+                <small style="color:var(--text2); font-size:11px">Gán: <b>{{ account.group_count or 0 }}</b> nhóm</small>
+              </div>
             </div>
-          </form>
+            <div>
+              {% if account.verification_status == 'READY' or account.computed_status == 'ready' %}
+              <span class="badge green" style="font-size:10px">Sẵn sàng</span>
+              {% elif account.verification_status == 'BUSY' or account.computed_status == 'busy' %}
+              <span class="badge blue" style="font-size:10px">Đang chạy</span>
+              {% elif account.verification_status == 'SESSION_UNVERIFIED' %}
+              <span class="badge amber" style="font-size:10px">Chưa xác minh</span>
+              {% elif account.verification_status == 'ACCOUNT_CHANGED' %}
+              <span class="badge red" style="font-size:10px">Đổi tài khoản</span>
+              {% elif account.verification_status == 'PROFILE_UNAVAILABLE' or account.computed_status in ['unmapped', 'unavailable'] %}
+              <span class="badge red" style="font-size:10px">Chưa gắn worker</span>
+              {% else %}
+              <span class="badge red" style="font-size:10px">Ngoại tuyến</span>
+              {% endif %}
+            </div>
+          </div>
+          {% if account.verification_status != 'READY' and account.computed_status != 'ready' and account.computed_status != 'busy' %}
+          <div style="display:flex; align-items:center; justify-content:space-between; font-size:11px; padding:6px 8px; border-radius:var(--r-sm); background:rgba(239,68,68,0.08); color:var(--red)">
+            <span>⚠️ Cần hoàn thiện kết nối</span>
+            <a href="{{ url_for('accounts_view') }}" style="color:var(--red); font-weight:600; text-decoration:underline">Trang tài khoản &rarr;</a>
+          </div>
+          {% endif %}
         </div>
-        {% else %}<p class="empty-compact">Thêm account để bắt đầu phân Group.</p>{% endfor %}
+        {% else %}
+        <div class="empty-compact" style="text-align:center; padding:16px 8px">
+          <p style="margin:0 0 8px 0; font-size:13px">Chưa có tài khoản Facebook nào.</p>
+          <a href="{{ url_for('accounts_view') }}" class="btn primary sm">Thêm tài khoản tại trang Tài khoản &rarr;</a>
+        </div>
+        {% endfor %}
       </div>
     </article>
   </div>

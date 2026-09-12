@@ -18,42 +18,473 @@
     enctype="multipart/form-data"
     id="campaignWizardForm"
   >
-    <!-- STEPPER PROGRESS BAR -->
-    <div class="wizard-stepper">
-      <div class="wizard-step-node active" data-step-target="1">
-        <span class="step-badge">1</span>
-        <span class="step-name">Nội dung</span>
+    <!-- ======================================================= -->
+    <!-- MODE SWITCHER -->
+    <!-- ======================================================= -->
+    <div class="mode-switch-bar">
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+        <span style="font-size:13px; font-weight:700; color:var(--text)">Chế độ tạo:</span>
+        <div class="mode-toggle-group">
+          <button type="button" class="mode-toggle-btn active" id="btnModeQuick">⚡ Chế độ nhanh (3 bước)</button>
+          <button type="button" class="mode-toggle-btn" id="btnModeAdvanced">⚙ Chế độ chi tiết (6 bước)</button>
+        </div>
       </div>
-      <div class="wizard-step-line"></div>
-      <div class="wizard-step-node" data-step-target="2">
-        <span class="step-badge">2</span>
-        <span class="step-name">Tài khoản</span>
-      </div>
-      <div class="wizard-step-line"></div>
-      <div class="wizard-step-node" data-step-target="3">
-        <span class="step-badge">3</span>
-        <span class="step-name">Chọn nhóm</span>
-      </div>
-      <div class="wizard-step-line"></div>
-      <div class="wizard-step-node" data-step-target="4">
-        <span class="step-badge">4</span>
-        <span class="step-name">Phân bổ</span>
-      </div>
-      <div class="wizard-step-line"></div>
-      <div class="wizard-step-node" data-step-target="5">
-        <span class="step-badge">5</span>
-        <span class="step-name">Hẹn lịch</span>
-      </div>
-      <div class="wizard-step-line"></div>
-      <div class="wizard-step-node" data-step-target="6">
-        <span class="step-badge">6</span>
-        <span class="step-name">Xác nhận</span>
+      <div class="bg-run-badge">
+        <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+        <span>Chạy ngầm độc lập</span>
       </div>
     </div>
 
     <!-- Hidden Action / Schedule Inputs -->
     <input type="hidden" name="campaign_action" id="campaignActionHidden" value="run">
     <input type="hidden" name="scheduled_at" id="scheduledUtcHidden" value="">
+
+    <!-- ======================================================= -->
+    <!-- QUICK WIZARD CONTAINER (3 STEPS) -->
+    <!-- ======================================================= -->
+    <div id="quickWizardContainer">
+      <!-- QUICK STEPPER -->
+      <div class="quick-stepper" id="quickStepper">
+        <div class="wizard-step-node active" data-quick-step-target="1">
+          <span class="step-badge">1</span>
+          <span class="step-name">Nội dung &amp; Hình ảnh</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-quick-step-target="2">
+          <span class="step-badge">2</span>
+          <span class="step-name">Tài khoản &amp; Nhóm</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-quick-step-target="3">
+          <span class="step-badge">3</span>
+          <span class="step-name">Xác nhận &amp; Chạy</span>
+        </div>
+      </div>
+
+      <!-- QUICK STEP 1: CONTENT & MEDIA -->
+      <div class="quick-panel active" data-quick-step="1">
+        <div class="section-header" style="margin-bottom:16px">
+          <div>
+            <span class="eyebrow">Bước 1 / 3</span>
+            <h3 class="section-title">Nội dung bài đăng &amp; Hình ảnh</h3>
+          </div>
+          <span class="badge blue">Thiết lập bài viết</span>
+        </div>
+
+        <!-- TEMPLATE PICKER TOOLBAR -->
+        <div class="template-picker-row">
+          <label for="quickSelectTemplate" style="font-size:12px; font-weight:600; color:var(--text2); margin:0">Mẫu chiến dịch:</label>
+          <select id="quickSelectTemplate" aria-label="Chọn mẫu chiến dịch">
+            <option value="">-- Chọn mẫu đã lưu để nạp nhanh --</option>
+            {% for tmpl in templates %}
+            <option value="{{ tmpl.template_id }}" data-payload='{{ tmpl.payload|tojson }}'>
+              {{ tmpl.template_name }}
+            </option>
+            {% endfor %}
+          </select>
+          <button type="button" class="btn secondary sm" id="btnQuickLoadTemplate">NẠP MẪU</button>
+          <button type="button" class="btn ghost sm" id="btnQuickSaveTemplate">LƯU MẪU MỚI</button>
+        </div>
+
+        <!-- CAMPAIGN NAME -->
+        <div class="form-group">
+          <label for="quickCampaignName">Tên chiến dịch</label>
+          <div class="input-icon-group">
+            <span class="icon-slot">
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
+              </svg>
+            </span>
+            <input
+              id="quickCampaignName"
+              type="text"
+              name="campaign_name"
+              value="{{ settings.campaign_name }}"
+              placeholder="Ví dụ: Giới thiệu sản phẩm mới..."
+              required
+            >
+          </div>
+        </div>
+
+        <!-- CONTENT TEXTAREA -->
+        <div class="form-group">
+          <div class="label-split">
+            <label for="quickPostContent">Nội dung bài đăng Facebook</label>
+            <span class="label-hint">Hỗ trợ icon, hashtag, link và văn bản tự do</span>
+          </div>
+          <textarea
+            id="quickPostContent"
+            name="content"
+            rows="8"
+            placeholder="Nhập nội dung bạn muốn chia sẻ lên các Group Facebook..."
+          >{{ post_content }}</textarea>
+        </div>
+
+        <!-- MULTIPLE IMAGES UPLOAD -->
+        <div class="form-group">
+          <label>Đính kèm hình ảnh</label>
+          <input
+            type="file"
+            id="quick_images"
+            name="images"
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+            style="display: none;"
+          >
+
+          <div class="dropzone" onclick="document.getElementById('quick_images').click()">
+            <div class="dropzone-icon">
+              <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+              </svg>
+            </div>
+            <div class="dropzone-text">
+              <strong>Bấm để tải ảnh lên</strong>
+              <p>Hỗ trợ JPG, PNG, WEBP. Cho phép chọn cùng lúc nhiều file.</p>
+            </div>
+            <button type="button" class="btn secondary sm" style="pointer-events:none">Chọn ảnh</button>
+          </div>
+
+          <div class="selected-status-bar">
+            <span id="quickSelectedImageCount" class="selected-pill">Chưa chọn ảnh mới</span>
+          </div>
+
+          <div id="quickNewImagePreview" class="gallery-grid"></div>
+        </div>
+
+        <!-- SAVED IMAGES GALLERY -->
+        {% if post_images %}
+        <div class="form-group saved-gallery-wrap">
+          <div class="label-split" style="margin-bottom:12px">
+            <label style="margin:0">
+              Ảnh đã lưu trong chiến dịch
+              <span class="badge muted" style="margin-left:6px">{{ post_images|length }}</span>
+            </label>
+          </div>
+          <div class="gallery-grid">
+            {% for image in post_images %}
+            <div class="gallery-card">
+              <img src="{{ url_for('customer_image', filename=image) }}" alt="Ảnh bài đăng" loading="lazy" decoding="async">
+              <button type="submit" form="delete-image-form-{{ loop.index0 }}" class="del-single-btn" title="Xóa ảnh này" aria-label="Xóa ảnh">
+                <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="wizard-nav-actions" style="justify-content:flex-end">
+          <button type="button" class="btn primary" data-quick-next>
+            Tiếp theo: Chọn tài khoản &amp; Nhóm
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- QUICK STEP 2: ACCOUNTS & GROUPS & AUTO 50/50 -->
+      <div class="quick-panel" data-quick-step="2">
+        <div class="section-header" style="margin-bottom:16px">
+          <div>
+            <span class="eyebrow">Bước 2 / 3</span>
+            <h3 class="section-title">Chọn tài khoản &amp; Nhóm mục tiêu</h3>
+          </div>
+          <div style="display:flex; gap:8px">
+            <span class="badge blue" id="quickAccountCountBadge">0 tài khoản</span>
+            <span class="badge blue" id="quickGroupCountBadge">0 nhóm</span>
+          </div>
+        </div>
+
+        <!-- ACCOUNTS SELECTION -->
+        <div style="margin-bottom:20px">
+          <label style="font-size:13px; font-weight:700; color:var(--text); margin-bottom:8px; display:block">
+            1. Tài khoản Facebook thực hiện:
+          </label>
+          {% if accounts %}
+          <div class="account-select-grid">
+            {% for acc in accounts %}
+            {% set v_status = acc.verification_status or ('READY' if (acc.is_active and acc.online and not acc.is_busy) else 'WORKER_OFFLINE' if not acc.online else 'CONNECTING') %}
+            <label class="account-select-card selected" data-acc-id="{{ acc.account_id }}">
+              <input type="checkbox" class="quick-account-checkbox" value="{{ acc.account_id }}" data-name="{{ acc.display_name }}" data-online="{{ 'true' if acc.online else 'false' }}" data-status="{{ v_status }}" checked>
+              <div class="account-info-wrap" style="flex:1">
+                <div class="account-avatar" style="width:34px; height:34px; font-size:13px">{{ acc.display_name[:1]|upper }}</div>
+                <div class="account-title-text">
+                  <strong>{{ acc.display_name }}</strong>
+                  <small>{{ acc.facebook_user_id or 'Tự động nhận diện' }}</small>
+                </div>
+              </div>
+              <div style="text-align:right">
+                {% if v_status == 'READY' %}
+                  <span class="badge green" style="font-size:10px">SẴN SÀNG</span>
+                {% elif v_status == 'BUSY' %}
+                  <span class="badge amber" style="font-size:10px">ĐANG BẬN</span>
+                {% elif v_status == 'SESSION_UNVERIFIED' %}
+                  <span class="badge amber" style="font-size:10px">CHƯA XÁC MINH</span>
+                {% elif v_status == 'ACCOUNT_CHANGED' %}
+                  <span class="badge red" style="font-size:10px">ĐỔI TÀI KHOẢN</span>
+                {% elif v_status == 'WORKER_OFFLINE' %}
+                  <span class="badge red" style="font-size:10px">WORKER OFFLINE</span>
+                {% elif v_status == 'PROFILE_UNAVAILABLE' %}
+                  <span class="badge muted" style="font-size:10px">CHƯA GẮN CHROME</span>
+                {% else %}
+                  <span class="badge blue" style="font-size:10px">ĐANG KẾT NỐI</span>
+                {% endif %}
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="panel card-pad empty-compact" style="text-align:center">
+            Chưa có tài khoản Facebook nào. Hãy vào <a href="{{ url_for('accounts_view') }}">Quản lý tài khoản</a> để thêm trước.
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- AUTO-BALANCE NOTIFICATION CARD -->
+        <div class="auto-balance-card" id="quickAutoBalanceCard">
+          <div class="auto-balance-header">
+            <span style="display:flex; align-items:center; gap:6px">
+              <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>
+              ⚡ Tự động phân bổ đều 50/50 theo tài khoản
+            </span>
+            <span style="font-size:11px; color:var(--text2)">Cân bằng tải</span>
+          </div>
+          <div class="auto-balance-chips" id="quickAutoBalanceChips">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+
+        <!-- GROUPS SELECTION -->
+        <div style="margin-top:20px; margin-bottom:20px">
+          <div class="label-split" style="margin-bottom:8px">
+            <label style="font-size:13px; font-weight:700; color:var(--text); margin:0">
+              2. Chọn nhóm Facebook mục tiêu:
+            </label>
+          </div>
+
+          <div class="group-select-toolbar">
+            <input type="search" id="quickGroupSearch" placeholder="Tìm kiếm nhanh URL nhóm..." style="height:36px; padding:0 10px; border-radius:var(--r-sm); border:1px solid var(--border2); background:var(--surface); color:var(--text); font-size:12px; flex:1 1 180px">
+            <select id="quickGroupFilter" style="height:36px; padding:0 10px; border-radius:var(--r-sm); border:1px solid var(--border2); background:var(--surface); color:var(--text); font-size:12px">
+              <option value="all">Tất cả nhóm</option>
+              <option value="assigned">Đã gán tài khoản</option>
+              <option value="unassigned">Chưa gán tài khoản</option>
+            </select>
+            <button type="button" class="btn secondary sm" id="btnQuickSelectAllGroups">Chọn tất cả</button>
+            <button type="button" class="btn ghost sm" id="btnQuickDeselectAllGroups">Bỏ chọn</button>
+          </div>
+
+          {% if groups %}
+          <div class="group-select-list" id="quickGroupList">
+            {% for group in groups %}
+            <label class="group-select-item" data-url="{{ group.url if group is mapping else group }}" data-has-account="{{ 'true' if (group is mapping and group.account_id) else 'false' }}">
+              <input type="checkbox" class="quick-group-checkbox" value="{{ group.url if group is mapping else group }}" data-account="{{ group.account_id if group is mapping else '' }}" checked>
+              <span style="font-size:12px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+                {{ group.url if group is mapping else group }}
+              </span>
+              {% if group is mapping and group.account_id %}
+              {% set matched_acc = accounts|selectattr('account_id', 'equalto', group.account_id)|first %}
+              <span class="badge muted" style="font-size:10px">{{ matched_acc.display_name if matched_acc else group.account_id }}</span>
+              {% endif %}
+            </label>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="panel card-pad empty-compact" style="text-align:center">
+            Chưa có nhóm nào. Hãy vào <a href="{{ url_for('groups') }}">Quản lý Groups</a> để nhập nhóm trước.
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- COLLAPSIBLE MANUAL ALLOCATION ACCORDION -->
+        <div style="margin-top:16px">
+          <button type="button" class="collapsible-trigger" id="btnToggleQuickManualAlloc">
+            <span style="display:flex; align-items:center; gap:8px">
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+              Tùy chỉnh phân bổ thủ công theo từng nhóm
+            </span>
+            <span class="badge muted" id="quickManualAllocBadge">Mặc định: Tự động chia đều</span>
+          </button>
+          <div class="collapsible-content" id="quickManualAllocContent" style="display:none">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+              <span style="font-size:12px; color:var(--text2)">Bạn có thể gán từng nhóm cụ thể cho tài khoản tương ứng:</span>
+              <button type="button" class="btn secondary sm" id="btnQuickEvenDistribute">Chia lại đều 50/50</button>
+            </div>
+            <div class="assignment-review-table" id="quickManualAllocList">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-nav-actions">
+          <button type="button" class="btn secondary" data-quick-prev>
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+            Quay lại Bước 1
+          </button>
+          <button type="button" class="btn primary" data-quick-next>
+            Tiếp theo: Kiểm tra &amp; Khởi chạy
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- QUICK STEP 3: PREFLIGHT, REVIEW & RUN -->
+      <div class="quick-panel" data-quick-step="3">
+        <div class="section-header" style="margin-bottom:16px">
+          <div>
+            <span class="eyebrow">Bước 3 / 3</span>
+            <h3 class="section-title">Kiểm tra an toàn &amp; Khởi chạy chiến dịch</h3>
+          </div>
+          <span class="badge green">Sẵn sàng chạy ngầm</span>
+        </div>
+
+        <!-- PREFLIGHT STATUS BOX -->
+        <div class="preflight-card" id="quickPreflightCard">
+          <div class="preflight-header">
+            <strong style="font-size:13px; display:flex; align-items:center; gap:8px">
+              <span id="quickPreflightStatusDot" style="width:8px; height:8px; border-radius:50%; background:var(--green)"></span>
+              Kiểm tra tiền kiểm tra (Preflight Validation)
+            </strong>
+            <button type="button" class="btn ghost sm" id="btnRecheckPreflight">Kiểm tra lại</button>
+          </div>
+          <div class="preflight-checks-grid" id="quickPreflightChecksGrid">
+            <!-- Dynamically populated from /api/campaign/preflight -->
+          </div>
+        </div>
+
+        <!-- SUMMARY METRICS -->
+        <div class="detail-meta-grid" style="margin-top:0; padding-top:0; border-top:0">
+          <div class="meta-item">
+            <span>Tên chiến dịch</span>
+            <strong id="quickPreviewCampName">-</strong>
+          </div>
+          <div class="meta-item">
+            <span>Tài khoản thực hiện</span>
+            <strong id="quickPreviewAccounts">-</strong>
+          </div>
+          <div class="meta-item">
+            <span>Số lượng nhóm</span>
+            <strong id="quickPreviewGroupsCount">-</strong>
+          </div>
+          <div class="meta-item">
+            <span>Chế độ khởi chạy</span>
+            <strong id="quickPreviewMode">Chạy nền ngay</strong>
+          </div>
+        </div>
+
+        <!-- PREVIEW CONTENT -->
+        <div style="margin-top:16px; padding:16px; background:var(--surface2); border-radius:var(--r-md); border:1px solid var(--border)">
+          <span style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted); letter-spacing:0.06em; display:block; margin-bottom:6px">Xem trước nội dung:</span>
+          <p id="quickPreviewContent" style="font-size:13px; color:var(--text); line-height:1.6; white-space:pre-wrap; margin:0">-</p>
+        </div>
+
+        <!-- SCHEDULING OPTIONS (INLINE) -->
+        <div style="margin-top:16px">
+          <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px">
+            <label class="schedule-pill-btn active" id="btnQuickScheduleRunNow" style="padding:8px 14px; border-radius:var(--r-md); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px">
+              <input type="radio" name="quick_run_type" value="run" checked style="margin:0">
+              🚀 Chạy ngay trong nền
+            </label>
+            <label class="schedule-pill-btn" id="btnQuickScheduleLater" style="padding:8px 14px; border-radius:var(--r-md); border:1px solid var(--border); background:var(--surface); cursor:pointer; font-size:13px; font-weight:600; display:flex; align-items:center; gap:6px">
+              <input type="radio" name="quick_run_type" value="schedule" style="margin:0">
+              ⏰ Hẹn lịch tương lai
+            </label>
+          </div>
+
+          <div id="quickScheduleDateField" style="display:none; margin-bottom:16px">
+            <div class="campaign-schedule-field">
+              <label for="quickScheduledLocal">Chọn ngày / giờ hẹn chạy <span>(theo giờ máy tính bạn)</span>:</label>
+              <input id="quickScheduledLocal" type="datetime-local">
+            </div>
+          </div>
+        </div>
+
+        <!-- COLLAPSIBLE ADVANCED OPTIONS -->
+        <div style="margin-top:16px; margin-bottom:20px">
+          <button type="button" class="collapsible-trigger" id="btnToggleQuickAdvancedOptions">
+            <span style="display:flex; align-items:center; gap:8px">
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+              Tùy chọn nâng cao (Khoảng cách Delay, Bản nháp)
+            </span>
+            <span class="badge muted">Mặc định tối ưu (1 - 3 phút)</span>
+          </button>
+          <div class="collapsible-content" id="quickAdvancedOptionsContent" style="display:none">
+            <div class="grid2" style="margin-bottom:12px">
+              <div class="form-group" style="margin-bottom:0">
+                <label for="quick_min_delay">Delay tối thiểu (phút)</label>
+                <input id="quick_min_delay" type="number" name="min_delay" min="0" value="{{ settings.min_delay }}">
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label for="quick_max_delay">Delay tối đa (phút)</label>
+                <input id="quick_max_delay" type="number" name="max_delay" min="0" value="{{ settings.max_delay }}">
+              </div>
+            </div>
+            <div style="display:flex; justify-content:flex-end">
+              <button type="button" class="btn ghost sm" id="btnQuickSaveDraft">Lưu làm bản nháp (Draft)</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- REASSURANCE BOX -->
+        <div class="info-note" style="margin-top:0; margin-bottom:20px">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="flex-shrink:0; color:var(--action-bg)"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <div>
+            <strong>Chạy nền độc lập và an toàn:</strong> Chiến dịch sẽ thực thi trên Desktop Worker của bạn. Bạn có thể tự do chuyển tab, thu nhỏ hoặc đóng trình duyệt quản trị mà không ảnh hưởng tới tiến trình đăng bài.
+          </div>
+        </div>
+
+        <!-- ACTION BUTTONS -->
+        <div class="wizard-nav-actions">
+          <button type="button" class="btn secondary" data-quick-prev>
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+            Quay lại Bước 2
+          </button>
+          <div style="display:flex; gap:8px">
+            <button type="button" class="btn secondary" id="btnQuickSaveTemplateConfirm">Lưu làm mẫu mới</button>
+            <button type="button" id="btnQuickStartCampaign" class="btn primary lg" {% if campaign_state and campaign_state.running %}disabled{% endif %}>
+              <svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+              BẮT ĐẦU NGAY
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- ADVANCED 6-STEP WIZARD (POWER USER / REGRESSION COMPAT) -->
+    <!-- ======================================================= -->
+    <div id="advancedWizardContainer" style="display:none">
+      <!-- STEPPER PROGRESS BAR -->
+      <div class="wizard-stepper">
+        <div class="wizard-step-node active" data-step-target="1">
+          <span class="step-badge">1</span>
+          <span class="step-name">Nội dung</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-step-target="2">
+          <span class="step-badge">2</span>
+          <span class="step-name">Tài khoản</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-step-target="3">
+          <span class="step-badge">3</span>
+          <span class="step-name">Chọn nhóm</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-step-target="4">
+          <span class="step-badge">4</span>
+          <span class="step-name">Phân bổ</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-step-target="5">
+          <span class="step-badge">5</span>
+          <span class="step-name">Hẹn lịch</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step-node" data-step-target="6">
+          <span class="step-badge">6</span>
+          <span class="step-name">Xác nhận</span>
+        </div>
+      </div>
 
     <!-- ======================================================= -->
     <!-- STEP 1: CONTENT & IMAGES & DELAY -->
@@ -458,6 +889,7 @@
         </div>
       </div>
     </div>
+    </div>
   </form>
 
   <!-- FORM XÓA ẢNH ĐỘC LẬP: tránh lồng form vào form lưu chiến dịch -->
@@ -558,56 +990,57 @@
 </section>
 
 <!-- CLIENT-SIDE MULTIPLE IMAGE PREVIEW SCRIPT -->
-<script>
-const imageInput = document.getElementById("images");
-const imageCount = document.getElementById("selectedImageCount");
-const previewContainer = document.getElementById("newImagePreview");
+function bindImagePreview(inputId, countId, previewId) {
+  const input = document.getElementById(inputId);
+  const count = document.getElementById(countId);
+  const preview = document.getElementById(previewId);
+  if (!input || !preview) return;
 
-imageInput?.addEventListener("change", function () {
-  previewContainer.innerHTML = "";
-  const files = Array.from(this.files || []);
-
-  if (files.length === 0) {
-    imageCount.textContent = "Chưa chọn ảnh mới";
-    imageCount.classList.remove("has-files");
-    return;
-  }
-
-  imageCount.textContent = `Đã chọn ${files.length} ảnh mới chuẩn bị tải lên`;
-  imageCount.classList.add("has-files");
-
-  files.forEach(function (file) {
-    if (!file.type.startsWith("image/")) return;
-
-    const reader = new FileReader();
-    reader.onload = function (event) {
-      const card = document.createElement("div");
-      card.className = "gallery-card new-preview-item";
-
-      const img = document.createElement("img");
-      img.src = event.target.result;
-      img.alt = file.name;
-      img.decoding = "async";
-
-      const badge = document.createElement("span");
-      badge.textContent = "Mới";
-      badge.style.position = "absolute";
-      badge.style.top = "6px";
-      badge.style.left = "6px";
-      badge.style.fontSize = "10px";
-      badge.style.fontWeight = "700";
-      badge.style.padding = "2px 6px";
-      badge.style.borderRadius = "4px";
-      badge.style.background = "rgba(99, 102, 241, 0.9)";
-      badge.style.color = "#fff";
-
-      card.appendChild(img);
-      card.appendChild(badge);
-      previewContainer.appendChild(card);
-    };
-    reader.readAsDataURL(file);
+  input.addEventListener("change", function () {
+    preview.innerHTML = "";
+    const files = Array.from(this.files || []);
+    if (files.length === 0) {
+      if (count) {
+        count.textContent = "Chưa chọn ảnh mới";
+        count.classList.remove("has-files");
+      }
+      return;
+    }
+    if (count) {
+      count.textContent = `Đã chọn ${files.length} ảnh mới chuẩn bị tải lên`;
+      count.classList.add("has-files");
+    }
+    files.forEach(function (file) {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = function (event) {
+        const card = document.createElement("div");
+        card.className = "gallery-card new-preview-item";
+        const img = document.createElement("img");
+        img.src = event.target.result;
+        img.alt = file.name;
+        img.decoding = "async";
+        const badge = document.createElement("span");
+        badge.textContent = "Mới";
+        badge.style.position = "absolute";
+        badge.style.top = "6px";
+        badge.style.left = "6px";
+        badge.style.fontSize = "10px";
+        badge.style.fontWeight = "700";
+        badge.style.padding = "2px 6px";
+        badge.style.borderRadius = "4px";
+        badge.style.background = "rgba(99, 102, 241, 0.9)";
+        badge.style.color = "#fff";
+        card.appendChild(img);
+        card.appendChild(badge);
+        preview.appendChild(card);
+      };
+      reader.readAsDataURL(file);
+    });
   });
-});
+}
+bindImagePreview("images", "selectedImageCount", "newImagePreview");
+bindImagePreview("quick_images", "quickSelectedImageCount", "quickNewImagePreview");
 </script>
 <script defer src="{{ url_for('static', filename='js/campaign-wizard.js') }}"></script>
 <script defer src="{{ url_for('static', filename='js/campaign-control.js') }}"></script>

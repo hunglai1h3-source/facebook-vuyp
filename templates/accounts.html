@@ -31,12 +31,8 @@
           <label for="newAccountName">Tên hiển thị tài khoản</label>
           <input id="newAccountName" name="display_name" maxlength="120" placeholder="Ví dụ: Facebook Marketing A, Profile Sales..." required>
         </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label for="newAccountUid">Facebook UID dạng số (Xác minh session thật)</label>
-          <input id="newAccountUid" name="facebook_user_id" maxlength="30" pattern="[0-9]*" inputmode="numeric" placeholder="Ví dụ: 100089283748291 (Tùy chọn, tự đồng bộ khi Worker online)">
-          <small style="font-size:11px; color:var(--muted); margin-top:4px; display:block">
-            UID dạng số giúp Extension xác thực đúng phiên đăng nhập Chrome trước khi đăng bài.
-          </small>
+        <div style="background:var(--surface2); border:1px solid var(--border); border-radius:var(--r-sm); padding:10px 12px; font-size:11px; line-height:1.5; color:var(--text2)">
+          ✨ <b>Tự động xác minh:</b> Bạn không cần tìm hoặc nhập Facebook UID. Xác minh session sẽ được hệ thống tự động thực hiện qua Extension khi kết nối.
         </div>
         <div class="form-group" style="margin-bottom:0">
           <label for="newAccountDevice">Gán Chrome Worker (Tùy chọn)</label>
@@ -68,31 +64,31 @@
         <div class="mini-stat-card">
           <span class="mini-label">Sẵn sàng</span>
           <span class="mini-value text-green">
-            {{ accounts|selectattr('computed_status', 'equalto', 'ready')|list|length }}
+            {{ accounts|selectattr('verification_status', 'equalto', 'READY')|list|length }}
           </span>
         </div>
         <div class="mini-stat-card">
           <span class="mini-label">Đang bận</span>
           <span class="mini-value" style="color:var(--blue)">
-            {{ accounts|selectattr('computed_status', 'equalto', 'busy')|list|length }}
+            {{ accounts|selectattr('verification_status', 'equalto', 'BUSY')|list|length }}
           </span>
         </div>
         <div class="mini-stat-card">
-          <span class="mini-label">Chưa gắn worker</span>
+          <span class="mini-label">Chưa xác minh</span>
           <span class="mini-value" style="color:var(--amber)">
-            {{ accounts|selectattr('computed_status', 'equalto', 'unmapped')|list|length }}
+            {{ accounts|selectattr('verification_status', 'equalto', 'SESSION_UNVERIFIED')|list|length }}
           </span>
         </div>
         <div class="mini-stat-card">
-          <span class="mini-label">Worker ngoại tuyến</span>
+          <span class="mini-label">Cần xử lý</span>
           <span class="mini-value text-red">
-            {{ accounts|selectattr('computed_status', 'in', ['offline', 'unavailable'])|list|length }}
+            {{ accounts|rejectattr('verification_status', 'in', ['READY', 'BUSY', 'SESSION_UNVERIFIED'])|list|length }}
           </span>
         </div>
       </div>
 
       <div style="margin-top:20px; padding:14px; background:var(--surface2); border-radius:var(--r-md); font-size:12px; line-height:1.6; color:var(--text2)">
-        💡 <b>Lưu ý quan trọng:</b> Mỗi tài khoản Facebook cần được liên kết với một Chrome Extension Profile trên máy tính của bạn và có Facebook UID dạng số để hệ thống điều phối tác vụ chính xác.
+        💡 <b>Cơ chế an toàn:</b> Đăng nhập Facebook trên Chrome profile tương ứng và bật Extension, hệ thống sẽ tự động đồng bộ và xác minh phiên mà không yêu cầu nhập UID hay mật khẩu.
       </div>
     </article>
   </div>
@@ -117,17 +113,21 @@
             </div>
             <div class="account-title-text">
               <strong>{{ account.display_name }}</strong>
-              <small>UID: {{ account.facebook_user_id or 'Chưa có UID' }}</small>
+              <small>UID FB: {{ account.facebook_user_id or 'Chờ đồng bộ tự động...' }}</small>
             </div>
           </div>
           <div>
-            {% if account.computed_status == 'ready' %}
+            {% if account.verification_status == 'READY' %}
             <span class="badge green">Sẵn sàng</span>
-            {% elif account.computed_status == 'busy' %}
+            {% elif account.verification_status == 'BUSY' %}
             <span class="badge blue"><span class="pulse pulsing"></span> Đang chạy</span>
-            {% elif account.computed_status == 'unmapped' %}
-            <span class="badge amber">Chưa gắn worker</span>
-            {% elif account.computed_status == 'unavailable' %}
+            {% elif account.verification_status == 'SESSION_UNVERIFIED' %}
+            <span class="badge amber">Chưa xác minh phiên</span>
+            {% elif account.verification_status == 'ACCOUNT_CHANGED' %}
+            <span class="badge red">Đổi tài khoản FB</span>
+            {% elif account.verification_status == 'CONNECTING' %}
+            <span class="badge amber">Đang kết nối...</span>
+            {% elif account.verification_status == 'PROFILE_UNAVAILABLE' %}
             <span class="badge red">Profile không khả dụng</span>
             {% else %}
             <span class="badge red">Worker ngoại tuyến</span>
@@ -135,18 +135,22 @@
           </div>
         </div>
 
-        <!-- Warning banner if unmapped, unavailable, or offline -->
-        {% if account.computed_status == 'unmapped' %}
+        <!-- Warning banners according to 7 statuses -->
+        {% if account.verification_status == 'ACCOUNT_CHANGED' %}
+        <div class="account-warning-banner red">
+          ⚠️ <span>Phát hiện tài khoản Facebook trên Chrome profile đã đổi khác với tài khoản đã gán. Vui lòng kiểm tra lại để tránh đăng nhầm tài khoản.</span>
+        </div>
+        {% elif account.verification_status == 'SESSION_UNVERIFIED' %}
         <div class="account-warning-banner amber">
-          ⚠️ <span>Tài khoản này chưa gắn worker Chrome. Vui lòng chọn Chrome profile bên dưới và bấm Lưu.</span>
+          ⚠️ <span>Chưa xác minh phiên Facebook. Hãy mở Facebook trên profile Chrome tương ứng để Extension tự động đồng bộ.</span>
         </div>
-        {% elif account.computed_status == 'unavailable' %}
+        {% elif account.verification_status == 'PROFILE_UNAVAILABLE' %}
         <div class="account-warning-banner red">
-          ⚠️ <span>Chrome Profile hoặc Worker đã bị ngắt / không khả dụng. Vui lòng chọn worker khác bên dưới.</span>
+          ⚠️ <span>Tài khoản này chưa gắn worker Chrome hoặc profile không khả dụng. Chọn Chrome profile bên dưới và bấm Lưu.</span>
         </div>
-        {% elif account.computed_status == 'offline' %}
+        {% elif account.verification_status == 'WORKER_OFFLINE' %}
         <div class="account-warning-banner red">
-          🔌 <span>Máy tính chạy Chrome profile cho tài khoản này đang ngoại tuyến. Hãy mở Chrome và bật Extension.</span>
+          🔌 <span>Máy trạm chạy Chrome profile cho tài khoản này đang ngoại tuyến. Hãy mở Chrome và bật Extension.</span>
         </div>
         {% endif %}
 
@@ -172,10 +176,6 @@
           <div>
             <label for="name-field-{{ account.account_id }}">Tên hiển thị tài khoản:</label>
             <input id="name-field-{{ account.account_id }}" name="display_name" value="{{ account.display_name }}" maxlength="120" placeholder="Tên hiển thị..." required>
-          </div>
-          <div>
-            <label for="uid-field-{{ account.account_id }}">Facebook User ID (UID số):</label>
-            <input id="uid-field-{{ account.account_id }}" name="facebook_user_id" value="{{ account.facebook_user_id or '' }}" maxlength="30" pattern="[0-9]*" inputmode="numeric" placeholder="UID số (tự đồng bộ khi Extension online)...">
           </div>
           <div>
             <label for="device-field-{{ account.account_id }}">Gán Chrome Profile Worker:</label>
