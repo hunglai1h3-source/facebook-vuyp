@@ -15,6 +15,7 @@ from flask import (
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.sansio.utils import get_host
 
 try:
     import psycopg
@@ -38,6 +39,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
 import csv
+import ipaddress
 import mimetypes
 import os
 import queue
@@ -127,12 +129,51 @@ if render_hostname and not normalized_render_hostname:
     invalid_trusted_hosts.append("RENDER_EXTERNAL_HOSTNAME")
 if normalized_render_hostname and normalized_render_hostname not in trusted_hosts:
     trusted_hosts.append(normalized_render_hostname)
-if IS_PRODUCTION and invalid_trusted_hosts:
-    raise RuntimeError("Production ALLOWED_HOSTS contains an invalid host value.")
-if IS_PRODUCTION and not trusted_hosts:
-    raise RuntimeError("Production requires ALLOWED_HOSTS or RENDER_EXTERNAL_HOSTNAME.")
-if trusted_hosts:
+if IS_PRODUCTION:
+    if invalid_trusted_hosts:
+        raise RuntimeError("Production ALLOWED_HOSTS contains an invalid host value.")
+    if not trusted_hosts:
+        raise RuntimeError("Production requires ALLOWED_HOSTS or RENDER_EXTERNAL_HOSTNAME.")
+    for internal_host in ("localhost", "127.0.0.1", "0.0.0.0"):
+        if internal_host not in trusted_hosts:
+            trusted_hosts.append(internal_host)
     app.config["TRUSTED_HOSTS"] = trusted_hosts
+elif trusted_hosts:
+    app.config["TRUSTED_HOSTS"] = trusted_hosts
+
+_original_create_url_adapter = app.create_url_adapter
+
+
+def _safe_create_url_adapter(req=None):
+    if req is not None:
+        configured_trusted = app.config.get("TRUSTED_HOSTS")
+        if configured_trusted is not None:
+            raw_host = (req.environ.get("HTTP_HOST") or req.headers.get("Host") or "").partition(":")[0].strip()
+            is_internal = False
+            if raw_host in {"localhost", "127.0.0.1", "0.0.0.0", "::1", ""}:
+                is_internal = True
+            else:
+                try:
+                    ip = ipaddress.ip_address(raw_host)
+                    is_internal = ip.is_private or ip.is_loopback
+                except ValueError:
+                    pass
+            effective = list(configured_trusted)
+            if is_internal and raw_host and raw_host not in effective:
+                effective.append(raw_host)
+            req.trusted_hosts = effective
+            req.host = get_host(req.scheme, req.headers.get("host"), req.server, req.trusted_hosts)
+            subdomain = None
+            server_name = app.config["SERVER_NAME"]
+            if app.url_map.host_matching:
+                server_name = None
+            elif not app.subdomain_matching:
+                subdomain = app.url_map.default_subdomain or ""
+            return app.url_map.bind_to_environ(req.environ, server_name=server_name, subdomain=subdomain)
+    return _original_create_url_adapter(req)
+
+
+app.create_url_adapter = _safe_create_url_adapter
 
 app.config["MAX_CONTENT_LENGTH"] = (
     50 * 1024 * 1024
@@ -931,21 +972,30 @@ class SimpleConnectionPool:
             except queue.Empty:
                 break
 
+        create_new = False
         with self.lock:
             if self.current_size < self.max_size:
-                conn = self._create_raw_connection()
                 self.current_size += 1
-                return conn
+                create_new = True
+
+        if create_new:
+            try:
+                return self._create_raw_connection()
+            except Exception:
+                with self.lock:
+                    self.current_size = max(0, self.current_size - 1)
+                raise
 
         try:
             conn = self.pool.get(timeout=timeout)
             if not conn.closed and not getattr(conn, "broken", False):
                 return conn
-            with self.lock:
-                self.current_size = max(0, self.current_size - 1)
-                conn = self._create_raw_connection()
-                self.current_size += 1
-                return conn
+            try:
+                return self._create_raw_connection()
+            except Exception:
+                with self.lock:
+                    self.current_size = max(0, self.current_size - 1)
+                raise
         except queue.Empty:
             raise DatabaseUnavailable("Database connection pool timeout.")
 
@@ -3682,7 +3732,7 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
                 "browser_profile_id": bucket["browser_profile_id"],
                 "session_context": bucket["session_context"],
                 "group_id": task_group_id(group_url), "group_url": group_url, "status": task_status,
-                "idempotency_key": f"{campaign_id}:{bucket['account_id']}:{index}:{digest}",
+                "idempotency_key": f"{campaign_id}:{bucket['account_id']}:{index:06d}:{digest}",
                 "retry_count": 0, "max_retries": DEFAULT_TASK_RETRY_LIMIT,
                 "last_error": "", "next_retry_at": "", "lease_token": "",
                 "lease_expires_at": "", "created_at": now, "started_at": "",
@@ -4304,7 +4354,7 @@ def claim_next_engine_task(customer_id, device_id):
                 candidates.append(task)
             if not candidates:
                 return None, None
-            task = sorted(candidates, key=lambda item: (item.get("created_at", ""), item.get("task_id", "")))[0]
+            task = sorted(candidates, key=lambda item: (item.get("created_at", ""), item.get("idempotency_key", ""), item.get("task_id", "")))[0]
             lease_token = secrets.token_urlsafe(24)
             task.update({
                 "status": "claimed", "lease_token": lease_token,
@@ -4338,7 +4388,7 @@ def claim_next_engine_task(customer_id, device_id):
                       WHERE active.customer_id=t.customer_id AND active.account_id=t.account_id
                         AND active.status IN ('claimed','running','paused')
                   )
-                ORDER BY t.created_at ASC, t.task_id ASC
+                ORDER BY t.created_at ASC, t.idempotency_key ASC, t.task_id ASC
                 FOR UPDATE OF t SKIP LOCKED LIMIT 1
                 """,
                 (customer_id, device_id, bound["account_id"]),
@@ -12064,7 +12114,7 @@ def health():
     })
 
 
-@app.route("/ready")
+@app.route("/ready", methods=["GET", "HEAD"])
 def ready():
     # Production bắt buộc phải có PostgreSQL.
     # Local development vẫn có thể dùng JSON.
@@ -12082,63 +12132,41 @@ def ready():
     try:
         with postgres_connect() as conn:
             with conn.cursor() as cur:
-                # Kiểm tra database có thực sự query được không.
-                cur.execute("SELECT 1 AS ok")
-                ok = bool(
-                    (cur.fetchone() or {}).get("ok")
-                )
-
-                # Kiểm tra còn migration issue chưa được xử lý hay không.
-                cur.execute(
-                    """
-                    SELECT EXISTS(
-                        SELECT 1
-                        FROM fbpostpro_migration_issues
-                        WHERE resolved_at IS NULL
-                    ) AS blocked
-                    """
-                )
-                blocked = bool(
-                    (cur.fetchone() or {}).get("blocked")
-                )
-
-                # Kiểm tra migration Phase 11 đã hoàn thành.
-                cur.execute(
-                    """
-                    SELECT EXISTS(
-                        SELECT 1
-                        FROM fbpostpro_schema_migrations
-                        WHERE migration_id = 'phase11_remaining_risk_remediation_v1'
-                    ) AS complete
-                    """
-                )
-                schema_complete = bool(
-                    (cur.fetchone() or {}).get("complete")
-                )
-
-                # Kiểm tra các safety index quan trọng đã tồn tại.
+                cur.execute("SET LOCAL statement_timeout = '3s'")
                 cur.execute(
                     """
                     SELECT
-                        to_regclass(
-                            'public.idx_fbpostpro_one_active_account_task'
-                        ) IS NOT NULL
-                        AND
-                        to_regclass(
-                            'public.idx_fbpostpro_one_account_per_device'
-                        ) IS NOT NULL
-                        AS valid
+                        1 AS ok,
+                        EXISTS(
+                            SELECT 1
+                            FROM fbpostpro_schema_migrations
+                            WHERE migration_id = 'phase11_remaining_risk_remediation_v1'
+                        ) AS schema_complete,
+                        NOT EXISTS(
+                            SELECT 1
+                            FROM fbpostpro_migration_issues
+                            WHERE resolved_at IS NULL
+                        ) AS no_issues,
+                        (
+                            to_regclass(
+                                'public.idx_fbpostpro_one_active_account_task'
+                            ) IS NOT NULL
+                            AND
+                            to_regclass(
+                                'public.idx_fbpostpro_one_account_per_device'
+                            ) IS NOT NULL
+                        ) AS indexes_valid
                     """
                 )
-
-                indexes_valid = bool(
-                    (cur.fetchone() or {}).get("valid")
-                )
-
-                schema_complete = (
-                    schema_complete
-                    and indexes_valid
-                )
+                row = cur.fetchone() or {}
+                if isinstance(row, dict):
+                    ok = bool(row.get("ok"))
+                    blocked = not bool(row.get("no_issues"))
+                    schema_complete = bool(row.get("schema_complete")) and bool(row.get("indexes_valid"))
+                else:
+                    ok = bool(row[0]) if len(row) > 0 else False
+                    schema_complete = (bool(row[1]) and bool(row[3])) if len(row) > 3 else False
+                    blocked = not bool(row[2]) if len(row) > 2 else False
 
         if not ok:
             raise RuntimeError(
