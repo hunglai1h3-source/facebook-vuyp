@@ -101,7 +101,17 @@ app.config.update(
     SESSION_REFRESH_EACH_REQUEST=False,
 )
 if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+
+def get_public_server_origin():
+    external = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+    if external:
+        return f"https://{external}"
+    host_url = request.host_url.rstrip("/")
+    if IS_PRODUCTION and ":10000" in host_url:
+        host_url = host_url.replace(":10000", "")
+    return host_url
 
 
 def normalize_trusted_host(value):
@@ -322,7 +332,12 @@ def production_request_guard():
     if not IS_PRODUCTION or request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
     token_api_prefixes = ("/api/agent/", "/api/cloud/")
-    token_api_paths = {"/api/extension/pair", "/api/connect/register", "/api/connect/status"}
+    token_api_paths = {
+        "/api/extension/pair",
+        "/api/extension/pair-code",
+        "/api/connect/register",
+        "/api/connect/status",
+    }
     if request.path.startswith(token_api_prefixes) or request.path in token_api_paths:
         return None
     source = request.headers.get("Origin") or request.headers.get("Referer")
@@ -330,7 +345,15 @@ def production_request_guard():
         return jsonify({"error": "Same-origin request required.", "request_id": g.request_id}), 403
     source_parts = urlsplit(source)
     expected_parts = urlsplit(request.host_url)
-    if (source_parts.scheme, source_parts.netloc.lower()) != (expected_parts.scheme, expected_parts.netloc.lower()):
+    source_host = (source_parts.hostname or "").lower()
+    expected_host = (expected_parts.hostname or "").lower()
+    render_host = (os.environ.get("RENDER_EXTERNAL_HOSTNAME", "") or "").lower()
+    allowed = (
+        (source_host == expected_host)
+        or (render_host and source_host == render_host)
+        or (source_host in TRUSTED_HOSTS)
+    )
+    if not allowed:
         return jsonify({"error": "Cross-origin request rejected.", "request_id": g.request_id}), 403
     return None
 
@@ -9411,18 +9434,17 @@ def _cleanup_pairing_codes():
     return data
 
 
-def _make_pairing_code():
+def _make_pairing_code(existing_codes=None):
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    existing = set(existing_codes) if existing_codes else set()
     for _ in range(50):
         code = "".join(secrets.choice(alphabet) for _ in range(8))
-        data = _cleanup_pairing_codes()
-        if code not in data:
+        if code not in existing:
             return code
     raise RuntimeError("Không tạo được mã liên kết. Hãy thử lại.")
 
 
 @app.route("/api/extension/pair-code", methods=["POST"])
-@synchronized_state
 def extension_pair_code():
     customer_id = get_customer_id()
     if not customer_id:
@@ -9434,7 +9456,7 @@ def extension_pair_code():
         if (data.get(code) or {}).get("customer_id") == customer_id:
             data.pop(code, None)
 
-    code = _make_pairing_code()
+    code = _make_pairing_code(existing_codes=data.keys())
     expires_at = (utc_now() + timedelta(minutes=10)).isoformat(timespec="seconds")
     data[code] = {
         "customer_id": customer_id,
@@ -9446,7 +9468,7 @@ def extension_pair_code():
         "ok": True,
         "code": code,
         "expires_at": expires_at,
-        "server_origin": request.host_url.rstrip("/"),
+        "server_origin": get_public_server_origin(),
     })
 
 
@@ -9522,7 +9544,6 @@ def extension_pair():
 
 
 @app.route("/api/extension/status", methods=["GET"])
-@synchronized_state
 def extension_status():
     customer_id = get_customer_id()
     if not customer_id:

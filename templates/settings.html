@@ -414,11 +414,18 @@
 
     // FIRST-TIME PAIRING or RE-PAIRING (1-CLICK)
     applyState('PAIRING');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     try {
       const r = await fetch('{{ url_for("extension_pair_code") }}', {
         method: 'POST',
-        headers: { 'Accept': 'application/json' }
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Không tạo được mã liên kết.');
 
@@ -439,8 +446,9 @@
         }
       }, 5000);
     } catch (e) {
+      clearTimeout(timeoutId);
       applyState('WAITING_FOR_FIRST_CONFIRMATION');
-      const err = e.message || String(e);
+      const err = e.name === 'AbortError' ? 'Quá thời gian kết nối tới máy chủ (8s). Vui lòng thử lại.' : (e.message || String(e));
       if (window.showToast) window.showToast(err, 'error');
       else alert(err);
     }

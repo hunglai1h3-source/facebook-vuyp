@@ -55,6 +55,7 @@
             </button>
           </div>
           <span id="pairCodeTimer" style="font-size:11px; color:var(--muted); text-align:center; display:none">Mã có hiệu lực trong 10 phút</span>
+          <div id="pairStatusNotice" style="display:none; font-size:12px; margin-top:8px; padding:8px 10px; border-radius:var(--r-sm); line-height:1.4"></div>
         </div>
       </div>
     </div>
@@ -191,93 +192,203 @@
 
 {% block scripts %}
 <script>
-const btnGenPairCode = document.getElementById('btnGenPairCode');
-const btnCopyPairCode = document.getElementById('btnCopyPairCode');
-const pairCodeDisplay = document.getElementById('pairCodeDisplay');
-const pairCodeTimer = document.getElementById('pairCodeTimer');
+(() => {
+  const btnGenPairCode = document.getElementById('btnGenPairCode');
+  const btnCopyPairCode = document.getElementById('btnCopyPairCode');
+  const pairCodeDisplay = document.getElementById('pairCodeDisplay');
+  const pairCodeTimer = document.getElementById('pairCodeTimer');
+  const pairStatusNotice = document.getElementById('pairStatusNotice');
 
-// 1. One-click pairing from Workers page
-btnGenPairCode?.addEventListener('click', async () => {
-  btnGenPairCode.disabled = true;
-  btnGenPairCode.textContent = 'Đang kết nối...';
-  try {
-    const res = await fetch('/api/extension/pair-code', { method: 'POST' });
-    const data = await res.json();
-    if (data.code) {
-      pairCodeDisplay.textContent = data.code;
-      btnCopyPairCode.style.display = 'inline-flex';
-      pairCodeTimer.style.display = 'block';
+  let extensionDetected = false;
+  let pairingTimeoutTimer = null;
 
-      // Automatically dispatch to Extension content script
-      window.postMessage({
-        source: 'FBPOST_WEB',
-        type: 'PAIR_CONNECTOR',
-        code: data.code
-      }, location.origin);
-
-      showToast('Đã tạo mã và tự động gửi tới Chrome Extension...', 'info');
+  function showNotice(msg, type = 'info') {
+    if (!pairStatusNotice) return;
+    pairStatusNotice.style.display = 'block';
+    if (type === 'error') {
+      pairStatusNotice.style.background = 'var(--red-tint, rgba(239, 68, 68, 0.12))';
+      pairStatusNotice.style.color = 'var(--red, #ef4444)';
+      pairStatusNotice.style.border = '1px solid rgba(239, 68, 68, 0.25)';
+    } else if (type === 'warning' || type === 'amber') {
+      pairStatusNotice.style.background = 'var(--amber-tint, rgba(245, 158, 11, 0.12))';
+      pairStatusNotice.style.color = 'var(--amber, #f59e0b)';
+      pairStatusNotice.style.border = '1px solid rgba(245, 158, 11, 0.25)';
+    } else if (type === 'success') {
+      pairStatusNotice.style.background = 'var(--green-tint, rgba(34, 197, 94, 0.12))';
+      pairStatusNotice.style.color = 'var(--green, #22c55e)';
+      pairStatusNotice.style.border = '1px solid rgba(34, 197, 94, 0.25)';
     } else {
-      showToast(data.error || 'Không thể tạo mã kết nối', 'error');
+      pairStatusNotice.style.background = 'rgba(59, 130, 246, 0.08)';
+      pairStatusNotice.style.color = 'var(--blue, #3b82f6)';
+      pairStatusNotice.style.border = '1px solid rgba(59, 130, 246, 0.2)';
     }
-  } catch(e) {
-    showToast('Lỗi mạng khi tạo mã kết nối', 'error');
-  } finally {
-    btnGenPairCode.disabled = false;
-    btnGenPairCode.textContent = 'Tạo mã mới';
+    pairStatusNotice.innerHTML = msg;
   }
-});
 
-// 2. Listen for pairing result
-window.addEventListener('message', (event) => {
-  if (event.source !== window || event.origin !== location.origin) return;
-  const data = event.data || {};
-  if (data.source !== 'FBPOST_EXTENSION') return;
-
-  if (data.type === 'PAIR_RESULT') {
-    const res = data.result || {};
-    if (res.ok) {
-      showToast('Ghép nối Chrome Extension thành công (1-Click)! Đang cập nhật danh sách...', 'success');
-      btnGenPairCode.textContent = '✓ Đã liên kết';
-      btnGenPairCode.disabled = true;
-      setTimeout(() => window.location.reload(), 1200);
-    } else {
-      showToast('Lỗi tự động liên kết: ' + (res.error || 'Không nhận được phản hồi'), 'error');
+  // 1. Handshake to detect Extension on current browser
+  function checkExtensionPresence() {
+    if (document.documentElement.getAttribute('data-fbpostpro-connector') === 'installed') {
+      extensionDetected = true;
     }
+    window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
+
+    setTimeout(() => {
+      if (!extensionDetected) {
+        showNotice('ℹ️ <em>Chưa phát hiện Extension FB POST PRO trên trình duyệt này. Nếu dùng Chrome khác, hãy cài đặt và dùng mã bên dưới để liên kết.</em>', 'info');
+      }
+    }, 700);
   }
-});
+  checkExtensionPresence();
 
-btnCopyPairCode?.addEventListener('click', () => {
-  const code = pairCodeDisplay.textContent.trim();
-  if (!code || code === '--------' || code === '------') return;
-  navigator.clipboard.writeText(code).then(() => {
-    btnCopyPairCode.textContent = 'Đã sao chép!';
-    showToast('Đã sao chép mã kết nối vào clipboard', 'success');
-    setTimeout(() => { btnCopyPairCode.textContent = 'Sao chép'; }, 2000);
-  });
-});
+  // 2. Click button: Generate code with AbortController timeout (8s)
+  btnGenPairCode?.addEventListener('click', async () => {
+    if (pairingTimeoutTimer) clearTimeout(pairingTimeoutTimer);
+    btnGenPairCode.disabled = true;
+    btnGenPairCode.textContent = 'Đang tạo mã...';
+    showNotice('Đang khởi tạo mã liên kết bảo mật từ máy chủ...', 'info');
 
-// Auto-poll workers status every 15s
-async function pollWorkersStatus() {
-  if (document.hidden) return;
-  try {
-    const res = await fetch('/api/workers', {
-      headers: { 'Accept': 'application/json' }
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data && data.success && Array.isArray(data.workers)) {
-      const currentCount = document.querySelectorAll('.worker-card-item').length;
-      if (data.workers.length !== currentCount) {
-        window.location.reload();
+    const controller = new AbortController();
+    const fetchTimeout = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch('/api/extension/pair-code', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        signal: controller.signal
+      });
+      clearTimeout(fetchTimeout);
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          showNotice('⚠️ Phiên đăng nhập đã hết hạn. <a href="/login" style="color:inherit; text-decoration:underline">Bấm vào đây để đăng nhập lại</a>.', 'error');
+        } else {
+          let errMsg = 'Không thể tạo mã liên kết (Mã lỗi ' + res.status + ')';
+          try {
+            const errData = await res.json();
+            if (errData.error) errMsg = errData.error;
+          } catch(e) {}
+          showNotice('❌ ' + errMsg, 'error');
+        }
+        btnGenPairCode.disabled = false;
+        btnGenPairCode.textContent = '↻ Thử lại';
+        return;
+      }
+
+      const data = await res.json();
+      if (data.code) {
+        pairCodeDisplay.textContent = data.code;
+        if (btnCopyPairCode) btnCopyPairCode.style.display = 'inline-flex';
+        if (pairCodeTimer) pairCodeTimer.style.display = 'block';
+
+        if (extensionDetected) {
+          btnGenPairCode.textContent = '⏳ Đang chờ Extension xác nhận...';
+          showNotice('Đã tạo mã <strong>' + data.code + '</strong>. Đang tự động gửi tới Chrome Extension...', 'info');
+
+          // Send to extension content script
+          window.postMessage({
+            source: 'FBPOST_WEB',
+            type: 'PAIR_CONNECTOR',
+            code: data.code
+          }, location.origin);
+
+          // 8-second timeout guard for Extension response
+          pairingTimeoutTimer = setTimeout(() => {
+            btnGenPairCode.disabled = false;
+            btnGenPairCode.textContent = '↻ Thử lại kết nối tự động';
+            showNotice('⚠️ Đã tạo mã <strong>' + data.code + '</strong>. Extension chưa phản hồi tự động trong 8s. Hãy mở biểu tượng Extension FB POST PRO trên Chrome và dán mã vào để ghép nối thủ công.', 'warning');
+          }, 8000);
+        } else {
+          btnGenPairCode.disabled = false;
+          btnGenPairCode.textContent = 'Tạo mã mới';
+          showNotice('Đã tạo mã <strong>' + data.code + '</strong>. Hãy mở Extension trên Chrome và nhập mã này để kết nối.', 'info');
+        }
+      } else {
+        showNotice('❌ ' + (data.error || 'Máy chủ không trả về mã hợp lệ.'), 'error');
+        btnGenPairCode.disabled = false;
+        btnGenPairCode.textContent = '↻ Thử lại';
+      }
+    } catch(e) {
+      clearTimeout(fetchTimeout);
+      btnGenPairCode.disabled = false;
+      btnGenPairCode.textContent = '↻ Thử lại';
+      if (e.name === 'AbortError') {
+        showNotice('⏱️ Quá thời gian chờ máy chủ phản hồi (Timeout 8s). Vui lòng bấm <strong>Thử lại</strong>.', 'error');
+      } else {
+        showNotice('❌ Lỗi kết nối mạng: ' + (e.message || String(e)), 'error');
       }
     }
-  } catch (e) {
-    // network glitch, ignore
+  });
+
+  // 3. Listen for responses from Extension
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const data = event.data || {};
+    if (data.source !== 'FBPOST_EXTENSION') return;
+
+    if (data.type === 'CONNECTOR_READY' || data.type === 'CONNECTOR_PONG') {
+      extensionDetected = true;
+      if (pairStatusNotice && pairStatusNotice.textContent.includes('Chưa phát hiện Extension')) {
+        pairStatusNotice.style.display = 'none';
+      }
+      return;
+    }
+
+    if (data.type === 'PAIR_RESULT') {
+      if (pairingTimeoutTimer) clearTimeout(pairingTimeoutTimer);
+      const res = data.result || {};
+      if (res.ok) {
+        btnGenPairCode.textContent = '✓ Đã liên kết!';
+        btnGenPairCode.disabled = true;
+        showNotice('🎉 Ghép nối Chrome Extension thành công (1-Click)! Đang cập nhật trạng thái máy trạm...', 'success');
+        if (window.showToast) window.showToast('Ghép nối Chrome Extension thành công (1-Click)!', 'success');
+        setTimeout(() => window.location.reload(), 1200);
+      } else {
+        btnGenPairCode.disabled = false;
+        btnGenPairCode.textContent = '↻ Thử lại kết nối';
+        const err = res.error || 'Không thể liên kết với Extension';
+        showNotice('❌ Ghép nối tự động không thành công: ' + err + '. Bạn có thể sao chép mã ở trên và dán trực tiếp vào popup Extension.', 'error');
+        if (window.showToast) window.showToast('Lỗi ghép nối: ' + err, 'error');
+      }
+    }
+  });
+
+  // 4. Copy pairing code to clipboard
+  btnCopyPairCode?.addEventListener('click', () => {
+    const code = pairCodeDisplay?.textContent.trim();
+    if (!code || code === '--------' || code === '------') return;
+    navigator.clipboard.writeText(code).then(() => {
+      btnCopyPairCode.textContent = '✓ Đã chép!';
+      if (window.showToast) window.showToast('Đã sao chép mã kết nối vào clipboard', 'success');
+      setTimeout(() => { btnCopyPairCode.textContent = 'Sao chép'; }, 2000);
+    }).catch(() => {
+      prompt('Mã kết nối của bạn:', code);
+    });
+  });
+
+  // 5. Polling workers status every 15s
+  async function pollWorkersStatus() {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('/api/workers', {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.workers)) {
+        const currentCount = document.querySelectorAll('.worker-card-item').length;
+        if (data.workers.length !== currentCount) {
+          window.location.reload();
+        }
+      }
+    } catch (e) {}
   }
-}
-setInterval(pollWorkersStatus, 15000);
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) pollWorkersStatus();
-});
+  setInterval(pollWorkersStatus, 15000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) pollWorkersStatus();
+  });
+})();
 </script>
 {% endblock %}
