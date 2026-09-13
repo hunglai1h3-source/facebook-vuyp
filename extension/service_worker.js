@@ -186,6 +186,13 @@ async function heartbeat(
     );
 
   if (!r.ok) {
+    if (r.status === 401) {
+      await chrome.storage.local.remove(['token']);
+      await chrome.storage.local.set({
+        repairRequired: true,
+        lastError: 'Phiên liên kết đã hết hạn hoặc bị thu hồi (401)'
+      });
+    }
     throw new Error(
       'Heartbeat ' +
       r.status
@@ -206,6 +213,47 @@ async function heartbeat(
   };
 
   return lastHeartbeatResult;
+}
+
+function isAuthorizedOrigin(serverOrigin, senderOrigin) {
+  if (!serverOrigin || !senderOrigin) return false;
+  let srv, snd;
+  try {
+    srv = new URL(serverOrigin).origin;
+    snd = new URL(senderOrigin).origin;
+  } catch (e) {
+    return false;
+  }
+  if (srv !== snd) return false;
+
+  const host = new URL(srv).hostname.toLowerCase();
+  // 1. Localhost and loopback
+  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') {
+    return true;
+  }
+  // 2. Production FB POST PRO domain
+  if (host === 'fb-post-pro.onrender.com') {
+    return true;
+  }
+  // 3. Staging/preview deployments
+  if (host.endsWith('.onrender.com') && host.startsWith('fb-post-pro')) {
+    return true;
+  }
+  return false;
+}
+
+async function isAuthorizedOriginWithStorage(serverOrigin, senderOrigin) {
+  if (isAuthorizedOrigin(serverOrigin, senderOrigin)) return true;
+  try {
+    const srv = new URL(serverOrigin).origin;
+    const snd = new URL(senderOrigin).origin;
+    if (srv !== snd) return false;
+    const linked = await cfg();
+    if (linked.serverOrigin && new URL(linked.serverOrigin).origin === srv) {
+      return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
 async function pairFromWeb(
@@ -233,20 +281,18 @@ async function pairFromWeb(
       .trim()
       .toUpperCase();
 
-  // Content scripts also run on other Render apps. Only a site already paired
-  // through the extension popup may rotate its own binding.
-  if (!linked.deviceId || !linked.token || server !== linked.serverOrigin) {
-    return {ok: false, error: 'Hãy mở popup Connector để xác nhận URL website và liên kết lần đầu.'};
-  }
-
-  if (
-    !server ||
-    !pairCode
-  ) {
+  if (!server || !pairCode) {
     return {
       ok: false,
-      error:
-        'Thiếu website hoặc mã liên kết'
+      error: 'Thiếu website hoặc mã liên kết'
+    };
+  }
+
+  const authorized = await isAuthorizedOriginWithStorage(server, serverOrigin);
+  if (!authorized) {
+    return {
+      ok: false,
+      error: 'Website origin không được phép liên kết tự động với Connector.'
     };
   }
 
@@ -299,7 +345,10 @@ async function pairFromWeb(
         d.token,
 
       customerId:
-        d.customer_id
+        d.customer_id,
+
+      repairRequired: false,
+      lastError: ''
     });
 
     lastHeartbeatAt = 0;
@@ -315,7 +364,10 @@ async function pairFromWeb(
         hb.facebookLoggedIn,
 
       deviceId:
-        d.device_id
+        d.device_id,
+
+      serverOrigin:
+        server
     };
   } catch (e) {
     return {
@@ -1478,13 +1530,16 @@ async function pollOnce() {
       401
     ) {
       await chrome.storage.local.remove([
-        'deviceId',
-        'token',
-        'customerId'
+        'token'
       ]);
+      await chrome.storage.local.set({
+        repairRequired: true,
+        lastError: 'Liên kết đã hết hiệu lực hoặc bị thu hồi (401)'
+      });
 
       return {
         ok: false,
+        repairRequired: true,
         error:
           'Liên kết đã hết hiệu lực'
       };
@@ -1611,34 +1666,47 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (
-      msg?.type ===
-      'GET_STATUS'
+      msg?.type === 'GET_STATUS' ||
+      msg?.type === 'GET_CONNECTOR_STATUS'
     ) {
       Promise.all([
         cfg(),
         facebookLoggedIn()
       ])
         .then(
-          (
+          async (
             [
               c,
               fb
             ]
-          ) =>
+          ) => {
+            const hasCredentials = Boolean(c.deviceId && c.token && c.serverOrigin);
+            let isOnline = false;
+            if (hasCredentials && !c.repairRequired) {
+              try {
+                const hb = await heartbeat(false);
+                isOnline = Boolean(hb && hb.ok);
+              } catch (e) {
+                isOnline = false;
+              }
+            }
             sendResponse({
-              ok:
-                !!(
-                  c.deviceId &&
-                  c.token
-                ),
-
-              facebookLoggedIn:
-                fb,
-
-              deviceName:
-                'Google Chrome'
-            })
-        );
+              ok: true,
+              installed: true,
+              paired: hasCredentials && !c.repairRequired,
+              deviceId: c.deviceId || '',
+              serverOrigin: c.serverOrigin || '',
+              facebookLoggedIn: fb,
+              deviceName: 'Google Chrome',
+              workerState: workerState,
+              isOnline: isOnline,
+              repairRequired: Boolean(c.repairRequired),
+              lastError: c.lastError || '',
+              version: VERSION
+            });
+          }
+        )
+        .catch(err => sendResponse({ ok: false, error: String(err) }));
 
       return true;
     }

@@ -196,9 +196,10 @@ const btnCopyPairCode = document.getElementById('btnCopyPairCode');
 const pairCodeDisplay = document.getElementById('pairCodeDisplay');
 const pairCodeTimer = document.getElementById('pairCodeTimer');
 
+// 1. One-click pairing from Workers page
 btnGenPairCode?.addEventListener('click', async () => {
   btnGenPairCode.disabled = true;
-  btnGenPairCode.textContent = 'Đang tạo...';
+  btnGenPairCode.textContent = 'Đang kết nối...';
   try {
     const res = await fetch('/api/extension/pair-code', { method: 'POST' });
     const data = await res.json();
@@ -206,7 +207,15 @@ btnGenPairCode?.addEventListener('click', async () => {
       pairCodeDisplay.textContent = data.code;
       btnCopyPairCode.style.display = 'inline-flex';
       pairCodeTimer.style.display = 'block';
-      showToast('Đã tạo mã kết nối thành công!', 'success');
+
+      // Automatically dispatch to Extension content script
+      window.postMessage({
+        source: 'FBPOST_WEB',
+        type: 'PAIR_CONNECTOR',
+        code: data.code
+      }, location.origin);
+
+      showToast('Đã tạo mã và tự động gửi tới Chrome Extension...', 'info');
     } else {
       showToast(data.error || 'Không thể tạo mã kết nối', 'error');
     }
@@ -215,6 +224,25 @@ btnGenPairCode?.addEventListener('click', async () => {
   } finally {
     btnGenPairCode.disabled = false;
     btnGenPairCode.textContent = 'Tạo mã mới';
+  }
+});
+
+// 2. Listen for pairing result
+window.addEventListener('message', (event) => {
+  if (event.source !== window || event.origin !== location.origin) return;
+  const data = event.data || {};
+  if (data.source !== 'FBPOST_EXTENSION') return;
+
+  if (data.type === 'PAIR_RESULT') {
+    const res = data.result || {};
+    if (res.ok) {
+      showToast('Ghép nối Chrome Extension thành công (1-Click)! Đang cập nhật danh sách...', 'success');
+      btnGenPairCode.textContent = '✓ Đã liên kết';
+      btnGenPairCode.disabled = true;
+      setTimeout(() => window.location.reload(), 1200);
+    } else {
+      showToast('Lỗi tự động liên kết: ' + (res.error || 'Không nhận được phản hồi'), 'error');
+    }
   }
 });
 

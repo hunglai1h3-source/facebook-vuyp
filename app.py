@@ -9344,6 +9344,25 @@ def settings():
 
     active_device = get_active_device(customer_id)
     facebook_state = get_facebook_state(customer_id)
+    settings_data = load_settings(customer_id)
+    active_id = settings_data.get("active_device_id", "")
+    all_devices = load_devices(customer_id)
+    paired_raw = all_devices.get(active_id) if active_id else None
+    if not paired_raw and all_devices:
+        paired_raw = next(iter(all_devices.values()), None)
+
+    paired_device = public_device(paired_raw) if paired_raw else None
+    paired_status = "unpaired"
+    if paired_raw:
+        if paired_raw.get("revoked_at") or paired_raw.get("status") == "revoked":
+            paired_status = "revoked"
+        elif paired_raw.get("token_expires_at") and parse_iso(paired_raw["token_expires_at"]) and parse_iso(paired_raw["token_expires_at"]) <= utc_now():
+            paired_status = "expired"
+        elif device_is_online(paired_raw):
+            paired_status = "online"
+        else:
+            paired_status = "offline"
+
     return render_template(
         "settings.html",
         page="settings",
@@ -9352,6 +9371,8 @@ def settings():
         facebook=facebook_state,
         connector_online=active_device is not None,
         connector_device=active_device,
+        paired_device=paired_device,
+        paired_status=paired_status,
     )
 
 
@@ -9497,6 +9518,74 @@ def extension_pair():
         "token": token,
         "customer_id": customer_id,
         "message": "Đã liên kết FB POST PRO Connector.",
+    })
+
+
+@app.route("/api/extension/status", methods=["GET"])
+@synchronized_state
+def extension_status():
+    customer_id = get_customer_id()
+    if not customer_id:
+        return jsonify({"error": "Bạn chưa đăng nhập."}), 401
+
+    settings_data = load_settings(customer_id)
+    active_id = settings_data.get("active_device_id", "")
+    devices = load_devices(customer_id)
+
+    device = devices.get(active_id) if active_id else None
+    if not device and devices:
+        device = next(iter(devices.values()), None)
+        active_id = device.get("device_id", "") if device else ""
+
+    if not device:
+        return jsonify({
+            "ok": True,
+            "paired": False,
+            "status": "unpaired",
+            "state": "WAITING_FOR_FIRST_CONFIRMATION",
+            "device_id": "",
+        })
+
+    is_revoked = bool(device.get("revoked_at") or device.get("status") == "revoked")
+    if is_revoked:
+        return jsonify({
+            "ok": True,
+            "paired": False,
+            "device_id": active_id,
+            "status": "revoked",
+            "state": "REPAIR_REQUIRED",
+            "error": "Thiết bị đã bị ngắt kết nối hoặc thu hồi quyền.",
+        })
+
+    is_expired = False
+    if device.get("token_expires_at"):
+        exp = parse_iso(device["token_expires_at"])
+        if exp and exp <= utc_now():
+            is_expired = True
+
+    if is_expired:
+        return jsonify({
+            "ok": True,
+            "paired": False,
+            "device_id": active_id,
+            "status": "expired",
+            "state": "TOKEN_EXPIRED",
+            "error": "Phiên làm việc của thiết bị đã hết hạn.",
+        })
+
+    online = device_is_online(device)
+    fb_state = get_facebook_state(customer_id)
+    return jsonify({
+        "ok": True,
+        "paired": True,
+        "device_id": active_id,
+        "name": device.get("name", "Google Chrome • FB POST PRO"),
+        "status": "online" if online else "offline",
+        "state": "CONNECTED" if online else "WORKER_OFFLINE",
+        "last_seen": device.get("last_seen", ""),
+        "worker_state": device.get("worker_state", "idle"),
+        "facebook_logged_in": bool(device.get("facebook_logged_in", False) or (fb_state and fb_state.get("status") == "connected")),
+        "extension_version": device.get("extension_version", ""),
     })
 
 

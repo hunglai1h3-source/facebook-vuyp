@@ -108,33 +108,38 @@
     </article>
 
     <!-- CONNECTOR CONNECTION CARD -->
-    <article class="panel card-pad-lg">
+    <article class="panel card-pad-lg" id="connectorCard">
       <div class="section-header">
         <div>
           <span class="eyebrow">FB POST PRO Connector</span>
           <h3 class="section-title">Liên kết Chrome</h3>
         </div>
-        {% if connector_online or agent_online %}
-        <span class="badge green">
+        <span id="connectorBadge" class="badge {% if connector_online %}green{% elif paired_device and paired_status == 'offline' %}muted{% elif paired_status in ['revoked', 'expired'] %}amber{% else %}muted{% endif %}">
+          {% if connector_online %}
           <span class="pulse pulsing"></span> ONLINE
+          {% elif paired_device and paired_status == 'offline' %}
+          <span class="pulse"></span> NGOẠI TUYẾN
+          {% elif paired_status == 'expired' %}
+          <span class="pulse"></span> HẾT HẠN PHIÊN
+          {% elif paired_status == 'revoked' %}
+          <span class="pulse"></span> CẦN LIÊN KẾT LẠI
+          {% else %}
+          <span class="pulse"></span> ĐANG KIỂM TRA...
+          {% endif %}
         </span>
-        {% else %}
-        <span class="badge amber">
-          <span class="pulse"></span> CHƯA LIÊN KẾT
-        </span>
-        {% endif %}
       </div>
 
-      <div class="connector-status-box {% if connector_online or agent_online %}connected{% endif %}">
-        <div class="connector-box-icon">
+      <div id="connectorStatusBox" class="connector-status-box {% if connector_online %}connected{% endif %}">
+        <div class="connector-box-icon" id="connectorIcon">
           <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
             <path stroke-linecap="round" stroke-linejoin="round" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/>
           </svg>
         </div>
         <div>
-          {% if connector_online or agent_online %}
-          <strong>{{ (connector_device.name if connector_device else (agent_device.name if agent_device else 'FB POST PRO Connector')) }}</strong>
-          <p>Extension đang hoạt động bình thường. Phiên Facebook:
+          <strong id="connectorDeviceName">{{ (connector_device.name if connector_device else (paired_device.name if paired_device else 'FB POST PRO Connector')) }}</strong>
+          <p id="connectorStatusDesc">
+            {% if connector_online %}
+            Extension đang hoạt động bình thường. Phiên Facebook:
             {% if facebook and facebook.status == 'connected' %}
             <b style="color:var(--green)">Đã đăng nhập ✓</b>
             {% elif facebook and facebook.status == 'needs_login' %}
@@ -142,37 +147,52 @@
             {% else %}
             <b style="color:var(--text2)">Đang kiểm tra...</b>
             {% endif %}
+            {% elif paired_device and paired_status == 'offline' %}
+            Đã liên kết thiết bị nhưng Worker tạm thời ngoại tuyến. Mở trình duyệt Chrome để giữ kết nối.
+            {% elif paired_status in ['revoked', 'expired'] %}
+            Phiên liên kết của máy trạm đã hết hạn hoặc bị thu hồi. Bấm nút bên dưới để liên kết lại 1-click.
+            {% else %}
+            Đang tìm kiếm FB POST PRO Connector trên trình duyệt này...
+            {% endif %}
           </p>
-          {% else %}
-          <strong>Chưa liên kết Chrome</strong>
-          <p>Cài extension FB POST PRO Connector vào Chrome, sau đó bấm <b>LIÊN KẾT CHROME NÀY</b> bên dưới để ghép nối.</p>
-          {% endif %}
         </div>
       </div>
 
-      <!-- 3-STEP GUIDE -->
-      <div class="steps-flow">
+      <!-- 3-STEP GUIDE (Ẩn khi đã Connected) -->
+      <div id="stepsFlow" class="steps-flow" {% if connector_online %}style="display:none"{% endif %}>
         <div class="step-card">
           <span class="step-index">1</span>
-          <p>Cài đặt <strong>FB POST PRO Connector</strong> vào Chrome của bạn.</p>
+          <p>Cài đặt <strong>FB POST PRO Connector</strong> vào Chrome.</p>
         </div>
         <div class="step-card">
           <span class="step-index">2</span>
-          <p>Đăng nhập tài khoản Facebook trên tab <strong>facebook.com</strong>.</p>
+          <p>Đăng nhập tài khoản trên tab <strong>facebook.com</strong>.</p>
         </div>
         <div class="step-card">
           <span class="step-index">3</span>
-          <p>Bấm nút <strong>LIÊN KẾT CHROME NÀY</strong> bên dưới để ghép nối.</p>
+          <p>Bấm nút <strong>LIÊN KẾT CHROME NÀY</strong> bên dưới (1-click).</p>
         </div>
       </div>
 
+      <!-- ACTION BUTTON (Chuyển đổi theo State Machine) -->
       <button id="pairBtn" class="btn primary lg w-full" type="button">
         <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
         </svg>
-        <span>LIÊN KẾT CHROME NÀY</span>
+        <span id="pairBtnText">
+          {% if connector_online %}
+          ✓ ĐÃ LIÊN KẾT • WORKER TRỰC TUYẾN
+          {% elif paired_device and paired_status == 'offline' %}
+          ⚡ KÍCH HOẠT LẠI WORKER
+          {% elif paired_status in ['revoked', 'expired'] %}
+          ↻ LIÊN KẾT LẠI CHROME NÀY (1-CLICK)
+          {% else %}
+          LIÊN KẾT CHROME NÀY
+          {% endif %}
+        </span>
       </button>
 
+      <!-- FALLBACK MANUAL PAIR BOX (COLLAPSIBLE) -->
       <div id="pairBox" class="pair-code-container" hidden>
         <span class="pair-caption">Mã liên kết thủ công (Hết hạn sau 10 phút)</span>
         <strong id="pairCode" class="pair-digits">--------</strong>
@@ -184,8 +204,8 @@
         </button>
       </div>
 
-      {% if connector_online or agent_online %}
-      <form method="post" action="{{ url_for('connector_disconnect') }}" onsubmit="return confirm('Ngắt Connector khỏi tài khoản này?')">
+      {% if connector_online or agent_online or paired_device %}
+      <form id="disconnectForm" method="post" action="{{ url_for('connector_disconnect') }}" onsubmit="return confirm('Ngắt Connector khỏi tài khoản này?')">
         <button class="btn danger w-full" type="submit" style="margin-top:10px">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
@@ -205,66 +225,262 @@
   </div>
 </section>
 
-
-
-<!-- PAIRING JAVASCRIPT LOGIC (GIỮ NGUYÊN 100% ID & EVENTS) -->
+<!-- PAIRING JAVASCRIPT STATE MACHINE -->
 <script>
-const pairBtn = document.getElementById('pairBtn');
-const pairBox = document.getElementById('pairBox');
-const pairCode = document.getElementById('pairCode');
-const copyPair = document.getElementById('copyPair');
+(() => {
+  const pairBtn = document.getElementById('pairBtn');
+  const pairBtnText = document.getElementById('pairBtnText');
+  const pairBox = document.getElementById('pairBox');
+  const pairCode = document.getElementById('pairCode');
+  const copyPair = document.getElementById('copyPair');
+  const connectorBadge = document.getElementById('connectorBadge');
+  const connectorStatusBox = document.getElementById('connectorStatusBox');
+  const connectorStatusDesc = document.getElementById('connectorStatusDesc');
+  const stepsFlow = document.getElementById('stepsFlow');
 
-pairBtn?.addEventListener('click', async () => {
-  pairBtn.disabled = true;
-  pairBtn.textContent = 'ĐANG TẠO MÃ...';
-  try {
-    const r = await fetch('{{ url_for("extension_pair_code") }}', {
-      method: 'POST',
-      headers: {'Accept': 'application/json'}
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Không tạo được mã.');
-    pairCode.textContent = data.code;
-    pairBox.hidden = false;
-    pairBtn.textContent = '↻ LIÊN KẾT LẠI';
-    window.postMessage({source: 'FBPOST_WEB', type: 'PAIR_CONNECTOR', code: data.code}, location.origin);
-    if (window.showToast) window.showToast('Đã tạo mã ghép nối: ' + data.code, 'success');
-  } catch (e) {
-    if (window.showToast) window.showToast(e.message || e, 'error');
-    else alert(e.message || e);
-    pairBtn.textContent = '🔗 LIÊN KẾT CHROME NÀY';
-  } finally {
-    pairBtn.disabled = false;
-  }
-});
+  // 7 Standard Lifecycle States
+  let currentState = '{{ "CONNECTED" if connector_online else ("WORKER_OFFLINE" if (paired_device and paired_status == "offline") else ("REPAIR_REQUIRED" if paired_status == "revoked" else ("TOKEN_EXPIRED" if paired_status == "expired" else "WAITING_FOR_FIRST_CONFIRMATION"))) }}';
+  let connectorDetected = false;
+  let handshakeTimer = null;
 
-window.addEventListener('message', (event) => {
-  if (event.source !== window || event.origin !== location.origin) return;
-  const data = event.data || {};
-  if (data.source !== 'FBPOST_EXTENSION' || data.type !== 'PAIR_RESULT') return;
-  if (data.result?.ok) {
-    pairBtn.textContent = '✓ ĐÃ LIÊN KẾT';
-    if (window.showToast) window.showToast('Ghép nối Chrome Extension thành công!', 'success');
-    setTimeout(() => location.reload(), 900);
-  } else if (data.result?.error) {
-    if (window.showToast) window.showToast('Lỗi ghép nối: ' + data.result.error, 'error');
-    else alert('Lỗi ghép nối: ' + data.result.error);
-    pairBtn.textContent = '🔗 LIÊN KẾT CHROME NÀY';
+  function setBadge(cls, html) {
+    if (!connectorBadge) return;
+    connectorBadge.className = 'badge ' + cls;
+    connectorBadge.innerHTML = html;
   }
-});
 
-copyPair?.addEventListener('click', async () => {
-  const code = pairCode.textContent.trim();
-  try {
-    await navigator.clipboard.writeText(code);
-    copyPair.textContent = '✓ ĐÃ SAO CHÉP!';
-    if (window.showToast) window.showToast('Đã sao chép mã liên kết vào clipboard', 'success');
-    setTimeout(() => {
-      copyPair.innerHTML = `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg> <span>SAO CHÉP MÃ</span>`;
-    }, 1500);
-  } catch (e) {
-    prompt('Copy mã bên dưới:', code);
+  function applyState(state, meta) {
+    currentState = state;
+    if (state === 'CONNECTOR_NOT_INSTALLED') {
+      setBadge('muted', '<span class="pulse"></span> CHƯA CÀI EXTENSION');
+      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Chưa phát hiện FB POST PRO Connector trên trình duyệt Chrome này. Hãy tải và cài đặt Extension để kích hoạt tự động hóa.';
+      }
+      if (pairBtnText) pairBtnText.textContent = '↻ KIỂM TRA LẠI EXTENSION';
+      if (pairBtn) pairBtn.disabled = false;
+      if (stepsFlow) stepsFlow.style.display = 'grid';
+    } else if (state === 'WAITING_FOR_FIRST_CONFIRMATION') {
+      setBadge('blue', '<span class="pulse pulsing"></span> SẴN SÀNG LIÊN KẾT');
+      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Đã phát hiện FB POST PRO Connector trên Chrome! Bấm nút bên dưới để ghép nối ngay lập tức (1-Click).';
+      }
+      if (pairBtnText) pairBtnText.textContent = '⚡ LIÊN KẾT CHROME NÀY (1-CLICK)';
+      if (pairBtn) pairBtn.disabled = false;
+      if (stepsFlow) stepsFlow.style.display = 'grid';
+    } else if (state === 'PAIRING') {
+      setBadge('blue', '<span class="pulse pulsing"></span> ĐANG LIÊN KẾT...');
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Đang khởi tạo mã liên kết bảo mật và gửi tới Extension...';
+      }
+      if (pairBtnText) pairBtnText.textContent = '⏳ ĐANG LIÊN KẾT 1-CLICK...';
+      if (pairBtn) pairBtn.disabled = true;
+    } else if (state === 'CONNECTED') {
+      setBadge('green', '<span class="pulse pulsing"></span> ONLINE');
+      if (connectorStatusBox) connectorStatusBox.classList.add('connected');
+      const fbText = meta?.facebookLoggedIn
+        ? '<b style="color:var(--green)">Đã đăng nhập ✓</b>'
+        : '<b style="color:var(--amber)">Cần mở facebook.com đăng nhập ⚠️</b>';
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Extension đang hoạt động bình thường • Worker trực tuyến. Phiên Facebook: ' + fbText;
+      }
+      if (pairBtnText) pairBtnText.textContent = '✓ ĐÃ LIÊN KẾT • WORKER TRỰC TUYẾN';
+      if (pairBtn) pairBtn.disabled = false;
+      if (stepsFlow) stepsFlow.style.display = 'none';
+    } else if (state === 'WORKER_OFFLINE') {
+      setBadge('muted', '<span class="pulse"></span> NGOẠI TUYẾN');
+      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Đã liên kết máy trạm nhưng chưa nhận tín hiệu mới (>75s). Hãy đảm bảo Chrome mở và có kết nối mạng.';
+      }
+      if (pairBtnText) pairBtnText.textContent = '⚡ KÍCH HOẠT LẠI WORKER';
+      if (pairBtn) pairBtn.disabled = false;
+    } else if (state === 'TOKEN_EXPIRED') {
+      setBadge('amber', '<span class="pulse"></span> HẾT HẠN PHIÊN');
+      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Phiên làm việc của máy trạm đã hết hạn bảo mật. Bấm bên dưới để cấp phiên mới (1-Click).';
+      }
+      if (pairBtnText) pairBtnText.textContent = '↻ LIÊN KẾT LẠI CHROME NÀY (1-CLICK)';
+      if (pairBtn) pairBtn.disabled = false;
+    } else if (state === 'REPAIR_REQUIRED') {
+      setBadge('amber', '<span class="pulse"></span> CẦN LIÊN KẾT LẠI');
+      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
+      if (connectorStatusDesc) {
+        connectorStatusDesc.innerHTML = 'Phiên liên kết đã bị thu hồi hoặc ngắt kết nối. Bấm nút bên dưới để ghép nối lại 1-click.';
+      }
+      if (pairBtnText) pairBtnText.textContent = '↻ LIÊN KẾT LẠI CHROME NÀY (1-CLICK)';
+      if (pairBtn) pairBtn.disabled = false;
+    }
   }
-});
+
+  // 1. Initial Handshake with Extension
+  function sendHandshake() {
+    // Check instant DOM marker from web_bridge.js
+    if (document.documentElement.getAttribute('data-fbpostpro-connector') === 'installed') {
+      connectorDetected = true;
+    }
+    // Broadcast ping
+    window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
+
+    // Timeout guard if extension is not installed
+    handshakeTimer = setTimeout(() => {
+      if (!connectorDetected && currentState !== 'CONNECTED') {
+        applyState('CONNECTOR_NOT_INSTALLED');
+      }
+    }, 650);
+  }
+
+  // 2. Listen to Extension Responses
+  window.addEventListener('message', (event) => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const data = event.data || {};
+    if (data.source !== 'FBPOST_EXTENSION') return;
+
+    if (data.type === 'CONNECTOR_READY') {
+      connectorDetected = true;
+      if (handshakeTimer) clearTimeout(handshakeTimer);
+      window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
+      return;
+    }
+
+    if (data.type === 'CONNECTOR_PONG') {
+      connectorDetected = true;
+      if (handshakeTimer) clearTimeout(handshakeTimer);
+      const res = data.result || {};
+      if (res.paired && res.isOnline) {
+        applyState('CONNECTED', res);
+      } else if (res.paired && !res.isOnline) {
+        applyState('WORKER_OFFLINE', res);
+      } else if (res.repairRequired) {
+        applyState('REPAIR_REQUIRED', res);
+      } else {
+        if (currentState !== 'CONNECTED') {
+          applyState('WAITING_FOR_FIRST_CONFIRMATION', res);
+        }
+      }
+      return;
+    }
+
+    if (data.type === 'PAIR_RESULT') {
+      const res = data.result || {};
+      if (res.ok) {
+        applyState('CONNECTED', res);
+        if (window.showToast) window.showToast('Ghép nối Chrome Extension thành công (1-Click)!', 'success');
+        if (pairBox) pairBox.hidden = true;
+      } else {
+        applyState('WAITING_FOR_FIRST_CONFIRMATION');
+        const err = res.error || 'Ghép nối thất bại.';
+        if (window.showToast) window.showToast('Lỗi ghép nối: ' + err, 'error');
+        else alert('Lỗi ghép nối: ' + err);
+        if (pairBox) pairBox.hidden = false;
+      }
+      return;
+    }
+
+    if (data.type === 'RECONNECT_RESULT') {
+      const res = data.result || {};
+      if (res.ok) {
+        applyState('CONNECTED', res);
+        if (window.showToast) window.showToast('Đã kích hoạt lại Worker!', 'success');
+      }
+      return;
+    }
+  });
+
+  // 3. Primary Action Button Click
+  pairBtn?.addEventListener('click', async () => {
+    // If not installed, re-check
+    if (currentState === 'CONNECTOR_NOT_INSTALLED') {
+      sendHandshake();
+      if (window.showToast) window.showToast('Đang quét lại Extension trên trình duyệt...', 'info');
+      return;
+    }
+
+    // If connected already, trigger immediate heartbeat check
+    if (currentState === 'CONNECTED') {
+      window.postMessage({ source: 'FBPOST_WEB', type: 'RECONNECT_CONNECTOR' }, location.origin);
+      if (window.showToast) window.showToast('Đã gửi tín hiệu kiểm tra tới Worker.', 'info');
+      return;
+    }
+
+    // If offline, wake up
+    if (currentState === 'WORKER_OFFLINE') {
+      window.postMessage({ source: 'FBPOST_WEB', type: 'RECONNECT_CONNECTOR' }, location.origin);
+      if (window.showToast) window.showToast('Đang kích hoạt lại Worker...', 'info');
+      return;
+    }
+
+    // FIRST-TIME PAIRING or RE-PAIRING (1-CLICK)
+    applyState('PAIRING');
+    try {
+      const r = await fetch('{{ url_for("extension_pair_code") }}', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Không tạo được mã liên kết.');
+
+      if (pairCode) pairCode.textContent = data.code;
+      // Send directly to Extension content script
+      window.postMessage({
+        source: 'FBPOST_WEB',
+        type: 'PAIR_CONNECTOR',
+        code: data.code
+      }, location.origin);
+
+      // Fallback timer: If extension does not respond in 5s, reveal pairBox for manual entry
+      setTimeout(() => {
+        if (currentState === 'PAIRING') {
+          if (pairBox) pairBox.hidden = false;
+          if (pairBtnText) pairBtnText.textContent = '↻ THỬ LẠI';
+          if (pairBtn) pairBtn.disabled = false;
+        }
+      }, 5000);
+    } catch (e) {
+      applyState('WAITING_FOR_FIRST_CONFIRMATION');
+      const err = e.message || String(e);
+      if (window.showToast) window.showToast(err, 'error');
+      else alert(err);
+    }
+  });
+
+  // 4. Copy Manual Pairing Code Button
+  copyPair?.addEventListener('click', async () => {
+    const code = pairCode?.textContent.trim();
+    if (!code || code === '--------') return;
+    try {
+      await navigator.clipboard.writeText(code);
+      copyPair.textContent = '✓ ĐÃ SAO CHÉP!';
+      if (window.showToast) window.showToast('Đã sao chép mã liên kết', 'success');
+      setTimeout(() => {
+        copyPair.innerHTML = `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg> <span>SAO CHÉP MÃ</span>`;
+      }, 1500);
+    } catch (e) {
+      prompt('Mã liên kết:', code);
+    }
+  });
+
+  // 5. Start Handshake on Load
+  sendHandshake();
+
+  // 6. Polling backend status every 15s to keep state synchronized
+  setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('/api/extension/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.ok && data.paired) {
+        if (data.status === 'online' && currentState !== 'CONNECTED') {
+          applyState('CONNECTED', data);
+        } else if (data.status === 'offline' && currentState === 'CONNECTED') {
+          applyState('WORKER_OFFLINE', data);
+        }
+      }
+    } catch (e) {}
+  }, 15000);
+})();
 </script>
 {% endblock %}
