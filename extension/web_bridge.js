@@ -1,4 +1,6 @@
 (() => {
+  if (window.__FBPOST_WEB_BRIDGE_INJECTED__) return;
+  window.__FBPOST_WEB_BRIDGE_INJECTED__ = true;
   const origin = location.origin;
   const VERSION = (() => {
     try { return chrome.runtime.getManifest().version || '1.0.0'; } catch (e) { return '1.0.0'; }
@@ -13,6 +15,9 @@
   // 2. Announce presence to web page
   const notifyReady = () => {
     try {
+      document.documentElement.setAttribute('data-fbpostpro-connector', 'installed');
+      document.documentElement.setAttribute('data-fbpostpro-version', VERSION);
+      window.dispatchEvent(new CustomEvent('FBPOST_CONNECTOR_READY', { detail: { version: VERSION } }));
       window.postMessage({
         source: 'FBPOST_EXTENSION',
         type: 'CONNECTOR_READY',
@@ -21,6 +26,9 @@
     } catch (e) {}
   };
   notifyReady();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', notifyReady);
+  }
 
   // Save current serverOrigin if not yet configured
   chrome.storage.local.get(['serverOrigin', 'deviceId', 'token']).then(c => {

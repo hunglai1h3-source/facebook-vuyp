@@ -1607,7 +1607,7 @@ async function pollOnce() {
 }
 
 chrome.runtime.onInstalled.addListener(
-  () => {
+  async () => {
     chrome.alarms.create(
       'fbpost-poll',
       {
@@ -1617,6 +1617,40 @@ chrome.runtime.onInstalled.addListener(
     );
 
     poll();
+
+    // Auto-inject into existing open tabs upon installation
+    try {
+      if (chrome.scripting && chrome.tabs) {
+        const webTabs = await chrome.tabs.query({
+          url: [
+            'https://*.onrender.com/*',
+            'http://127.0.0.1/*',
+            'http://localhost/*'
+          ]
+        });
+        for (const tab of webTabs) {
+          if (tab.id) {
+            chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['web_bridge.js']
+            }).catch(() => {});
+          }
+        }
+        const fbTabs = await chrome.tabs.query({
+          url: ['https://*.facebook.com/*', 'https://facebook.com/*']
+        });
+        for (const tab of fbTabs) {
+          if (tab.id) {
+            chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['facebook_runner.js']
+            }).catch(() => {});
+          }
+        }
+      }
+    } catch (e) {
+      console.debug('Script injection into open tabs skipped:', e);
+    }
   }
 );
 
@@ -1723,6 +1757,8 @@ chrome.runtime.onMessage.addListener(
           }
         )
         .catch(err => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
 
     if (msg?.type === 'FBPOST_FACEBOOK_STATUS') {
       if (msg.logged_in && msg.uid) {

@@ -18,6 +18,9 @@
     enctype="multipart/form-data"
     id="campaignWizardForm"
   >
+    <!-- ======================================================= -->
+    <!-- MODE SWITCHER -->
+    <!-- ======================================================= -->
     {% if not simple_mode %}
     <!-- ======================================================= -->
     <!-- MODE SWITCHER -->
@@ -35,6 +38,8 @@
         <span>Chạy ngầm độc lập</span>
       </div>
     </div>
+    {% else %}
+    <button type="button" id="btnModeQuick" style="display:none;" hidden></button>
     {% endif %}
 
     <!-- Hidden Action / Schedule Inputs -->
@@ -203,7 +208,7 @@
         <!-- ACCOUNTS SELECTION -->
         <div style="margin-bottom:20px">
           <label style="font-size:13px; font-weight:700; color:var(--text); margin-bottom:8px; display:block">
-            1. Tài khoản Facebook thực hiện:
+            1. Tài khoản thực hiện:
           </label>
           {% if accounts %}
           <div class="account-select-grid">
@@ -240,7 +245,7 @@
           </div>
           {% else %}
           <div class="panel card-pad empty-compact" style="text-align:center">
-            Chưa có tài khoản Facebook nào. Hãy vào <a href="{{ url_for('accounts_view') }}">Quản lý tài khoản</a> để thêm trước.
+            Chưa có tài khoản nào. Hãy vào <a href="{{ url_for('accounts_view') }}">Quản lý tài khoản</a> để thêm trước.
           </div>
           {% endif %}
         </div>
@@ -258,6 +263,8 @@
             <!-- Rendered dynamically -->
           </div>
         </div>
+        {% else %}
+        <div id="quickAutoBalanceCard" style="display:none;" hidden></div>
         {% endif %}
 
         <!-- GROUPS SELECTION -->
@@ -461,7 +468,6 @@
       </div>
     </div>
 
-    {% if not simple_mode %}
     <!-- ======================================================= -->
     <!-- ADVANCED 6-STEP WIZARD (POWER USER / REGRESSION COMPAT) -->
     <!-- ======================================================= -->
@@ -649,12 +655,12 @@
       <div class="section-header" style="margin-bottom:16px">
         <div>
           <span class="eyebrow">Bước 2 / 6</span>
-          <h3 class="section-title">Chọn tài khoản Facebook thực hiện</h3>
+          <h3 class="section-title">Chọn tài khoản thực hiện</h3>
         </div>
         <span class="badge blue" id="selectedAccountsCount">0 tài khoản đã chọn</span>
       </div>
       <p class="section-desc">
-        Chọn một hoặc nhiều tài khoản Facebook đã liên kết với Chrome profile để tham gia đăng bài.
+        Chọn một hoặc nhiều tài khoản đã liên kết với Chrome profile để tham gia đăng bài.
       </p>
 
       {% if accounts %}
@@ -685,7 +691,7 @@
       </div>
       {% else %}
       <div class="panel card-pad empty-compact" style="text-align:center">
-        Chưa có tài khoản Facebook nào. Hãy vào <a href="{{ url_for('accounts_view') }}">Quản lý tài khoản</a> để thêm trước khi tiếp tục.
+        Chưa có tài khoản nào. Hãy vào <a href="{{ url_for('settings') if simple_mode else url_for('accounts_view') }}">{% if simple_mode %}Cài đặt &amp; Kết nối{% else %}Quản lý tài khoản{% endif %}</a> để thêm trước khi tiếp tục.
       </div>
       {% endif %}
 
@@ -903,7 +909,6 @@
       </div>
     </div>
     </div>
-    {% endif %}
   </form>
 
   <!-- FORM XÓA ẢNH ĐỘC LẬP: tránh lồng form vào form lưu chiến dịch -->

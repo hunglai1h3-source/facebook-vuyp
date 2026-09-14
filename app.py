@@ -8997,7 +8997,7 @@ def validate_campaign_preflight(customer_id, account_ids=None, group_urls=None, 
         })
         can_run = False
     elif unverified_accounts:
-        if SIMPLE_MODE:
+        if SIMPLE_MODE and not account_ids:
             checks.append({
                 "key": "session_verified", "id": "session_verified",
                 "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
@@ -9569,6 +9569,29 @@ def _cleanup_pairing_codes():
     return data
 
 
+@app.route("/download/extension", methods=["GET"])
+def download_extension_zip():
+    import io
+    import zipfile
+    ext_dir = BASE_DIR / "extension"
+    if not ext_dir.exists():
+        return jsonify({"error": "Thư mục Extension không tồn tại."}), 404
+    mem_file = io.BytesIO()
+    with zipfile.ZipFile(mem_file, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(ext_dir):
+            for file in files:
+                p = Path(root) / file
+                arcname = p.relative_to(ext_dir)
+                zf.write(p, str(arcname))
+    mem_file.seek(0)
+    return send_file(
+        mem_file,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="fb-post-pro-connector.zip",
+    )
+
+
 def _make_pairing_code(existing_codes=None):
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     existing = set(existing_codes) if existing_codes else set()
@@ -9731,6 +9754,8 @@ def extension_status():
 
     online = device_is_online(device)
     fb_state = get_facebook_state(customer_id)
+    fb_logged_in = bool(device.get("facebook_logged_in", False) or (fb_state and fb_state.get("status") == "connected"))
+    system_status = "live" if (online and fb_logged_in) else ("needs_login" if online else "offline")
     return jsonify({
         "ok": True,
         "paired": True,
@@ -9740,7 +9765,9 @@ def extension_status():
         "state": "CONNECTED" if online else "WORKER_OFFLINE",
         "last_seen": device.get("last_seen", ""),
         "worker_state": device.get("worker_state", "idle"),
-        "facebook_logged_in": bool(device.get("facebook_logged_in", False) or (fb_state and fb_state.get("status") == "connected")),
+        "facebook_logged_in": fb_logged_in,
+        "system_ready": bool(online and fb_logged_in),
+        "system_status": system_status,
         "extension_version": device.get("extension_version", ""),
     })
 

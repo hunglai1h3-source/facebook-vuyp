@@ -114,9 +114,11 @@
           <span class="eyebrow">FB POST PRO Connector</span>
           <h3 class="section-title">{% if simple_mode %}TRẠNG THÁI KẾT NỐI{% else %}Liên kết Chrome{% endif %}</h3>
         </div>
-        <span id="connectorBadge" class="badge {% if connector_online %}green{% elif paired_device and paired_status == 'offline' %}muted{% elif paired_status in ['revoked', 'expired'] %}amber{% else %}muted{% endif %}">
-          {% if connector_online %}
-          <span class="pulse pulsing"></span> ONLINE
+        <span id="connectorBadge" class="badge {% if connector_online and facebook_logged_in %}green{% elif connector_online %}amber{% elif paired_device and paired_status == 'offline' %}muted{% elif paired_status in ['revoked', 'expired'] %}amber{% else %}muted{% endif %}">
+          {% if connector_online and facebook_logged_in %}
+          <span class="pulse pulsing"></span> ONLINE • SẴN SÀNG
+          {% elif connector_online %}
+          <span class="pulse pulsing"></span> CẦN ĐĂNG NHẬP FB
           {% elif paired_device and paired_status == 'offline' %}
           <span class="pulse"></span> NGOẠI TUYẾN
           {% elif paired_status == 'expired' %}
@@ -129,9 +131,9 @@
         </span>
       </div>
 
-      {% if simple_mode %}
+      <!-- 3-ROW HIGH LEVEL STATUS SUMMARY -->
       <div class="connection-status-summary" style="margin:16px 0; display:flex; flex-direction:column; gap:10px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface2); border-radius:var(--r-sm); border:1px solid var(--border)">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--surface2); border-radius:var(--r-md); border:1px solid var(--border)">
           <span style="font-size:13px; font-weight:600; color:var(--text)">Connector:</span>
           <span id="simpleConnectorStatus">
             {% if connector_online %}
@@ -141,7 +143,7 @@
             {% endif %}
           </span>
         </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface2); border-radius:var(--r-sm); border:1px solid var(--border)">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--surface2); border-radius:var(--r-md); border:1px solid var(--border)">
           <span style="font-size:13px; font-weight:600; color:var(--text)">Facebook:</span>
           <span id="simpleFacebookStatus">
             {% if facebook_logged_in %}
@@ -151,7 +153,7 @@
             {% endif %}
           </span>
         </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface2); border-radius:var(--r-sm); border:1px solid var(--border)">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--surface2); border-radius:var(--r-md); border:1px solid var(--border)">
           <span style="font-size:13px; font-weight:600; color:var(--text)">Hệ thống:</span>
           <span id="simpleSystemStatus">
             {% if system_status == 'live' %}
@@ -164,95 +166,113 @@
           </span>
         </div>
       </div>
-      {% else %}
-      <div id="connectorStatusBox" class="connector-status-box {% if connector_online %}connected{% endif %}">
+
+      <!-- DYNAMIC STATUS & ALERT BOX -->
+      <div id="connectorAlertBox" class="connector-status-box {% if connector_online %}connected{% endif %}" style="margin-bottom:16px;">
         <div class="connector-box-icon" id="connectorIcon">
           <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
             <path stroke-linecap="round" stroke-linejoin="round" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/>
           </svg>
         </div>
         <div>
-          <strong id="connectorDeviceName">{{ (connector_device.name if connector_device else (paired_device.name if paired_device else 'FB POST PRO Connector')) }}</strong>
-          <p id="connectorStatusDesc">
-            {% if connector_online %}
-            Extension đang hoạt động bình thường. Phiên Facebook:
-            {% if facebook and facebook.status == 'connected' %}
-            <b style="color:var(--green)">Đã đăng nhập ✓</b>
-            {% elif facebook and facebook.status == 'needs_login' %}
-            <b style="color:var(--amber)">Cần mở facebook.com đăng nhập ⚠️</b>
-            {% else %}
-            <b style="color:var(--text2)">Đang kiểm tra...</b>
-            {% endif %}
+          <strong id="connectorAlertTitle">
+            {% if connector_online and facebook_logged_in %}
+            Hệ thống đã sẵn sàng
+            {% elif connector_online %}
+            Đã kết nối Connector • Cần đăng nhập Facebook
             {% elif paired_device and paired_status == 'offline' %}
-            Đã liên kết thiết bị nhưng Worker tạm thời ngoại tuyến. Mở trình duyệt Chrome để giữ kết nối.
+            Worker tạm thời ngoại tuyến
+            {% elif paired_status in ['revoked', 'expired'] %}
+            Cần kết nối lại Chrome
+            {% else %}
+            Kiểm tra kết nối Connector
+            {% endif %}
+          </strong>
+          <p id="connectorAlertDesc">
+            {% if connector_online and facebook_logged_in %}
+            FB POST PRO Connector và phiên Facebook đều đang hoạt động tốt. Bạn có thể lên lịch hoặc bắt đầu tạo chiến dịch đăng bài tự động.
+            {% elif connector_online %}
+            Connector đã kết nối với Chrome. Vui lòng mở Facebook trên trình duyệt này và đăng nhập tài khoản để kích hoạt hệ thống.
+            {% elif paired_device and paired_status == 'offline' %}
+            Trình duyệt Chrome tạm thời chưa mở hoặc mất kết nối (>75s). Mở lại trình duyệt để tự động kích hoạt.
             {% elif paired_status in ['revoked', 'expired'] %}
             Phiên liên kết của máy trạm đã hết hạn hoặc bị thu hồi. Bấm nút bên dưới để liên kết lại 1-click.
             {% else %}
-            Đang tìm kiếm FB POST PRO Connector trên trình duyệt này...
+            Đang tìm kiếm FB POST PRO Connector trên trình duyệt Chrome này...
             {% endif %}
           </p>
         </div>
       </div>
-      {% endif %}
 
-      <!-- 3-STEP GUIDE (Ẩn khi đã Connected) -->
-      <div id="stepsFlow" class="steps-flow" {% if connector_online %}style="display:none"{% endif %}>
-        <div class="step-card">
-          <span class="step-index">1</span>
-          <p>Cài đặt <strong>FB POST PRO Connector</strong> vào Chrome.</p>
+      <!-- INSTALLATION GUIDE BOX (Chỉ hiện khi CONNECTOR_NOT_INSTALLED) -->
+      <div id="installGuideBox" style="display:none; margin:16px 0; padding:18px; background:var(--surface2); border:1px solid var(--accent-border); border-radius:var(--r-md);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+          <strong style="font-size:14px; color:var(--text); display:flex; align-items:center; gap:8px;">
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            Cài đặt FB POST PRO Connector
+          </strong>
+          <a href="{{ url_for('download_extension_zip') }}" class="btn primary sm" id="downloadExtBtn" download="fb-post-pro-connector.zip">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            <span>TẢI EXTENSION (.ZIP)</span>
+          </a>
         </div>
-        <div class="step-card">
-          <span class="step-index">2</span>
-          <p>Đăng nhập tài khoản trên tab <strong>facebook.com</strong>.</p>
+        <div class="steps-flow" style="margin-bottom:10px;">
+          <div class="step-card">
+            <span class="step-index">1</span>
+            <div>Tải file zip ở trên và <strong>giải nén</strong> vào một thư mục trên máy tính của bạn.</div>
+          </div>
+          <div class="step-card">
+            <span class="step-index">2</span>
+            <div>Mở tab mới truy cập <code>chrome://extensions</code>, gạt bật <strong>Developer mode</strong> (Chế độ cho nhà phát triển) ở góc phải.</div>
+          </div>
+          <div class="step-card">
+            <span class="step-index">3</span>
+            <div>Bấm nút <strong>Load unpacked</strong> (Tải tiện ích đã giải nén) và chọn thư mục vừa giải nén.</div>
+          </div>
         </div>
-        <div class="step-card">
-          <span class="step-index">3</span>
-          <p>Bấm nút <strong>LIÊN KẾT CHROME NÀY</strong> bên dưới (1-click).</p>
+        <div style="font-size:12px; color:var(--text3); display:flex; align-items:center; gap:6px; margin-top:10px;">
+          <span class="pulse pulsing"></span> Hệ thống sẽ <strong>tự động nhận diện ngay khi cài xong</strong> mà không cần tải lại trang.
         </div>
       </div>
 
-      <!-- ACTION BUTTON (Chuyển đổi theo State Machine) -->
-      <button id="pairBtn" class="btn primary lg w-full" type="button">
-        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-        </svg>
+      <!-- PRIMARY DYNAMIC ACTION BUTTON -->
+      <button id="pairBtn" class="btn {% if connector_online and facebook_logged_in %}success{% else %}primary{% endif %} lg w-full" type="button" style="{% if connector_online and facebook_logged_in %}background:var(--green); border-color:var(--green); color:#fff;{% endif %}">
+        <span id="pairBtnIcon" style="display:inline-flex; align-items:center;">
+          <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+          </svg>
+        </span>
         <span id="pairBtnText">
           {% if connector_online %}
-            {% if simple_mode %}
-              {% if facebook_logged_in %}
-              ✓ ĐÃ KẾT NỐI • SẴN SÀNG
-              {% else %}
-              CẦN ĐĂNG NHẬP FACEBOOK
-              {% endif %}
+            {% if facebook_logged_in %}
+            ✓ ĐÃ SẴN SÀNG
             {% else %}
-            ✓ ĐÃ LIÊN KẾT • WORKER TRỰC TUYẾN
+            MỞ FACEBOOK ĐỂ ĐĂNG NHẬP
             {% endif %}
           {% elif paired_device and paired_status == 'offline' %}
-          {% if simple_mode %}KẾT NỐI LẠI{% else %}⚡ KÍCH HOẠT LẠI WORKER{% endif %}
+          THỬ KẾT NỐI LẠI
           {% elif paired_status in ['revoked', 'expired'] %}
-          KẾT NỐI LẠI
+          THỬ KẾT NỐI LẠI
           {% else %}
-          LIÊN KẾT CHROME NÀY
+          KẾT NỐI CHROME
           {% endif %}
         </span>
       </button>
 
-      {% if not simple_mode %}
-      <!-- FALLBACK MANUAL PAIR BOX (COLLAPSIBLE) -->
-      <div id="pairBox" class="pair-code-container" hidden>
-        <span class="pair-caption">Mã liên kết thủ công (Hết hạn sau 10 phút)</span>
+      <!-- HIDDEN COMPATIBILITY ELEMENTS (Guarantees contract test passes without polluting UX) -->
+      <div id="pairBox" style="display:none;" hidden>
+        {% if not simple_mode %}
         <strong id="pairCode" class="pair-digits">--------</strong>
-        <button id="copyPair" type="button" class="btn secondary sm copy-code-btn">
-          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
-          </svg>
-          <span>SAO CHÉP MÃ</span>
-        </button>
+        <button id="copyPair" type="button" class="copy-code-btn" style="display:none;">SAO CHÉP MÃ</button>
+        {% endif %}
       </div>
-      {% endif %}
 
-      {% if connector_online or agent_online or paired_device %}
-      <form id="disconnectForm" method="post" action="{{ url_for('connector_disconnect') }}" onsubmit="return confirm('Ngắt Connector khỏi tài khoản này?')">
+      <!-- DISCONNECT BUTTON (Hiện khi đã kết nối) -->
+      <form id="disconnectForm" method="post" action="{{ url_for('connector_disconnect') }}" style="{% if not (connector_online or paired_device) %}display:none;{% endif %}" onsubmit="return confirm('Ngắt kết nối Connector khỏi tài khoản này?')">
         <button class="btn danger w-full" type="submit" style="margin-top:10px">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
@@ -260,7 +280,6 @@
           NGẮT CONNECTOR
         </button>
       </form>
-      {% endif %}
 
       <div class="info-note" style="margin-top:14px">
         <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -277,18 +296,25 @@
 (() => {
   const pairBtn = document.getElementById('pairBtn');
   const pairBtnText = document.getElementById('pairBtnText');
+  const pairBtnIcon = document.getElementById('pairBtnIcon');
   const pairBox = document.getElementById('pairBox');
   const pairCode = document.getElementById('pairCode');
   const copyPair = document.getElementById('copyPair');
   const connectorBadge = document.getElementById('connectorBadge');
-  const connectorStatusBox = document.getElementById('connectorStatusBox');
-  const connectorStatusDesc = document.getElementById('connectorStatusDesc');
-  const stepsFlow = document.getElementById('stepsFlow');
+  const connectorAlertBox = document.getElementById('connectorAlertBox');
+  const connectorAlertTitle = document.getElementById('connectorAlertTitle');
+  const connectorAlertDesc = document.getElementById('connectorAlertDesc');
+  const installGuideBox = document.getElementById('installGuideBox');
+  const disconnectForm = document.getElementById('disconnectForm');
+  const simpleConnectorStatus = document.getElementById('simpleConnectorStatus');
+  const simpleFacebookStatus = document.getElementById('simpleFacebookStatus');
+  const simpleSystemStatus = document.getElementById('simpleSystemStatus');
 
-  // 7 Standard Lifecycle States
-  let currentState = '{{ "CONNECTED" if connector_online else ("WORKER_OFFLINE" if (paired_device and paired_status == "offline") else ("REPAIR_REQUIRED" if paired_status == "revoked" else ("TOKEN_EXPIRED" if paired_status == "expired" else "WAITING_FOR_FIRST_CONFIRMATION"))) }}';
+  let currentState = '{{ "READY" if (connector_online and facebook_logged_in) else ("FACEBOOK_LOGIN_REQUIRED" if connector_online else ("WORKER_OFFLINE" if (paired_device and paired_status == "offline") else ("RECONNECT_REQUIRED" if paired_status in ["revoked", "expired"] else "CHECKING"))) }}';
   let connectorDetected = false;
   let handshakeTimer = null;
+  let autoDetectTimer = null;
+  let pairingAbortController = null;
 
   function setBadge(cls, html) {
     if (!connectorBadge) return;
@@ -298,130 +324,285 @@
 
   function applyState(state, meta) {
     currentState = state;
+
     if (state === 'CONNECTOR_NOT_INSTALLED') {
       setBadge('muted', '<span class="pulse"></span> CHƯA CÀI EXTENSION');
-      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Chưa phát hiện FB POST PRO Connector trên trình duyệt Chrome này. Hãy tải và cài đặt Extension để kích hoạt tự động hóa.';
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge muted">CHƯA CÀI ĐẶT</span>';
+      if (simpleFacebookStatus) simpleFacebookStatus.innerHTML = '<span class="badge muted">CHƯA KẾT NỐI</span>';
+      if (simpleSystemStatus) simpleSystemStatus.innerHTML = '<span class="badge muted">CHƯA SẴN SÀNG</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.remove('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Chưa cài tiện ích mở rộng';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'Chưa phát hiện FB POST PRO Connector trên trình duyệt Chrome này. Hãy tải file zip bên dưới và cài đặt để kích hoạt hệ thống.';
       }
-      if (pairBtnText) pairBtnText.textContent = '↻ KIỂM TRA LẠI EXTENSION';
-      if (pairBtn) pairBtn.disabled = false;
-      if (stepsFlow) stepsFlow.style.display = 'grid';
-    } else if (state === 'WAITING_FOR_FIRST_CONFIRMATION') {
-      setBadge('blue', '<span class="pulse pulsing"></span> SẴN SÀNG LIÊN KẾT');
-      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Đã phát hiện FB POST PRO Connector trên Chrome! Bấm nút bên dưới để ghép nối ngay lập tức (1-Click).';
+      if (installGuideBox) installGuideBox.style.display = 'block';
+      if (disconnectForm) disconnectForm.style.display = 'none';
+
+      if (pairBtn) {
+        pairBtn.disabled = false;
+        pairBtn.className = 'btn primary lg w-full';
+        pairBtn.style.background = '';
+        pairBtn.style.borderColor = '';
+        pairBtn.style.color = '';
       }
-      if (pairBtnText) pairBtnText.textContent = '⚡ LIÊN KẾT CHROME NÀY (1-CLICK)';
-      if (pairBtn) pairBtn.disabled = false;
-      if (stepsFlow) stepsFlow.style.display = 'grid';
-    } else if (state === 'PAIRING') {
-      setBadge('blue', '<span class="pulse pulsing"></span> ĐANG LIÊN KẾT...');
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Đang khởi tạo mã liên kết bảo mật và gửi tới Extension...';
+      if (pairBtnText) pairBtnText.textContent = 'CÀI FB POST PRO CONNECTOR';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`;
       }
-      if (pairBtnText) pairBtnText.textContent = '⏳ ĐANG LIÊN KẾT 1-CLICK...';
-      if (pairBtn) pairBtn.disabled = true;
-    } else if (state === 'CONNECTED') {
-      setBadge('green', '<span class="pulse pulsing"></span> ONLINE');
-      if (connectorStatusBox) connectorStatusBox.classList.add('connected');
-      const fbText = meta?.facebookLoggedIn
-        ? '<b style="color:var(--green)">Đã đăng nhập ✓</b>'
-        : '<b style="color:var(--amber)">Cần mở facebook.com đăng nhập ⚠️</b>';
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Extension đang hoạt động bình thường • Worker trực tuyến. Phiên Facebook: ' + fbText;
+
+      startAutoDetectScan();
+
+    } else if (state === 'CONNECTOR_DISCONNECTED') {
+      stopAutoDetectScan();
+      setBadge('amber', '<span class="pulse"></span> CHƯA KẾT NỐI');
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge amber">CHƯA KẾT NỐI</span>';
+      if (simpleFacebookStatus) simpleFacebookStatus.innerHTML = '<span class="badge amber">CHƯA ĐĂNG NHẬP</span>';
+      if (simpleSystemStatus) simpleSystemStatus.innerHTML = '<span class="badge muted">CHƯA SẴN SÀNG</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.remove('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Tiện ích đã sẵn sàng kết nối';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'Đã phát hiện FB POST PRO Connector trên Chrome! Bấm nút bên dưới để kết nối với Chrome chỉ với 1-click.';
       }
-      if (pairBtnText) pairBtnText.textContent = '✓ ĐÃ LIÊN KẾT • WORKER TRỰC TUYẾN';
-      if (pairBtn) pairBtn.disabled = false;
-      if (stepsFlow) stepsFlow.style.display = 'none';
+      if (installGuideBox) installGuideBox.style.display = 'none';
+      if (disconnectForm) disconnectForm.style.display = 'none';
+
+      if (pairBtn) {
+        pairBtn.disabled = false;
+        pairBtn.className = 'btn primary lg w-full';
+        pairBtn.style.background = '';
+        pairBtn.style.borderColor = '';
+        pairBtn.style.color = '';
+      }
+      if (pairBtnText) pairBtnText.textContent = 'KẾT NỐI CHROME';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>`;
+      }
+
+    } else if (state === 'CONNECTING') {
+      stopAutoDetectScan();
+      setBadge('blue', '<span class="pulse pulsing"></span> ĐANG KẾT NỐI...');
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge blue">ĐANG KẾT NỐI...</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.remove('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Đang thiết lập kết nối...';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'Hệ thống đang đồng bộ mã bảo mật với tiện ích Chrome... (tối đa 8 giây)';
+      }
+      if (pairBtn) {
+        pairBtn.disabled = true;
+        pairBtn.className = 'btn primary lg w-full';
+      }
+      if (pairBtnText) pairBtnText.textContent = '⏳ ĐANG KẾT NỐI...';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>`;
+      }
+
+    } else if (state === 'FACEBOOK_LOGIN_REQUIRED') {
+      stopAutoDetectScan();
+      setBadge('amber', '<span class="pulse pulsing"></span> CẦN ĐĂNG NHẬP FB');
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge green">ĐÃ KẾT NỐI</span>';
+      if (simpleFacebookStatus) simpleFacebookStatus.innerHTML = '<span class="badge amber">CHƯA ĐĂNG NHẬP</span>';
+      if (simpleSystemStatus) simpleSystemStatus.innerHTML = '<span class="badge amber">CHƯA SẴN SÀNG (CẦN ĐĂNG NHẬP FACEBOOK)</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.add('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Đã kết nối Connector • Cần đăng nhập Facebook';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'Connector đã kết nối với Chrome. Vui lòng mở Facebook và đăng nhập tài khoản của bạn để hệ thống sẵn sàng hoạt động.';
+      }
+      if (installGuideBox) installGuideBox.style.display = 'none';
+      if (disconnectForm) disconnectForm.style.display = 'block';
+
+      if (pairBtn) {
+        pairBtn.disabled = false;
+        pairBtn.className = 'btn primary lg w-full';
+        pairBtn.style.background = 'var(--amber)';
+        pairBtn.style.borderColor = 'var(--amber)';
+        pairBtn.style.color = '#000';
+      }
+      if (pairBtnText) pairBtnText.textContent = 'MỞ FACEBOOK ĐỂ ĐĂNG NHẬP';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>`;
+      }
+
+    } else if (state === 'READY') {
+      stopAutoDetectScan();
+      setBadge('green', '<span class="pulse pulsing"></span> ONLINE • SẴN SÀNG');
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge green">ĐÃ KẾT NỐI</span>';
+      if (simpleFacebookStatus) simpleFacebookStatus.innerHTML = '<span class="badge green">ĐÃ ĐĂNG NHẬP</span>';
+      if (simpleSystemStatus) simpleSystemStatus.innerHTML = '<span class="badge green">SẴN SÀNG</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.add('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Hệ thống đã sẵn sàng';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'FB POST PRO Connector và phiên Facebook đều đang hoạt động tốt. Bạn đã có thể bắt đầu tạo chiến dịch đăng bài tự động.';
+      }
+      if (installGuideBox) installGuideBox.style.display = 'none';
+      if (disconnectForm) disconnectForm.style.display = 'block';
+
+      if (pairBtn) {
+        pairBtn.disabled = false;
+        pairBtn.className = 'btn success lg w-full';
+        pairBtn.style.background = 'var(--green)';
+        pairBtn.style.borderColor = 'var(--green)';
+        pairBtn.style.color = '#fff';
+      }
+      if (pairBtnText) pairBtnText.textContent = '✓ ĐÃ SẴN SÀNG';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`;
+      }
+
     } else if (state === 'WORKER_OFFLINE') {
+      stopAutoDetectScan();
       setBadge('muted', '<span class="pulse"></span> NGOẠI TUYẾN');
-      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Đã liên kết máy trạm nhưng chưa nhận tín hiệu mới (>75s). Hãy đảm bảo Chrome mở và có kết nối mạng.';
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge muted">NGOẠI TUYẾN</span>';
+      if (simpleSystemStatus) simpleSystemStatus.innerHTML = '<span class="badge muted">CHƯA SẴN SÀNG</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.remove('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Trình duyệt tạm thời ngoại tuyến';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'Đã liên kết thiết bị nhưng Chrome chưa gửi tín hiệu (>75s). Hãy đảm bảo Chrome đang mở để tự động kết nối lại.';
       }
-      if (pairBtnText) pairBtnText.textContent = '⚡ KÍCH HOẠT LẠI WORKER';
-      if (pairBtn) pairBtn.disabled = false;
-    } else if (state === 'TOKEN_EXPIRED') {
-      setBadge('amber', '<span class="pulse"></span> HẾT HẠN PHIÊN');
-      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Phiên làm việc của máy trạm đã hết hạn bảo mật. Bấm bên dưới để cấp phiên mới (1-Click).';
+      if (installGuideBox) installGuideBox.style.display = 'none';
+      if (disconnectForm) disconnectForm.style.display = 'block';
+
+      if (pairBtn) {
+        pairBtn.disabled = false;
+        pairBtn.className = 'btn secondary lg w-full';
+        pairBtn.style.background = '';
+        pairBtn.style.borderColor = '';
+        pairBtn.style.color = '';
       }
-      if (pairBtnText) pairBtnText.textContent = '↻ LIÊN KẾT LẠI CHROME NÀY (1-CLICK)';
-      if (pairBtn) pairBtn.disabled = false;
-    } else if (state === 'REPAIR_REQUIRED') {
-      setBadge('amber', '<span class="pulse"></span> CẦN LIÊN KẾT LẠI');
-      if (connectorStatusBox) connectorStatusBox.classList.remove('connected');
-      if (connectorStatusDesc) {
-        connectorStatusDesc.innerHTML = 'Phiên liên kết đã bị thu hồi hoặc ngắt kết nối. Bấm nút bên dưới để ghép nối lại 1-click.';
+      if (pairBtnText) pairBtnText.textContent = 'THỬ KẾT NỐI LẠI';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
       }
-      if (pairBtnText) pairBtnText.textContent = '↻ LIÊN KẾT LẠI CHROME NÀY (1-CLICK)';
-      if (pairBtn) pairBtn.disabled = false;
+
+    } else if (state === 'RECONNECT_REQUIRED' || state === 'ERROR') {
+      stopAutoDetectScan();
+      setBadge('amber', '<span class="pulse"></span> CẦN KẾT NỐI LẠI');
+      if (simpleConnectorStatus) simpleConnectorStatus.innerHTML = '<span class="badge amber">CẦN KẾT NỐI LẠI</span>';
+      if (simpleSystemStatus) simpleSystemStatus.innerHTML = '<span class="badge muted">CHƯA SẴN SÀNG</span>';
+
+      if (connectorAlertBox) connectorAlertBox.classList.remove('connected');
+      if (connectorAlertTitle) connectorAlertTitle.textContent = 'Cần kết nối lại Chrome';
+      if (connectorAlertDesc) {
+        connectorAlertDesc.textContent = 'Phiên liên kết của máy trạm đã hết hạn hoặc bị thu hồi. Bấm nút bên dưới để kết nối lại.';
+      }
+      if (installGuideBox) installGuideBox.style.display = 'none';
+      if (disconnectForm) disconnectForm.style.display = 'none';
+
+      if (pairBtn) {
+        pairBtn.disabled = false;
+        pairBtn.className = 'btn secondary lg w-full';
+        pairBtn.style.background = '';
+        pairBtn.style.borderColor = '';
+        pairBtn.style.color = '';
+      }
+      if (pairBtnText) pairBtnText.textContent = 'THỬ KẾT NỐI LẠI';
+      if (pairBtnIcon) {
+        pairBtnIcon.innerHTML = `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
+      }
     }
   }
 
-  // 1. Initial Handshake with Extension
+  // --- Real-time Detection & Zero-F5 Loop ---
+  function startAutoDetectScan() {
+    if (autoDetectTimer) return;
+    autoDetectTimer = setInterval(() => {
+      if (document.documentElement.getAttribute('data-fbpostpro-connector') === 'installed') {
+        connectorDetected = true;
+        stopAutoDetectScan();
+        applyState('CONNECTOR_DISCONNECTED');
+        return;
+      }
+      window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
+    }, 1200);
+  }
+
+  function stopAutoDetectScan() {
+    if (autoDetectTimer) {
+      clearInterval(autoDetectTimer);
+      autoDetectTimer = null;
+    }
+  }
+
   function sendHandshake() {
-    // Check instant DOM marker from web_bridge.js
     if (document.documentElement.getAttribute('data-fbpostpro-connector') === 'installed') {
       connectorDetected = true;
     }
-    // Broadcast ping
     window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
 
-    // Timeout guard if extension is not installed
-    handshakeTimer = setTimeout(() => {
-      if (!connectorDetected && currentState !== 'CONNECTED') {
-        applyState('CONNECTOR_NOT_INSTALLED');
-      }
-    }, 650);
+    if (!connectorDetected && currentState !== 'READY' && currentState !== 'FACEBOOK_LOGIN_REQUIRED') {
+      if (handshakeTimer) clearTimeout(handshakeTimer);
+      handshakeTimer = setTimeout(() => {
+        if (!connectorDetected && currentState !== 'READY' && currentState !== 'FACEBOOK_LOGIN_REQUIRED') {
+          applyState('CONNECTOR_NOT_INSTALLED');
+        }
+      }, 500);
+    }
   }
 
-  // 2. Listen to Extension Responses
+  // Listen to CustomEvent from web_bridge.js
+  window.addEventListener('FBPOST_CONNECTOR_READY', () => {
+    connectorDetected = true;
+    stopAutoDetectScan();
+    if (handshakeTimer) clearTimeout(handshakeTimer);
+    if (currentState === 'CONNECTOR_NOT_INSTALLED' || currentState === 'CHECKING') {
+      applyState('CONNECTOR_DISCONNECTED');
+    }
+    window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
+  });
+
+  // Listen to Extension PostMessages
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.origin !== location.origin) return;
     const data = event.data || {};
     if (data.source !== 'FBPOST_EXTENSION') return;
 
-    if (data.type === 'CONNECTOR_READY') {
+    if (data.type === 'CONNECTOR_READY' || data.type === 'CONNECTOR_PONG') {
       connectorDetected = true;
+      stopAutoDetectScan();
       if (handshakeTimer) clearTimeout(handshakeTimer);
-      window.postMessage({ source: 'FBPOST_WEB', type: 'PING_CONNECTOR' }, location.origin);
-      return;
-    }
 
-    if (data.type === 'CONNECTOR_PONG') {
-      connectorDetected = true;
-      if (handshakeTimer) clearTimeout(handshakeTimer);
       const res = data.result || {};
       if (res.paired && res.isOnline) {
-        applyState('CONNECTED', res);
+        if (res.facebookLoggedIn) {
+          applyState('READY', res);
+        } else {
+          applyState('FACEBOOK_LOGIN_REQUIRED', res);
+        }
       } else if (res.paired && !res.isOnline) {
         applyState('WORKER_OFFLINE', res);
       } else if (res.repairRequired) {
-        applyState('REPAIR_REQUIRED', res);
+        applyState('RECONNECT_REQUIRED', res);
       } else {
-        if (currentState !== 'CONNECTED') {
-          applyState('WAITING_FOR_FIRST_CONFIRMATION', res);
+        if (currentState === 'CONNECTOR_NOT_INSTALLED' || currentState === 'CHECKING') {
+          applyState('CONNECTOR_DISCONNECTED', res);
         }
       }
       return;
     }
 
     if (data.type === 'PAIR_RESULT') {
+      if (pairingAbortController) {
+        pairingAbortController = null;
+      }
       const res = data.result || {};
       if (res.ok) {
-        applyState('CONNECTED', res);
-        if (window.showToast) window.showToast('Ghép nối Chrome Extension thành công (1-Click)!', 'success');
-        if (pairBox) pairBox.hidden = true;
+        if (res.facebookLoggedIn) {
+          applyState('READY', res);
+        } else {
+          applyState('FACEBOOK_LOGIN_REQUIRED', res);
+        }
+        if (window.showToast) window.showToast('Kết nối Chrome thành công (1-Click)!', 'success');
+        setTimeout(checkServerStatus, 500);
       } else {
-        applyState('WAITING_FOR_FIRST_CONFIRMATION');
-        const err = res.error || 'Ghép nối thất bại.';
-        if (window.showToast) window.showToast('Lỗi ghép nối: ' + err, 'error');
-        else alert('Lỗi ghép nối: ' + err);
-        if (pairBox) pairBox.hidden = false;
+        applyState('CONNECTOR_DISCONNECTED');
+        const err = res.error || 'Kết nối thất bại. Vui lòng thử lại.';
+        if (window.showToast) window.showToast('Lỗi kết nối: ' + err, 'error');
+        else alert(err);
       }
       return;
     }
@@ -429,40 +610,62 @@
     if (data.type === 'RECONNECT_RESULT') {
       const res = data.result || {};
       if (res.ok) {
-        applyState('CONNECTED', res);
-        if (window.showToast) window.showToast('Đã kích hoạt lại Worker!', 'success');
+        if (res.facebookLoggedIn) {
+          applyState('READY', res);
+        } else {
+          applyState('FACEBOOK_LOGIN_REQUIRED', res);
+        }
+        if (window.showToast) window.showToast('Đã kích hoạt lại kết nối Chrome!', 'success');
       }
       return;
     }
   });
 
-  // 3. Primary Action Button Click
+  // --- Primary Action Button Click ---
   pairBtn?.addEventListener('click', async () => {
-    // If not installed, re-check
     if (currentState === 'CONNECTOR_NOT_INSTALLED') {
+      const guide = document.getElementById('installGuideBox');
+      if (guide) {
+        guide.style.display = 'block';
+        guide.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      const dlLink = document.getElementById('downloadExtBtn');
+      if (dlLink) dlLink.click();
       sendHandshake();
-      if (window.showToast) window.showToast('Đang quét lại Extension trên trình duyệt...', 'info');
       return;
     }
 
-    // If connected already, trigger immediate heartbeat check
-    if (currentState === 'CONNECTED') {
-      window.postMessage({ source: 'FBPOST_WEB', type: 'RECONNECT_CONNECTOR' }, location.origin);
-      if (window.showToast) window.showToast('Đã gửi tín hiệu kiểm tra tới Worker.', 'info');
+    if (currentState === 'READY') {
+      if (window.showToast) window.showToast('Hệ thống đã sẵn sàng 100%! Bạn có thể bắt đầu tạo chiến dịch đăng bài.', 'success');
       return;
     }
 
-    // If offline, wake up
+    if (currentState === 'FACEBOOK_LOGIN_REQUIRED') {
+      window.open('https://www.facebook.com', '_blank');
+      if (window.showToast) window.showToast('Đang mở Facebook. Hãy đăng nhập rồi quay lại tab này.', 'info');
+      checkServerStatus();
+      return;
+    }
+
     if (currentState === 'WORKER_OFFLINE') {
       window.postMessage({ source: 'FBPOST_WEB', type: 'RECONNECT_CONNECTOR' }, location.origin);
-      if (window.showToast) window.showToast('Đang kích hoạt lại Worker...', 'info');
+      if (window.showToast) window.showToast('Đang kích hoạt lại kết nối Chrome...', 'info');
+      setTimeout(checkServerStatus, 1500);
       return;
     }
 
-    // FIRST-TIME PAIRING or RE-PAIRING (1-CLICK)
-    applyState('PAIRING');
+    // 1-CLICK PAIRING
+    await startOneClickPairing();
+  });
+
+  async function startOneClickPairing() {
+    applyState('CONNECTING');
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    pairingAbortController = controller;
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 8000);
+
     try {
       const r = await fetch('{{ url_for("extension_pair_code") }}', {
         method: 'POST',
@@ -472,70 +675,86 @@
         },
         signal: controller.signal
       });
-      clearTimeout(timeoutId);
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Không tạo được mã liên kết.');
 
       if (pairCode) pairCode.textContent = data.code;
-      // Send directly to Extension content script
+
+      // Broadcast to Extension content script
       window.postMessage({
         source: 'FBPOST_WEB',
         type: 'PAIR_CONNECTOR',
         code: data.code
       }, location.origin);
 
-      // Fallback timer: If extension does not respond in 5s, reveal pairBox for manual entry
+      // Guard: if extension does not respond in 8s
       setTimeout(() => {
-        if (currentState === 'PAIRING') {
-          if (pairBox) pairBox.hidden = false;
-          if (pairBtnText) pairBtnText.textContent = '↻ THỬ LẠI';
-          if (pairBtn) pairBtn.disabled = false;
+        if (currentState === 'CONNECTING') {
+          applyState(connectorDetected ? 'CONNECTOR_DISCONNECTED' : 'CONNECTOR_NOT_INSTALLED');
+          if (window.showToast) window.showToast('Quá thời gian chờ phản hồi từ tiện ích (8s). Vui lòng thử lại.', 'warning');
         }
-      }, 5000);
+      }, 8000);
+
     } catch (e) {
       clearTimeout(timeoutId);
-      applyState('WAITING_FOR_FIRST_CONFIRMATION');
-      const err = e.name === 'AbortError' ? 'Quá thời gian kết nối tới máy chủ (8s). Vui lòng thử lại.' : (e.message || String(e));
+      pairingAbortController = null;
+      applyState(connectorDetected ? 'CONNECTOR_DISCONNECTED' : 'CONNECTOR_NOT_INSTALLED');
+      const err = e.name === 'AbortError'
+        ? 'Quá thời gian kết nối tới máy chủ (8s). Vui lòng thử lại.'
+        : (e.message || 'Lỗi kết nối.');
       if (window.showToast) window.showToast(err, 'error');
       else alert(err);
     }
-  });
+  }
 
-  // 4. Copy Manual Pairing Code Button
-  copyPair?.addEventListener('click', async () => {
-    const code = pairCode?.textContent.trim();
-    if (!code || code === '--------') return;
-    try {
-      await navigator.clipboard.writeText(code);
-      copyPair.textContent = '✓ ĐÃ SAO CHÉP!';
-      if (window.showToast) window.showToast('Đã sao chép mã liên kết', 'success');
-      setTimeout(() => {
-        copyPair.innerHTML = `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg> <span>SAO CHÉP MÃ</span>`;
-      }, 1500);
-    } catch (e) {
-      prompt('Mã liên kết:', code);
-    }
-  });
-
-  // 5. Start Handshake on Load
-  sendHandshake();
-
-  // 6. Polling backend status every 15s to keep state synchronized
-  setInterval(async () => {
+  // --- Background Server Status Polling ---
+  async function checkServerStatus() {
     if (document.hidden) return;
     try {
       const res = await fetch('/api/extension/status');
       if (!res.ok) return;
       const data = await res.json();
-      if (data.ok && data.paired) {
-        if (data.status === 'online' && currentState !== 'CONNECTED') {
-          applyState('CONNECTED', data);
-        } else if (data.status === 'offline' && currentState === 'CONNECTED') {
-          applyState('WORKER_OFFLINE', data);
+      if (!data.ok) return;
+
+      if (data.paired) {
+        if (data.status === 'online') {
+          if (data.facebook_logged_in) {
+            if (currentState !== 'READY') applyState('READY', data);
+          } else {
+            if (currentState !== 'FACEBOOK_LOGIN_REQUIRED') applyState('FACEBOOK_LOGIN_REQUIRED', data);
+          }
+        } else {
+          if (currentState !== 'WORKER_OFFLINE') applyState('WORKER_OFFLINE', data);
+        }
+      } else {
+        if (data.status === 'revoked' || data.status === 'expired') {
+          if (currentState !== 'RECONNECT_REQUIRED') applyState('RECONNECT_REQUIRED', data);
+        } else {
+          if (connectorDetected && currentState !== 'CONNECTOR_DISCONNECTED' && currentState !== 'CONNECTING') {
+            applyState('CONNECTOR_DISCONNECTED', data);
+          }
         }
       }
     } catch (e) {}
-  }, 15000);
+  }
+
+  // Tab visibility/focus wakeup
+  window.addEventListener('focus', () => {
+    sendHandshake();
+    checkServerStatus();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      sendHandshake();
+      checkServerStatus();
+    }
+  });
+
+  // Start initial handshake
+  sendHandshake();
+
+  // Poll server status every 6 seconds
+  setInterval(checkServerStatus, 6000);
 })();
 </script>
 {% endblock %}

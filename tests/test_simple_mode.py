@@ -335,7 +335,8 @@ class TestSimpleModeComprehensive(unittest.TestCase):
         self.assertIn("Connector:", html)
         self.assertIn("Facebook:", html)
         self.assertIn("Hệ thống:", html)
-        self.assertIn("LIÊN KẾT CHROME NÀY", html)
+        self.assertTrue("KẾT NỐI CHROME" in html or "LIÊN KẾT CHROME NÀY" in html)
+        self.assertIn("download/extension", html)
 
         self.assertNotIn('id="pairCode"', html)
         self.assertNotIn("Mã liên kết thủ công", html)
