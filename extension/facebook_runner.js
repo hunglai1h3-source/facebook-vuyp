@@ -969,6 +969,68 @@ chrome.runtime.onMessage.addListener(
   }
 );
 
+function detectFacebookSession() {
+  const loginState = pageNeedsLogin();
+  if (loginState) {
+    chrome.runtime.sendMessage({
+      type: 'FBPOST_FACEBOOK_STATUS',
+      logged_in: false,
+      reason: loginState
+    }).catch(() => {});
+    return;
+  }
+
+  let uid = '';
+  // 1. Try reading c_user from document.cookie
+  try {
+    const match = document.cookie.match(/(?:^|;\s*)c_user=([0-9]{1,30})/);
+    if (match && match[1]) uid = match[1];
+  } catch (e) {}
+
+  // 2. Try scanning script tags for USER_ID
+  if (!uid) {
+    try {
+      const scripts = document.querySelectorAll('script');
+      for (const s of scripts) {
+        const text = s.textContent || '';
+        if (text.includes('USER_ID')) {
+          const m = text.match(/"USER_ID"\s*:\s*"([0-9]{1,30})"/);
+          if (m && m[1] && m[1] !== '0') {
+            uid = m[1];
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 3. Try finding profile link
+  if (!uid) {
+    try {
+      const link = document.querySelector('a[href*="profile.php?id="]');
+      if (link) {
+        const m = link.href.match(/profile\.php\?id=([0-9]{1,30})/);
+        if (m && m[1]) uid = m[1];
+      }
+    } catch (e) {}
+  }
+
+  chrome.runtime.sendMessage({
+    type: 'FBPOST_FACEBOOK_STATUS',
+    logged_in: true,
+    uid: uid,
+    url: location.href
+  }).catch(() => {});
+}
+
+// Run detection after page loads
+if (document.readyState === 'complete') {
+  detectFacebookSession();
+} else {
+  window.addEventListener('load', () => setTimeout(detectFacebookSession, 1500));
+}
+setTimeout(detectFacebookSession, 2500);
+
 console.log(
   "FB POST PRO facebook_runner.js loaded"
 );

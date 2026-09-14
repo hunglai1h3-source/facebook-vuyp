@@ -73,6 +73,7 @@ LOCAL_CHROME_MODE_2026_08_19 = False
 CHROME_EXTENSION_MODE_2026_08_19 = True
 PREMIUM_UI_2026_08_18 = True
 LIVEVIEW_TAB_FIX_2026_08_18 = True
+SIMPLE_MODE = os.environ.get("SIMPLE_MODE", "1").strip().lower() not in {"0", "false", "no"}
 
 # ============================================================
 # APP
@@ -3342,6 +3343,75 @@ def delete_facebook_account(customer_id, account_id):
     return True
 
 
+def ensure_simple_mode_context(customer_id):
+    """Auto-manage internal default Facebook account and worker binding for Simple Mode."""
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return None
+
+    devices = load_devices(customer_id)
+    active_device_id = ""
+    active_device = None
+    if isinstance(devices, dict) and devices:
+        sorted_devs = sorted(
+            devices.items(),
+            key=lambda p: str((p[1] or {}).get("last_seen", "")),
+            reverse=True,
+        )
+        for d_id, d_data in sorted_devs:
+            if isinstance(d_data, dict) and not d_data.get("revoked_at") and d_data.get("status") != "revoked":
+                active_device_id = d_id
+                active_device = d_data
+                break
+
+    accounts = load_facebook_accounts(customer_id)
+    target_account = None
+
+    if accounts:
+        if active_device_id:
+            target_account = next((a for a in accounts if a.get("device_id") == active_device_id), None)
+        if not target_account:
+            target_account = accounts[0]
+            if active_device_id and target_account.get("device_id") != active_device_id:
+                try:
+                    target_account = update_facebook_account(
+                        customer_id,
+                        target_account["account_id"],
+                        device_id=active_device_id,
+                    )
+                except Exception:
+                    pass
+    else:
+        display_name = (active_device.get("name") if isinstance(active_device, dict) else None) or "Tài khoản Facebook chính"
+        dev_uid = str((active_device or {}).get("facebook_user_id") or "").strip()
+        try:
+            target_account = create_facebook_account(
+                customer_id,
+                display_name=display_name,
+                facebook_user_id=dev_uid,
+                device_id=active_device_id,
+            )
+        except Exception:
+            accounts = load_facebook_accounts(customer_id)
+            if accounts:
+                target_account = accounts[0]
+
+    if target_account and isinstance(active_device, dict):
+        dev_uid = str(active_device.get("facebook_user_id") or "").strip()
+        acc_uid = str(target_account.get("facebook_user_id") or "").strip()
+        if dev_uid and not acc_uid:
+            try:
+                target_account = update_facebook_account(
+                    customer_id,
+                    target_account["account_id"],
+                    facebook_user_id=dev_uid,
+                )
+            except Exception:
+                pass
+
+    return target_account
+
+
 def load_group_assignments(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     if not customer_id:
@@ -3698,7 +3768,15 @@ def create_engine_campaign(customer_id, campaign_name, snapshot, payload, lifecy
                     update_facebook_account(customer_id, account_id, facebook_user_id=dev_fbid)
                 except Exception:
                     pass
-        if IS_PRODUCTION and lifecycle != 'draft' and not facebook_session_fingerprint(account.get('facebook_user_id')):
+        dev_info = devices.get(device_id, {})
+        if SIMPLE_MODE and lifecycle != 'draft':
+            if dev_info.get("facebook_logged_in") is False or dev_info.get("status") == "needs_login":
+                raise ValueError("Vui lòng đăng nhập Facebook trong Chrome trước khi chạy.")
+            acc_uid = str(account.get("facebook_user_id") or "").strip()
+            dev_uid = str(dev_info.get("facebook_user_id") or "").strip()
+            if acc_uid and dev_uid and acc_uid != dev_uid:
+                raise ValueError("Facebook đang đăng nhập trên Chrome đã thay đổi so với tài khoản trước đó. Vui lòng kiểm tra lại.")
+        elif IS_PRODUCTION and lifecycle != 'draft' and not facebook_session_fingerprint(account.get('facebook_user_id')):
             raise ValueError(f"Tài khoản '{account.get('display_name', account_id)}' chưa được xác minh phiên Facebook từ Worker. Hãy mở Facebook trên profile tương ứng.")
         group_list = []
         for group_url in bucket.get("groups", []):
@@ -6905,6 +6983,36 @@ def get_paired_device(customer_id):
     return public_device(item)
 
 
+@app.context_processor
+def inject_global_template_context():
+    cid = session.get("user_id") or session.get("customer_id")
+    c_online = False
+    fb_logged_in = False
+    fb_status = "offline"
+    if cid:
+        try:
+            active_dev = get_paired_device(cid)
+            c_online = bool(active_dev and device_is_online(active_dev))
+            if active_dev:
+                fb_logged_in = bool(active_dev.get("facebook_logged_in"))
+            if not fb_logged_in:
+                fb_state = get_facebook_state(cid)
+                fb_logged_in = (fb_state.get("status") == "connected")
+            if c_online:
+                fb_status = "live" if fb_logged_in else "needs_login"
+            else:
+                fb_status = "offline"
+        except Exception:
+            pass
+    return {
+        "simple_mode": SIMPLE_MODE,
+        "SIMPLE_MODE": SIMPLE_MODE,
+        "connector_online": c_online,
+        "facebook_logged_in": fb_logged_in,
+        "system_status": fb_status,
+    }
+
+
 # ============================================================
 # CAMPAIGN STATE
 # ============================================================
@@ -8767,14 +8875,19 @@ def api_campaign_detail(campaign_id):
 
 def validate_campaign_preflight(customer_id, account_ids=None, group_urls=None, scheduled_at=None):
     customer_id = sanitize_customer_id(customer_id)
+    if SIMPLE_MODE:
+        ensure_simple_mode_context(customer_id)
     enriched_accounts = {a["account_id"]: a for a in get_enriched_accounts(customer_id)}
     all_groups = load_groups(customer_id)
 
     # Target accounts
     if account_ids is None or len(account_ids) == 0:
-        target_account_ids = [aid for aid, a in enriched_accounts.items() if a.get("group_count", 0) > 0 or a.get("verification_status") == "READY"]
-        if not target_account_ids and enriched_accounts:
+        if SIMPLE_MODE and enriched_accounts:
             target_account_ids = list(enriched_accounts.keys())[:1]
+        else:
+            target_account_ids = [aid for aid, a in enriched_accounts.items() if a.get("group_count", 0) > 0 or a.get("verification_status") == "READY"]
+            if not target_account_ids and enriched_accounts:
+                target_account_ids = list(enriched_accounts.keys())[:1]
     else:
         target_account_ids = [str(a) for a in account_ids if str(a) in enriched_accounts]
 
@@ -8811,17 +8924,25 @@ def validate_campaign_preflight(customer_id, account_ids=None, group_urls=None, 
     if worker_offline_accounts:
         checks.append({
             "key": "worker_online", "id": "worker_online",
-            "label": "Máy trạm Worker", "name": "Máy trạm Worker",
+            "label": "Máy trạm Worker" if not SIMPLE_MODE else "Kết nối Connector", "name": "Máy trạm Worker" if not SIMPLE_MODE else "Kết nối Connector",
             "status": "FAIL",
-            "message": f"Worker ngoại tuyến: {', '.join(worker_offline_accounts)}"
+            "message": f"Worker ngoại tuyến: {', '.join(worker_offline_accounts)}" if not SIMPLE_MODE else "Connector đang ngoại tuyến. Vui lòng bật Extension trên Chrome."
+        })
+        can_run = False
+    elif not target_account_ids and SIMPLE_MODE:
+        checks.append({
+            "key": "worker_online", "id": "worker_online",
+            "label": "Kết nối Connector", "name": "Kết nối Connector",
+            "status": "FAIL",
+            "message": "Chưa có thiết bị Connector nào kết nối. Vui lòng mở Chrome Extension và bấm Liên kết."
         })
         can_run = False
     else:
         checks.append({
             "key": "worker_online", "id": "worker_online",
-            "label": "Máy trạm Worker", "name": "Máy trạm Worker",
+            "label": "Máy trạm Worker" if not SIMPLE_MODE else "Kết nối Connector", "name": "Máy trạm Worker" if not SIMPLE_MODE else "Kết nối Connector",
             "status": "PASS",
-            "message": "Các máy trạm Worker liên quan đang trực tuyến."
+            "message": "Các máy trạm Worker liên quan đang trực tuyến." if not SIMPLE_MODE else "Connector đã kết nối và đang hoạt động."
         })
 
     # 2. Account Ready check
@@ -8876,12 +8997,21 @@ def validate_campaign_preflight(customer_id, account_ids=None, group_urls=None, 
         })
         can_run = False
     elif unverified_accounts:
-        checks.append({
-            "key": "session_verified", "id": "session_verified",
-            "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
-            "status": "WARN",
-            "message": f"Chưa xác minh phiên Facebook cho: {', '.join(unverified_accounts)}. Extension sẽ tự động thử đọc session khi bắt đầu."
-        })
+        if SIMPLE_MODE:
+            checks.append({
+                "key": "session_verified", "id": "session_verified",
+                "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
+                "status": "FAIL",
+                "message": "Vui lòng mở Facebook trên Chrome và đăng nhập."
+            })
+            can_run = False
+        else:
+            checks.append({
+                "key": "session_verified", "id": "session_verified",
+                "label": "Xác minh phiên Facebook", "name": "Xác minh phiên Facebook",
+                "status": "WARN",
+                "message": f"Chưa xác minh phiên Facebook cho: {', '.join(unverified_accounts)}. Extension sẽ tự động thử đọc session khi bắt đầu."
+            })
     else:
         checks.append({
             "key": "session_verified", "id": "session_verified",
@@ -9077,9 +9207,14 @@ def get_enriched_accounts(customer_id):
             verification_status = "SESSION_UNVERIFIED"
             status_label = "Chưa đăng nhập Facebook"
         elif not acc_uid and not dev_uid and dev is not None:
-            status = "session_unverified"
-            verification_status = "SESSION_UNVERIFIED"
-            status_label = "Chờ xác minh phiên Facebook"
+            if SIMPLE_MODE and dev_logged_in is True:
+                status = "ready"
+                verification_status = "READY"
+                status_label = "Sẵn sàng"
+            else:
+                status = "session_unverified"
+                verification_status = "SESSION_UNVERIFIED"
+                status_label = "Chờ xác minh phiên Facebook"
         elif acc_id in busy_accounts:
             status = "busy"
             verification_status = "BUSY"
@@ -10694,6 +10829,12 @@ def run_campaign():
         if not account_group_snapshot:
             if selected_accounts:
                 account_group_snapshot = build_snapshot_from_balanced(customer_id, groups_list, selected_accounts)
+            elif SIMPLE_MODE:
+                def_acc = ensure_simple_mode_context(customer_id)
+                if def_acc and def_acc.get("account_id"):
+                    account_group_snapshot = [{"account_id": def_acc["account_id"], "groups": groups_list}]
+                else:
+                    account_group_snapshot = build_account_group_snapshot(customer_id, groups_list)
             else:
                 account_group_snapshot = build_account_group_snapshot(customer_id, groups_list)
 
@@ -11641,31 +11782,43 @@ def agent_heartbeat():
             connected_at=None,
         )
 
-    accounts = load_facebook_accounts(customer_id)
-    bound_account = next(
-        (item for item in accounts if item.get("device_id") == device_id),
-        None,
-    )
-    if bound_account and raw_fbid and not bound_account.get("facebook_user_id"):
-        try:
-            bound_account = update_facebook_account(
-                customer_id,
-                bound_account["account_id"],
-                facebook_user_id=raw_fbid,
-            )
-        except Exception:
-            pass
-    elif not bound_account and not accounts and facebook_logged_in and raw_fbid:
-        try:
-            account_name = device.get("name") or "Tài khoản Facebook 1"
-            bound_account = create_facebook_account(
-                customer_id,
-                display_name=account_name,
-                facebook_user_id=raw_fbid,
-                device_id=device_id,
-            )
-        except Exception:
-            pass
+    if SIMPLE_MODE:
+        bound_account = ensure_simple_mode_context(customer_id)
+        if bound_account and raw_fbid and bound_account.get("facebook_user_id") != raw_fbid and not bound_account.get("facebook_user_id"):
+            try:
+                bound_account = update_facebook_account(
+                    customer_id,
+                    bound_account["account_id"],
+                    facebook_user_id=raw_fbid,
+                )
+            except Exception:
+                pass
+    else:
+        accounts = load_facebook_accounts(customer_id)
+        bound_account = next(
+            (item for item in accounts if item.get("device_id") == device_id),
+            None,
+        )
+        if bound_account and raw_fbid and not bound_account.get("facebook_user_id"):
+            try:
+                bound_account = update_facebook_account(
+                    customer_id,
+                    bound_account["account_id"],
+                    facebook_user_id=raw_fbid,
+                )
+            except Exception:
+                pass
+        elif not bound_account and not accounts and facebook_logged_in and raw_fbid:
+            try:
+                account_name = device.get("name") or "Tài khoản Facebook 1"
+                bound_account = create_facebook_account(
+                    customer_id,
+                    display_name=account_name,
+                    facebook_user_id=raw_fbid,
+                    device_id=device_id,
+                )
+            except Exception:
+                pass
 
     return jsonify({
         "ok": True,
@@ -11678,7 +11831,7 @@ def agent_heartbeat():
             "display_name": bound_account.get("display_name", ""),
             "facebook_user_id": bound_account.get("facebook_user_id", ""),
         } if bound_account else None,
-        'session_verification_error': verify_worker_session(bound_account, device_id, device) if bound_account else '',
+        'session_verification_error': verify_worker_session(bound_account, device_id, device, simple_mode=SIMPLE_MODE) if bound_account else '',
         'token_expires_at': device.get('token_expires_at', ''),
     })
 

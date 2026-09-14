@@ -141,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (quickCurrentStep === 2) {
         const selAccounts = getQuickSelectedAccounts();
         const selGroups = getQuickSelectedGroups();
-        if (selAccounts.length === 0) {
+        if (quickAccountCheckboxes.length > 0 && selAccounts.length === 0) {
           window.showToast?.('Vui lòng chọn ít nhất 1 tài khoản Facebook.', 'warning');
           return;
         }
@@ -441,7 +441,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const action = campaignActionHidden?.value || 'run';
 
     if (quickPreviewCampName) quickPreviewCampName.textContent = name || '(Chưa đặt tên)';
-    if (quickPreviewAccounts) quickPreviewAccounts.textContent = selAccounts.map(a => a.name).join(', ') || 'Chưa chọn tài khoản';
+    if (quickPreviewAccounts) quickPreviewAccounts.textContent = selAccounts.map(a => a.name).join(', ') || (quickAccountCheckboxes.length === 0 ? 'Tự động (Connector Chrome)' : 'Chưa chọn tài khoản');
     if (quickPreviewGroupsCount) quickPreviewGroupsCount.textContent = `${selGroups.length} Groups Facebook`;
     if (quickPreviewContent) quickPreviewContent.textContent = content || '(Chưa nhập nội dung bài đăng)';
 
@@ -592,7 +592,7 @@ document.addEventListener('DOMContentLoaded', () => {
       quickPostContent?.focus();
       return;
     }
-    if (selAccounts.length === 0) {
+    if (quickAccountCheckboxes.length > 0 && selAccounts.length === 0) {
       window.showToast?.('Vui lòng chọn ít nhất 1 tài khoản Facebook.', 'warning');
       goToQuickStep(2);
       return;

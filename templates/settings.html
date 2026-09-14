@@ -112,7 +112,7 @@
       <div class="section-header">
         <div>
           <span class="eyebrow">FB POST PRO Connector</span>
-          <h3 class="section-title">Liên kết Chrome</h3>
+          <h3 class="section-title">{% if simple_mode %}TRẠNG THÁI KẾT NỐI{% else %}Liên kết Chrome{% endif %}</h3>
         </div>
         <span id="connectorBadge" class="badge {% if connector_online %}green{% elif paired_device and paired_status == 'offline' %}muted{% elif paired_status in ['revoked', 'expired'] %}amber{% else %}muted{% endif %}">
           {% if connector_online %}
@@ -129,6 +129,42 @@
         </span>
       </div>
 
+      {% if simple_mode %}
+      <div class="connection-status-summary" style="margin:16px 0; display:flex; flex-direction:column; gap:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface2); border-radius:var(--r-sm); border:1px solid var(--border)">
+          <span style="font-size:13px; font-weight:600; color:var(--text)">Connector:</span>
+          <span id="simpleConnectorStatus">
+            {% if connector_online %}
+            <span class="badge green">ĐÃ KẾT NỐI</span>
+            {% else %}
+            <span class="badge muted">CHƯA KẾT NỐI</span>
+            {% endif %}
+          </span>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface2); border-radius:var(--r-sm); border:1px solid var(--border)">
+          <span style="font-size:13px; font-weight:600; color:var(--text)">Facebook:</span>
+          <span id="simpleFacebookStatus">
+            {% if facebook_logged_in %}
+            <span class="badge green">ĐÃ ĐĂNG NHẬP</span>
+            {% else %}
+            <span class="badge amber">CHƯA ĐĂNG NHẬP</span>
+            {% endif %}
+          </span>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface2); border-radius:var(--r-sm); border:1px solid var(--border)">
+          <span style="font-size:13px; font-weight:600; color:var(--text)">Hệ thống:</span>
+          <span id="simpleSystemStatus">
+            {% if system_status == 'live' %}
+            <span class="badge green">SẴN SÀNG</span>
+            {% elif system_status == 'needs_login' %}
+            <span class="badge amber">CHƯA SẴN SÀNG (CẦN ĐĂNG NHẬP FACEBOOK)</span>
+            {% else %}
+            <span class="badge muted">CHƯA SẴN SÀNG</span>
+            {% endif %}
+          </span>
+        </div>
+      </div>
+      {% else %}
       <div id="connectorStatusBox" class="connector-status-box {% if connector_online %}connected{% endif %}">
         <div class="connector-box-icon" id="connectorIcon">
           <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -157,6 +193,7 @@
           </p>
         </div>
       </div>
+      {% endif %}
 
       <!-- 3-STEP GUIDE (Ẩn khi đã Connected) -->
       <div id="stepsFlow" class="steps-flow" {% if connector_online %}style="display:none"{% endif %}>
@@ -181,17 +218,26 @@
         </svg>
         <span id="pairBtnText">
           {% if connector_online %}
-          ✓ ĐÃ LIÊN KẾT • WORKER TRỰC TUYẾN
+            {% if simple_mode %}
+              {% if facebook_logged_in %}
+              ✓ ĐÃ KẾT NỐI • SẴN SÀNG
+              {% else %}
+              CẦN ĐĂNG NHẬP FACEBOOK
+              {% endif %}
+            {% else %}
+            ✓ ĐÃ LIÊN KẾT • WORKER TRỰC TUYẾN
+            {% endif %}
           {% elif paired_device and paired_status == 'offline' %}
-          ⚡ KÍCH HOẠT LẠI WORKER
+          {% if simple_mode %}KẾT NỐI LẠI{% else %}⚡ KÍCH HOẠT LẠI WORKER{% endif %}
           {% elif paired_status in ['revoked', 'expired'] %}
-          ↻ LIÊN KẾT LẠI CHROME NÀY (1-CLICK)
+          KẾT NỐI LẠI
           {% else %}
           LIÊN KẾT CHROME NÀY
           {% endif %}
         </span>
       </button>
 
+      {% if not simple_mode %}
       <!-- FALLBACK MANUAL PAIR BOX (COLLAPSIBLE) -->
       <div id="pairBox" class="pair-code-container" hidden>
         <span class="pair-caption">Mã liên kết thủ công (Hết hạn sau 10 phút)</span>
@@ -203,6 +249,7 @@
           <span>SAO CHÉP MÃ</span>
         </button>
       </div>
+      {% endif %}
 
       {% if connector_online or agent_online or paired_device %}
       <form id="disconnectForm" method="post" action="{{ url_for('connector_disconnect') }}" onsubmit="return confirm('Ngắt Connector khỏi tài khoản này?')">

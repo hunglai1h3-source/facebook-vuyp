@@ -18,6 +18,7 @@
     enctype="multipart/form-data"
     id="campaignWizardForm"
   >
+    {% if not simple_mode %}
     <!-- ======================================================= -->
     <!-- MODE SWITCHER -->
     <!-- ======================================================= -->
@@ -34,6 +35,7 @@
         <span>Chạy ngầm độc lập</span>
       </div>
     </div>
+    {% endif %}
 
     <!-- Hidden Action / Schedule Inputs -->
     <input type="hidden" name="campaign_action" id="campaignActionHidden" value="run">
@@ -52,7 +54,7 @@
         <div class="wizard-step-line"></div>
         <div class="wizard-step-node" data-quick-step-target="2">
           <span class="step-badge">2</span>
-          <span class="step-name">Tài khoản &amp; Nhóm</span>
+          <span class="step-name">{% if simple_mode %}Chọn Nhóm{% else %}Tài khoản &amp; Nhóm{% endif %}</span>
         </div>
         <div class="wizard-step-line"></div>
         <div class="wizard-step-node" data-quick-step-target="3">
@@ -176,7 +178,7 @@
 
         <div class="wizard-nav-actions" style="justify-content:flex-end">
           <button type="button" class="btn primary" data-quick-next>
-            Tiếp theo: Chọn tài khoản &amp; Nhóm
+            Tiếp theo: {% if simple_mode %}Chọn Nhóm mục tiêu{% else %}Chọn tài khoản &amp; Nhóm{% endif %}
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
           </button>
         </div>
@@ -187,14 +189,17 @@
         <div class="section-header" style="margin-bottom:16px">
           <div>
             <span class="eyebrow">Bước 2 / 3</span>
-            <h3 class="section-title">Chọn tài khoản &amp; Nhóm mục tiêu</h3>
+            <h3 class="section-title">{% if simple_mode %}Chọn nhóm Facebook mục tiêu{% else %}Chọn tài khoản &amp; Nhóm mục tiêu{% endif %}</h3>
           </div>
           <div style="display:flex; gap:8px">
+            {% if not simple_mode %}
             <span class="badge blue" id="quickAccountCountBadge">0 tài khoản</span>
+            {% endif %}
             <span class="badge blue" id="quickGroupCountBadge">0 nhóm</span>
           </div>
         </div>
 
+        {% if not simple_mode %}
         <!-- ACCOUNTS SELECTION -->
         <div style="margin-bottom:20px">
           <label style="font-size:13px; font-weight:700; color:var(--text); margin-bottom:8px; display:block">
@@ -253,22 +258,25 @@
             <!-- Rendered dynamically -->
           </div>
         </div>
+        {% endif %}
 
         <!-- GROUPS SELECTION -->
         <div style="margin-top:20px; margin-bottom:20px">
           <div class="label-split" style="margin-bottom:8px">
             <label style="font-size:13px; font-weight:700; color:var(--text); margin:0">
-              2. Chọn nhóm Facebook mục tiêu:
+              {% if simple_mode %}Danh sách nhóm Facebook mục tiêu:{% else %}2. Chọn nhóm Facebook mục tiêu:{% endif %}
             </label>
           </div>
 
           <div class="group-select-toolbar">
             <input type="search" id="quickGroupSearch" placeholder="Tìm kiếm nhanh URL nhóm..." style="height:36px; padding:0 10px; border-radius:var(--r-sm); border:1px solid var(--border2); background:var(--surface); color:var(--text); font-size:12px; flex:1 1 180px">
+            {% if not simple_mode %}
             <select id="quickGroupFilter" style="height:36px; padding:0 10px; border-radius:var(--r-sm); border:1px solid var(--border2); background:var(--surface); color:var(--text); font-size:12px">
               <option value="all">Tất cả nhóm</option>
               <option value="assigned">Đã gán tài khoản</option>
               <option value="unassigned">Chưa gán tài khoản</option>
             </select>
+            {% endif %}
             <button type="button" class="btn secondary sm" id="btnQuickSelectAllGroups">Chọn tất cả</button>
             <button type="button" class="btn ghost sm" id="btnQuickDeselectAllGroups">Bỏ chọn</button>
           </div>
@@ -281,7 +289,7 @@
               <span style="font-size:12px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
                 {{ group.url if group is mapping else group }}
               </span>
-              {% if group is mapping and group.account_id %}
+              {% if not simple_mode and group is mapping and group.account_id %}
               {% set matched_acc = accounts|selectattr('account_id', 'equalto', group.account_id)|first %}
               <span class="badge muted" style="font-size:10px">{{ matched_acc.display_name if matched_acc else group.account_id }}</span>
               {% endif %}
@@ -295,6 +303,7 @@
           {% endif %}
         </div>
 
+        {% if not simple_mode %}
         <!-- COLLAPSIBLE MANUAL ALLOCATION ACCORDION -->
         <div style="margin-top:16px">
           <button type="button" class="collapsible-trigger" id="btnToggleQuickManualAlloc">
@@ -314,6 +323,7 @@
             </div>
           </div>
         </div>
+        {% endif %}
 
         <div class="wizard-nav-actions">
           <button type="button" class="btn secondary" data-quick-prev>
@@ -357,10 +367,12 @@
             <span>Tên chiến dịch</span>
             <strong id="quickPreviewCampName">-</strong>
           </div>
+          {% if not simple_mode %}
           <div class="meta-item">
             <span>Tài khoản thực hiện</span>
             <strong id="quickPreviewAccounts">-</strong>
           </div>
+          {% endif %}
           <div class="meta-item">
             <span>Số lượng nhóm</span>
             <strong id="quickPreviewGroupsCount">-</strong>
@@ -449,6 +461,7 @@
       </div>
     </div>
 
+    {% if not simple_mode %}
     <!-- ======================================================= -->
     <!-- ADVANCED 6-STEP WIZARD (POWER USER / REGRESSION COMPAT) -->
     <!-- ======================================================= -->
@@ -890,6 +903,7 @@
       </div>
     </div>
     </div>
+    {% endif %}
   </form>
 
   <!-- FORM XÓA ẢNH ĐỘC LẬP: tránh lồng form vào form lưu chiến dịch -->

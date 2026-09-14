@@ -46,29 +46,44 @@ function headers(
   return h;
 }
 
-async function facebookLoggedIn() {
-  try {
-    const c =
-      await chrome.cookies.get({
-        url:
-          'https://www.facebook.com/',
-        name:
-          'c_user'
-      });
+let lastKnownFacebookUid = '';
 
-    return !!(
-      c &&
-      c.value
-    );
+async function getFacebookUserUid() {
+  if (lastKnownFacebookUid && /^[0-9]{1,30}$/.test(lastKnownFacebookUid)) {
+    return lastKnownFacebookUid;
+  }
+  try {
+    const c = await chrome.cookies.get({ url: 'https://www.facebook.com/', name: 'c_user' });
+    if (c && c.value && /^[0-9]{1,30}$/.test(c.value)) return c.value;
+  } catch (e) {}
+  try {
+    const c = await chrome.cookies.get({ url: 'https://facebook.com/', name: 'c_user' });
+    if (c && c.value && /^[0-9]{1,30}$/.test(c.value)) return c.value;
+  } catch (e) {}
+  try {
+    const list = await chrome.cookies.getAll({ domain: 'facebook.com', name: 'c_user' });
+    if (list && list.length > 0 && list[0].value && /^[0-9]{1,30}$/.test(list[0].value)) return list[0].value;
+  } catch (e) {}
+  return '';
+}
+
+async function facebookLoggedIn() {
+  const uid = await getFacebookUserUid();
+  if (uid) return true;
+  try {
+    const c = await chrome.cookies.get({
+      url: 'https://www.facebook.com/',
+      name: 'c_user'
+    });
+    return !!(c && c.value);
   } catch (e) {
     return false;
   }
 }
 
 async function facebookSessionFingerprint() {
-  const cookie = await chrome.cookies.get({url: 'https://www.facebook.com/', name: 'c_user'});
-  const identity = String(cookie?.value || '');
-  if (!/^[0-9]{1,30}$/.test(identity)) return '';
+  const identity = await getFacebookUserUid();
+  if (!identity) return '';
   const digest = await crypto.subtle.digest(
     'SHA-256', new TextEncoder().encode('fbpostpro:facebook-user:' + identity)
   );
@@ -140,14 +155,9 @@ async function heartbeat(
     return lastHeartbeatResult;
   }
 
-  let identity = '';
-  try {
-    const cookie = await chrome.cookies.get({url: 'https://www.facebook.com/', name: 'c_user'});
-    identity = String(cookie?.value || '');
-    if (!/^[0-9]{1,30}$/.test(identity)) identity = '';
-  } catch (e) {}
+  const identity = await getFacebookUserUid();
   const sessionFingerprint = await facebookSessionFingerprint();
-  const fb = Boolean(sessionFingerprint);
+  const fb = Boolean(sessionFingerprint || identity || (await facebookLoggedIn()));
 
   const r =
     await fetch(
@@ -170,6 +180,12 @@ async function heartbeat(
 
             facebook_logged_in:
               fb,
+
+            facebook_user_id:
+              identity,
+
+            c_user:
+              identity,
 
             worker_state:
               workerState,
@@ -1708,7 +1724,31 @@ chrome.runtime.onMessage.addListener(
         )
         .catch(err => sendResponse({ ok: false, error: String(err) }));
 
+    if (msg?.type === 'FBPOST_FACEBOOK_STATUS') {
+      if (msg.logged_in && msg.uid) {
+        lastKnownFacebookUid = String(msg.uid);
+      } else if (!msg.logged_in) {
+        lastKnownFacebookUid = '';
+      }
+      heartbeat(true).catch(() => {});
+      sendResponse({ ok: true });
       return true;
     }
   }
 );
+
+try {
+  chrome.cookies?.onChanged?.addListener(changeInfo => {
+    if (changeInfo?.cookie?.name === 'c_user' && changeInfo?.cookie?.domain?.includes('facebook.com')) {
+      if (changeInfo.removed) {
+        lastKnownFacebookUid = '';
+      } else if (changeInfo.cookie?.value) {
+        lastKnownFacebookUid = String(changeInfo.cookie.value);
+      }
+      heartbeat(true).catch(() => {});
+    }
+  });
+} catch (e) {}
+
+// Auto-reconnect immediately when service worker starts / wakes up
+poll();
