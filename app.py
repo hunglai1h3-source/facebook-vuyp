@@ -2721,11 +2721,14 @@ def normalize_group_url(url):
 
     sẽ được lưu gần như cùng một dạng.
     """
-
     url = str(url or "").strip()
-
     if not url:
         return ""
+
+    if not re.match(r"^[a-zA-Z]+://", url):
+        url = "https://" + url
+    elif url.startswith("http://"):
+        url = "https://" + url[7:]
 
     try:
         parsed = urlsplit(url)
@@ -2741,8 +2744,13 @@ def normalize_group_url(url):
 
 def valid_facebook_group_url(url):
     """Accept only an HTTPS Facebook Group page, without changing stored URLs."""
+    raw = str(url or "").strip()
+    if not re.match(r"^[a-zA-Z]+://", raw):
+        raw = "https://" + raw
+    elif raw.startswith("http://"):
+        raw = "https://" + raw[7:]
     try:
-        parsed = urlsplit(str(url or "").strip())
+        parsed = urlsplit(raw)
     except ValueError:
         return False
 
@@ -2761,6 +2769,13 @@ def valid_facebook_group_url(url):
         and parts[0].lower() == "groups"
         and bool(parts[1].strip())
     )
+
+
+def _invalidate_groups_cache(customer_id):
+    if has_request_context():
+        cache_key = f"_req_cache_groups_{customer_id}"
+        if hasattr(g, cache_key):
+            delattr(g, cache_key)
 
 
 def load_groups(customer_id):
@@ -3549,6 +3564,7 @@ def delete_groups_by_url(customer_id, group_urls):
                     (customer_id, list(targets)),
                 )
             conn.commit()
+        _invalidate_groups_cache(customer_id)
     return len(targets)
 
 
@@ -3594,6 +3610,7 @@ def import_groups(customer_id, raw_urls):
                             (customer_id, group_url),
                         )
                 conn.commit()
+            _invalidate_groups_cache(customer_id)
     return {"added": accepted, "invalid": invalid, "duplicates": duplicates}
 
 
@@ -8673,37 +8690,26 @@ def add_group():
 def delete_group(
     index
 ):
-
-    customer_id = (
-        get_customer_id()
-    )
-
-    current = (
-        load_groups(
-            customer_id
-        )
-    )
-
-    if (
-        0 <= index
-        < len(current)
-    ):
-
+    customer_id = get_customer_id()
+    current = load_groups(customer_id)
+    target_url = normalize_group_url(request.form.get("group_url", ""))
+    if target_url and target_url in current:
+        deleted = target_url
+    elif 0 <= index < len(current):
         deleted = current[index]
-        delete_groups_by_url(customer_id, [deleted])
+    else:
+        flash("Group không tồn tại hoặc đã bị xóa.", "warning")
+        return redirect(url_for("groups"))
 
-        add_history(
-            customer_id,
-            "info",
-            "Đã xóa Group",
-            deleted,
-        )
-
-    return redirect(
-        url_for(
-            "groups"
-        )
+    delete_groups_by_url(customer_id, [deleted])
+    add_history(
+        customer_id,
+        "info",
+        "Đã xóa Group",
+        deleted,
     )
+    flash("Đã xóa Group khỏi danh sách.", "success")
+    return redirect(url_for("groups"))
 
 
 # ============================================================

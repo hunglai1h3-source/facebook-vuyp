@@ -19,7 +19,10 @@
     const targets = selectedRows();
     if (!targets.length) return window.showToast?.('Hãy chọn ít nhất một Group.', 'warning');
     if (!bulkAccount?.value) return window.showToast?.('Hãy chọn Facebook account.', 'warning');
-    targets.forEach(row => { row.querySelector('[data-account-assignment]').value = bulkAccount.value; });
+    targets.forEach(row => {
+      const sel = row.querySelector('[data-account-assignment]');
+      if (sel) sel.value = bulkAccount.value;
+    });
     window.showToast?.(`Đã cập nhật bản nháp cho ${targets.length} Group. Bấm Lưu phân bổ để xác nhận.`, 'info');
   });
 
@@ -27,7 +30,8 @@
     const accountIds = [...(bulkAccount?.options || [])].map(option => option.value).filter(Boolean);
     if (accountIds.length < 2) return window.showToast?.('Cần ít nhất 2 Facebook account để chia đều.', 'warning');
     rows.forEach((row, index) => {
-      row.querySelector('[data-account-assignment]').value = accountIds[index % accountIds.length];
+      const sel = row.querySelector('[data-account-assignment]');
+      if (sel) sel.value = accountIds[index % accountIds.length];
     });
     window.showToast?.(`Đã tạo bản nháp chia đều ${rows.length} Group. Bạn có thể chỉnh từng dòng trước khi lưu.`, 'info');
   });
@@ -35,7 +39,7 @@
   root.querySelector('[data-save-assignments]')?.addEventListener('click', () => {
     const items = rows.map(row => ({
       group_url: row.dataset.groupUrl,
-      account_id: row.querySelector('[data-account-assignment]').value
+      account_id: row.querySelector('[data-account-assignment]')?.value || ''
     }));
     const form = document.getElementById('assignmentForm');
     form.elements.assignments.value = JSON.stringify(items);

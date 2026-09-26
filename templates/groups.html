@@ -106,14 +106,11 @@
         <input class="group-select" type="checkbox" aria-label="Chọn {{ group.url }}"><span class="group-index">#{{ (pagination.page - 1) * pagination.per_page + loop.index }}</span>
         <div class="group-url-col"><a href="{{ group.url }}" target="_blank" rel="noopener noreferrer" class="group-url-link" title="{{ group.url }}"><span class="truncate-text">{{ group.url }}</span></a></div>
         {% if not simple_mode %}<div class="group-account-col"><select data-account-assignment aria-label="Account cho {{ group.url }}"><option value="">Chưa gán</option>{% for account in accounts %}<option value="{{ account.account_id }}" {% if group.account_id == account.account_id %}selected{% endif %}>{{ account.display_name }}</option>{% endfor %}</select></div>{% endif %}
-        <div class="group-actions-col"><form method="post" action="{{ url_for('delete_group', index=group.original_index) }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa Group này khỏi danh sách?')"><button class="btn danger sm" type="submit">Xóa</button></form></div>
+        <div class="group-actions-col"><form method="post" action="{{ url_for('delete_group', index=group.original_index) }}" onsubmit="return confirm('Bạn có chắc chắn muốn xóa Group này khỏi danh sách?')"><input type="hidden" name="group_url" value="{{ group.url }}"><button class="btn danger sm" type="submit">Xóa</button></form></div>
       </div>
       {% endfor %}
     </div>
     <div class="manager-footer"><span>Hiển thị {{ group_records|length }}/{{ pagination.total_filtered }} kết quả</span>{% if not simple_mode %}<button class="btn primary" type="button" data-save-assignments>LƯU PHÂN BỔ</button>{% endif %}</div>
-    {% if pagination.pages > 1 %}<nav class="pagination" aria-label="Phân trang Group">{% if pagination.page > 1 %}<a class="btn secondary sm" href="{{ url_for('groups', q=query, account=account_filter, page=pagination.page-1) }}">TRƯỚC</a>{% endif %}<span>Trang {{ pagination.page }}/{{ pagination.pages }}</span>{% if pagination.page < pagination.pages %}<a class="btn secondary sm" href="{{ url_for('groups', q=query, account=account_filter, page=pagination.page+1) }}">SAU</a>{% endif %}</nav>{% endif %}
-    {% else %}<div class="empty-state"><p>Không có Group phù hợp. Hãy import danh sách hoặc thay đổi bộ lọc.</p></div>{% endif %}
-  </article>
     {% if pagination.pages > 1 %}<nav class="pagination" aria-label="Phân trang Group">{% if pagination.page > 1 %}<a class="btn secondary sm" href="{{ url_for('groups', q=query, account=account_filter, page=pagination.page-1) }}">TRƯỚC</a>{% endif %}<span>Trang {{ pagination.page }}/{{ pagination.pages }}</span>{% if pagination.page < pagination.pages %}<a class="btn secondary sm" href="{{ url_for('groups', q=query, account=account_filter, page=pagination.page+1) }}">SAU</a>{% endif %}</nav>{% endif %}
     {% else %}<div class="empty-state"><p>Không có Group phù hợp. Hãy import danh sách hoặc thay đổi bộ lọc.</p></div>{% endif %}
   </article>

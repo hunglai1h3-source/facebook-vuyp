@@ -480,13 +480,6 @@ async function pairFromPopup(serverInput, codeInput) {
   }
 }
 
-      error:
-        e?.message ||
-        String(e)
-    };
-  }
-}
-
 async function report(
   c,
   data
