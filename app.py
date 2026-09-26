@@ -1292,43 +1292,171 @@ def logout():
 # GROUPS
 # ============================================================
 
-def load_groups(
-    customer_id
-):
+def init_groups_table():
+    if not postgres_enabled():
+        return
 
-    path = (
-        customer_groups_file(
-            customer_id
-        )
-    )
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fbpostpro_groups (
+                    id BIGSERIAL PRIMARY KEY,
+                    customer_id VARCHAR(40) NOT NULL,
+                    group_url TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(customer_id, group_url)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fbpostpro_groups_customer
+                ON fbpostpro_groups (customer_id)
+                """
+            )
+        conn.commit()
 
-    if not path.exists():
 
+def normalize_group_url(url):
+    url = str(url or "").strip()
+    if not url:
+        return ""
+    url = url.replace("https://facebook.com/", "https://www.facebook.com/")
+    url = url.replace("http://facebook.com/", "https://www.facebook.com/")
+    url = url.replace("http://www.facebook.com/", "https://www.facebook.com/")
+    url = url.split("?", 1)[0]
+    url = url.rstrip("/")
+    return url
+
+
+def load_groups(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
         return []
 
-    return [
-        x.strip()
-        for x
-        in path.read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if x.strip()
+    if not postgres_enabled():
+        path = customer_groups_file(customer_id)
+        if not path.exists():
+            return []
+        return [
+            normalize_group_url(x)
+            for x in path.read_text(encoding="utf-8").splitlines()
+            if normalize_group_url(x)
+        ]
+
+    init_groups_table()
+    migrate_groups_file_to_postgres(customer_id)
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT group_url
+                FROM fbpostpro_groups
+                WHERE customer_id = %s
+                ORDER BY id ASC
+                """,
+                (customer_id,),
+            )
+            rows = cur.fetchall()
+
+    return [row["group_url"] for row in rows if row.get("group_url")]
+
+
+def save_groups(customer_id, groups):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return
+
+    clean_groups = []
+    seen = set()
+    for group in groups or []:
+        group = normalize_group_url(group)
+        if not group or group in seen:
+            continue
+        seen.add(group)
+        clean_groups.append(group)
+
+    if not postgres_enabled():
+        customer_groups_file(customer_id).write_text(
+            "\n".join(clean_groups),
+            encoding="utf-8",
+        )
+        return
+
+    init_groups_table()
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM fbpostpro_groups
+                WHERE customer_id = %s
+                """,
+                (customer_id,),
+            )
+            for group_url in clean_groups:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_groups (customer_id, group_url)
+                    VALUES (%s, %s)
+                    ON CONFLICT (customer_id, group_url)
+                    DO NOTHING
+                    """,
+                    (customer_id, group_url),
+                )
+        conn.commit()
+
+
+def migrate_groups_file_to_postgres(customer_id):
+    if not postgres_enabled():
+        return
+
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return
+
+    path = customer_groups_file(customer_id)
+    if not path.exists():
+        return
+
+    old_groups = [
+        normalize_group_url(x)
+        for x in path.read_text(encoding="utf-8").splitlines()
+        if normalize_group_url(x)
     ]
+    if not old_groups:
+        return
 
+    init_groups_table()
 
-def save_groups(
-    customer_id,
-    groups,
-):
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM fbpostpro_groups
+                WHERE customer_id = %s
+                """,
+                (customer_id,),
+            )
+            row = cur.fetchone()
+            total = int(row["total"] if row else 0)
+            if total > 0:
+                return
 
-    customer_groups_file(
-        customer_id
-    ).write_text(
-        "\n".join(
-            groups
-        ),
-        encoding="utf-8",
-    )
+            for group_url in old_groups:
+                cur.execute(
+                    """
+                    INSERT INTO fbpostpro_groups (customer_id, group_url)
+                    VALUES (%s, %s)
+                    ON CONFLICT (customer_id, group_url)
+                    DO NOTHING
+                    """,
+                    (customer_id, group_url),
+                )
+        conn.commit()
 
 
 # ============================================================

@@ -191,25 +191,18 @@ Soạn nội dung, chọn nhiều ảnh và đăng lên các Group Facebook.
                     >
 
 
-                    <form
-                        method="post"
-                        action="{{ url_for('delete_post_image', filename=image) }}"
-                        style="margin-top: 7px;"
+                    <button
+                        type="submit"
+                        form="del-img-{{ loop.index }}"
+                        class="btn danger"
+                        style="
+                            width: 100%;
+                            padding: 7px;
+                            margin-top: 7px;
+                        "
                     >
-
-                        <button
-                            type="submit"
-                            class="btn danger"
-                            style="
-                                width: 100%;
-                                padding: 7px;
-                            "
-                        >
-                            ✕ Xóa
-                        </button>
-
-                    </form>
-
+                        ✕ Xóa
+                    </button>
                 </div>
 
                 {% endfor %}
@@ -284,6 +277,19 @@ Soạn nội dung, chọn nhiều ảnh và đăng lên các Group Facebook.
         style="display: none;"
     >
     </form>
+
+    <!-- Form xóa từng ảnh -->
+    {% if post_images %}
+    {% for image in post_images %}
+    <form
+        id="del-img-{{ loop.index }}"
+        method="post"
+        action="{{ url_for('delete_post_image', filename=image) }}"
+        style="display: none;"
+    >
+    </form>
+    {% endfor %}
+    {% endif %}
 
 
     <!-- ================================================= -->
