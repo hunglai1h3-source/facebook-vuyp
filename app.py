@@ -9143,10 +9143,42 @@ def validate_campaign_preflight(customer_id, account_ids=None, group_urls=None, 
 
     overall_status = "BLOCKED" if not can_run else ("WARNING" if any(c["status"] == "WARN" for c in checks) else "READY")
 
+    # Unified System Readiness summary for Simple Mode & modern UI
+    system_keys = {"worker_online", "account_ready", "profile_mapped", "session_verified", "account_busy"}
+    system_checks = [c for c in checks if c["key"] in system_keys]
+    system_fails = [c for c in system_checks if c["status"] == "FAIL"]
+    system_warns = [c for c in system_checks if c["status"] == "WARN"]
+
+    if system_fails:
+        sys_status = "FAIL"
+        sys_msg = "⚠ Hệ thống chưa sẵn sàng - Mở Cài đặt & Connector để hoàn tất kết nối."
+        sys_can_run = False
+    elif system_warns:
+        sys_status = "WARN"
+        sys_msg = "⚠ Hệ thống chưa tối ưu - Mở Cài đặt & Connector để kiểm tra kết nối."
+        sys_can_run = True
+    else:
+        sys_status = "PASS"
+        sys_msg = "✓ Hệ thống sẵn sàng - Có thể chạy chiến dịch."
+        sys_can_run = True
+
+    system_ready = {
+        "key": "system_ready",
+        "id": "system_ready",
+        "label": "Hệ thống sẵn sàng",
+        "name": "Hệ thống sẵn sàng",
+        "status": sys_status,
+        "message": sys_msg,
+        "can_run": sys_can_run,
+        "action_url": "/settings",
+        "action_label": "Mở Cài đặt & Connector",
+    }
+
     return {
         "status": overall_status,
         "can_run": can_run,
         "checks": checks,
+        "system_ready": system_ready,
         "selected_accounts": [enriched_accounts[aid] for aid in target_account_ids if aid in enriched_accounts],
         "groups_count": len(target_groups),
     }
@@ -9178,7 +9210,6 @@ def api_campaign_preflight():
 
     scheduled_at = data.get("scheduled_at") or request.form.get("scheduled_at")
     result = validate_campaign_preflight(customer_id, account_ids, group_urls, scheduled_at)
-    return jsonify(result)
     return jsonify(result)
 
 
@@ -10934,7 +10965,7 @@ def run_campaign():
         if campaign_action not in {"run", "schedule", "draft"}:
             return _err("Hành động campaign không hợp lệ.", endpoint="compose")
         if campaign_action in {"schedule", "draft"} and not uses_engine:
-            return _err("Hãy gán Group cho Facebook account và Chrome profile trước khi hẹn lịch.", endpoint="groups")
+            return _err("Chưa thể hẹn lịch vì hệ thống chưa sẵn sàng. Hãy kiểm tra Connector." if SIMPLE_MODE else "Hãy gán Group cho Facebook account và Chrome profile trước khi hẹn lịch.", endpoint="settings" if SIMPLE_MODE else "groups")
 
         if uses_engine:
             if not groups_list:
@@ -10981,6 +11012,11 @@ def run_campaign():
             if campaign_count >= campaign_limit:
                 return _err(f"Tài khoản đã đạt giới hạn {campaign_limit} chiến dịch.", endpoint="compose")
 
+            if SIMPLE_MODE and lifecycle != "draft":
+                pf = validate_campaign_preflight(customer_id, group_urls=groups_list, scheduled_at=req_data.get("scheduled_at"))
+                if pf.get("system_ready", {}).get("status") == "FAIL":
+                    return _err("Chưa thể chạy chiến dịch vì hệ thống chưa sẵn sàng. Hãy kiểm tra Connector.", endpoint="settings")
+
             payload = {
                 "content": content,
                 "images": [Path(x).name for x in settings_data.get("post_images", [])],
@@ -11008,7 +11044,7 @@ def run_campaign():
                     if lifecycle == "scheduled"
                     else "Campaign đã được lưu nháp."
                     if lifecycle == "draft"
-                    else "Campaign đã xếp hàng cho các desktop worker được gắn với từng account."
+                    else ("Chiến dịch đã sẵn sàng và đang thực thi qua Connector." if SIMPLE_MODE else "Campaign đã xếp hàng cho các desktop worker được gắn với từng account.")
                 ),
                 processed=0, total=campaign["total"], success=0, errors=0,
                 pending=campaign["total"], active_tasks=0, skipped=0, cancelled=0,
@@ -11032,15 +11068,18 @@ def run_campaign():
                     "total": campaign["total"],
                     "lifecycle": campaign["lifecycle"],
                     "redirect_url": url_for("campaigns_view"),
-                    "message": "Chiến dịch đã được gửi tới Worker và đang chạy nền."
+                    "message": "Chiến dịch đã được khởi chạy trong nền qua Connector." if SIMPLE_MODE else "Chiến dịch đã được gửi tới Worker và đang chạy nền."
                 })
             flash(
                 "Đã lưu lịch campaign." if lifecycle == "scheduled"
                 else "Đã lưu campaign nháp." if lifecycle == "draft"
-                else "Chiến dịch đã được gửi tới Worker và đang chạy nền.",
+                else ("Chiến dịch đã được khởi chạy trong nền qua Connector." if SIMPLE_MODE else "Chiến dịch đã được gửi tới Worker và đang chạy nền."),
                 "success",
             )
             return redirect(url_for("compose"))
+
+        if SIMPLE_MODE:
+            return _err("Chưa thể chạy chiến dịch vì hệ thống chưa sẵn sàng. Hãy kiểm tra Connector.", endpoint="settings")
 
         device = get_paired_device(customer_id)
         if not device:

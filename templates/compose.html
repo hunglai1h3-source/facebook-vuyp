@@ -359,7 +359,7 @@
           <div class="preflight-header">
             <strong style="font-size:13px; display:flex; align-items:center; gap:8px">
               <span id="quickPreflightStatusDot" style="width:8px; height:8px; border-radius:50%; background:var(--green)"></span>
-              Kiểm tra tiền kiểm tra (Preflight Validation)
+              Kiểm tra an toàn trước khi chạy
             </strong>
             <button type="button" class="btn ghost sm" id="btnRecheckPreflight">Kiểm tra lại</button>
           </div>
@@ -387,6 +387,10 @@
           <div class="meta-item">
             <span>Chế độ khởi chạy</span>
             <strong id="quickPreviewMode">Chạy nền ngay</strong>
+          </div>
+          <div class="meta-item">
+            <span>Đính kèm hình ảnh</span>
+            <strong id="quickPreviewMedia">Không có ảnh</strong>
           </div>
         </div>
 
@@ -447,7 +451,7 @@
         <div class="info-note" style="margin-top:0; margin-bottom:20px">
           <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="flex-shrink:0; color:var(--action-bg)"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
           <div>
-            <strong>Chạy nền độc lập và an toàn:</strong> Chiến dịch sẽ thực thi trên Desktop Worker của bạn. Bạn có thể tự do chuyển tab, thu nhỏ hoặc đóng trình duyệt quản trị mà không ảnh hưởng tới tiến trình đăng bài.
+            <strong>Chạy nền độc lập và an toàn:</strong> Chiến dịch sẽ tự động chạy trong nền qua Connector. Bạn có thể tự do chuyển tab, làm việc khác hoặc đóng trình duyệt quản trị mà không ảnh hưởng tới tiến trình đăng bài.
           </div>
         </div>
 
@@ -813,7 +817,7 @@
       <div class="schedule-options-grid">
         <div class="schedule-option-card selected" data-action="run">
           <strong style="font-size:var(--text-sm); color:var(--text)">🚀 Chạy ngay lập tức</strong>
-          <p style="font-size:12px; color:var(--text2); margin:0; line-height:1.5">Chiến dịch sẽ vào hàng đợi và worker sẽ bắt đầu đăng bài ngay khi sẵn sàng.</p>
+          <p style="font-size:12px; color:var(--text2); margin:0; line-height:1.5">Chiến dịch sẽ vào hàng đợi và Connector sẽ bắt đầu đăng bài ngay khi sẵn sàng.</p>
         </div>
         <div class="schedule-option-card" data-action="schedule">
           <strong style="font-size:var(--text-sm); color:var(--text)">⏰ Hẹn lịch tương lai</strong>
@@ -970,7 +974,7 @@
       <div>
         <strong>FB POST PRO Connector</strong>
         <p data-campaign-message>{{ (campaign_state.message if campaign_state and campaign_state.message else 'Chưa có tác vụ nào đang chạy.') }}</p>
-        <small data-worker-status>Đang kiểm tra desktop worker...</small>
+        <small data-worker-status>Đang kiểm tra kết nối Connector...</small>
       </div>
     </div>
 

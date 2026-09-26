@@ -439,10 +439,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const selAccounts = getQuickSelectedAccounts();
     const selGroups = getQuickSelectedGroups();
     const action = campaignActionHidden?.value || 'run';
+    const quickImagesInput = document.getElementById('quick_images');
+    const imgCount = quickImagesInput && quickImagesInput.files ? quickImagesInput.files.length : 0;
+    const quickPreviewMedia = document.getElementById('quickPreviewMedia');
 
     if (quickPreviewCampName) quickPreviewCampName.textContent = name || '(Chưa đặt tên)';
     if (quickPreviewAccounts) quickPreviewAccounts.textContent = selAccounts.map(a => a.name).join(', ') || (quickAccountCheckboxes.length === 0 ? 'Tự động (Connector Chrome)' : 'Chưa chọn tài khoản');
     if (quickPreviewGroupsCount) quickPreviewGroupsCount.textContent = `${selGroups.length} Groups Facebook`;
+    if (quickPreviewMedia) quickPreviewMedia.textContent = imgCount > 0 ? `${imgCount} hình ảnh đính kèm` : 'Không có ảnh';
     if (quickPreviewContent) quickPreviewContent.textContent = content || '(Chưa nhập nội dung bài đăng)';
 
     if (quickPreviewMode) {
@@ -453,6 +457,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Preflight validation caller
+  let lastPreflightSystemReady = true;
+
   async function triggerPreflightCheck() {
     if (!quickPreflightChecksGrid) return;
     const selAccounts = getQuickSelectedAccounts();
@@ -461,7 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     quickPreflightChecksGrid.innerHTML = `
       <div style="grid-column:1/-1; padding:8px 0; color:var(--text2); font-size:12px; display:flex; align-items:center; gap:8px">
-        <span class="pulse pulsing" style="background:var(--blue)"></span> Đang kiểm tra hệ thống (Worker, Tài khoản, Session, Nhóm)...
+        <span class="pulse pulsing" style="background:var(--blue)"></span> Đang kiểm tra hệ thống và nội dung chiến dịch...
       </div>
     `;
 
@@ -489,33 +495,127 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderPreflightResults(data) {
     if (!quickPreflightCard || !quickPreflightChecksGrid) return;
 
-    const status = data.status || 'READY';
-    quickPreflightCard.className = `preflight-card status-${status.toLowerCase()}`;
+    // 1. Content check (Essential 1)
+    const contentText = (quickPostContent?.value || '').trim();
+    const quickImagesInput = document.getElementById('quick_images');
+    const imgCount = quickImagesInput && quickImagesInput.files ? quickImagesInput.files.length : 0;
+    let contentCheck = {
+      key: 'content_valid',
+      label: 'Nội dung bài đăng',
+      status: 'PASS',
+      message: `Đã có nội dung (${contentText.length} ký tự)${imgCount > 0 ? ` kèm ${imgCount} ảnh` : ''}.`
+    };
+    if (!contentText) {
+      contentCheck.status = 'FAIL';
+      contentCheck.message = 'Chưa có nội dung bài đăng. Vui lòng nhập nội dung ở Bước 1.';
+    }
 
+    // 2. Groups check (Essential 2)
+    const rawGrpCheck = (data.checks || []).find(c => c.key === 'groups_valid');
+    const selGroups = getQuickSelectedGroups();
+    let groupsCheck = {
+      key: 'groups_valid',
+      label: 'Danh sách nhóm',
+      status: rawGrpCheck ? rawGrpCheck.status : (selGroups.length > 0 ? 'PASS' : 'FAIL'),
+      message: rawGrpCheck ? rawGrpCheck.message : `${selGroups.length} nhóm Facebook hợp lệ.`
+    };
+    if (selGroups.length === 0) {
+      groupsCheck.status = 'FAIL';
+      groupsCheck.message = 'Chưa có nhóm nào được chọn. Vui lòng chọn nhóm ở Bước 2.';
+    }
+
+    // 3. Schedule check (Essential 3)
+    const rawSchedCheck = (data.checks || []).find(c => c.key === 'schedule_valid');
+    let scheduleCheck = {
+      key: 'schedule_valid',
+      label: 'Lịch chạy',
+      status: rawSchedCheck ? rawSchedCheck.status : 'PASS',
+      message: rawSchedCheck ? rawSchedCheck.message : 'Chạy ngay lập tức trong nền.'
+    };
+
+    // 4. System readiness unified check (Essential 4 - replaces all legacy technical checks)
+    let systemCheck = {
+      key: 'system_ready',
+      label: 'Hệ thống sẵn sàng',
+      status: 'PASS',
+      message: '✓ Hệ thống sẵn sàng - Có thể chạy chiến dịch.',
+      hasAction: false
+    };
+
+    if (data.system_ready) {
+      systemCheck.status = data.system_ready.status || 'PASS';
+      systemCheck.message = data.system_ready.message || (systemCheck.status === 'PASS' ? '✓ Hệ thống sẵn sàng - Có thể chạy chiến dịch.' : '⚠ Hệ thống chưa sẵn sàng - Mở Cài đặt & Connector để hoàn tất kết nối.');
+      if (systemCheck.status !== 'PASS') {
+        systemCheck.hasAction = true;
+      }
+    } else {
+      const technicalKeys = ['worker_online', 'account_ready', 'profile_mapped', 'session_verified', 'account_busy'];
+      const techChecks = (data.checks || []).filter(c => technicalKeys.includes(c.key));
+      const hasFail = techChecks.some(c => c.status === 'FAIL');
+      const hasWarn = techChecks.some(c => c.status === 'WARN');
+      if (hasFail) {
+        systemCheck.status = 'FAIL';
+        systemCheck.message = '⚠ Hệ thống chưa sẵn sàng - Mở Cài đặt & Connector để hoàn tất kết nối.';
+        systemCheck.hasAction = true;
+      } else if (hasWarn) {
+        systemCheck.status = 'WARN';
+        systemCheck.message = '⚠ Hệ thống chưa tối ưu - Mở Cài đặt & Connector để kiểm tra kết nối.';
+        systemCheck.hasAction = true;
+      } else {
+        systemCheck.status = 'PASS';
+        systemCheck.message = '✓ Hệ thống sẵn sàng - Có thể chạy chiến dịch.';
+      }
+    }
+
+    lastPreflightSystemReady = (systemCheck.status !== 'FAIL');
+    window._lastPreflightSystemReady = lastPreflightSystemReady;
+
+    // Build the 4 user-facing cards
+    const userFacingChecks = [contentCheck, groupsCheck, scheduleCheck, systemCheck];
+
+    // Compute overall status for the card wrapper
+    const anyFail = userFacingChecks.some(c => c.status === 'FAIL') || !data.can_run;
+    const anyWarn = userFacingChecks.some(c => c.status === 'WARN');
+    const overallStatus = anyFail ? 'BLOCKED' : (anyWarn ? 'WARNING' : 'READY');
+
+    quickPreflightCard.className = `preflight-card status-${overallStatus.toLowerCase()}`;
     if (quickPreflightStatusDot) {
-      if (status === 'READY') quickPreflightStatusDot.style.background = 'var(--green)';
-      else if (status === 'WARNING') quickPreflightStatusDot.style.background = 'var(--amber)';
+      if (overallStatus === 'READY') quickPreflightStatusDot.style.background = 'var(--green)';
+      else if (overallStatus === 'WARNING') quickPreflightStatusDot.style.background = 'var(--amber)';
       else quickPreflightStatusDot.style.background = 'var(--red)';
     }
 
-    const checks = data.checks || [];
-    quickPreflightChecksGrid.innerHTML = checks.map(c => {
+    // Render 4 clean cards into grid
+    quickPreflightChecksGrid.innerHTML = userFacingChecks.map(c => {
       const st = c.status || 'PASS';
       const icon = st === 'PASS' ? '✓' : (st === 'WARN' ? '⚠' : '✗');
       const cls = st === 'PASS' ? 'check-pass' : (st === 'WARN' ? 'check-warn' : 'check-fail');
+      const actionHtml = c.hasAction ? `
+        <div style="margin-top:6px">
+          <a href="/settings" class="btn secondary sm" style="display:inline-flex; align-items:center; gap:5px; text-decoration:none; padding:3px 9px; font-size:11px; font-weight:600">
+            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            Mở Cài đặt &amp; Connector
+          </a>
+        </div>
+      ` : '';
+
       return `
         <div class="preflight-check-item ${cls}">
           <span class="check-icon" style="font-weight:700">${icon}</span>
           <div style="min-width:0; flex:1">
             <strong style="display:block; font-size:12px">${c.label}</strong>
             <span style="display:block; font-size:11px; color:var(--text2); line-height:1.4">${c.message}</span>
+            ${actionHtml}
           </div>
         </div>
       `;
     }).join('');
 
+    const canRun = !anyFail && data.can_run !== false && contentCheck.status === 'PASS';
+    window._lastPreflightCanRun = canRun;
+
     if (btnQuickStartCampaign) {
-      btnQuickStartCampaign.disabled = !data.can_run;
+      btnQuickStartCampaign.disabled = !canRun;
     }
   }
 
@@ -571,6 +671,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   async function executeQuickCampaign(isDraft) {
+    if (!isDraft && window._lastPreflightSystemReady === false) {
+      window.showToast?.('Chưa thể chạy chiến dịch vì hệ thống chưa sẵn sàng. Hãy kiểm tra Connector.', 'warning');
+      return;
+    }
+
     const name = (quickCampaignName?.value || '').trim();
     const content = (quickPostContent?.value || '').trim();
     const minDelay = parseInt(quickMinDelay?.value || 1, 10);
@@ -669,7 +774,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 1200);
       } else {
         const err = await res.text();
-        window.showToast?.(`Lỗi khởi chạy chiến dịch: ${err}`, 'error');
+        let userErrMsg = err;
+        try {
+          const parsed = JSON.parse(err);
+          userErrMsg = parsed.error || parsed.message || err;
+        } catch(e) {}
+        if (/worker|profile|device|session|token|c_user|uid/i.test(userErrMsg)) {
+          userErrMsg = 'Chưa thể chạy chiến dịch vì hệ thống chưa sẵn sàng. Hãy kiểm tra Connector.';
+        }
+        window.showToast?.(`Lỗi khởi chạy chiến dịch: ${userErrMsg}`, 'error');
         if (btnQuickStartCampaign) {
           btnQuickStartCampaign.disabled = false;
           btnQuickStartCampaign.innerHTML = '<svg width="17" height="17" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> BẮT ĐẦU NGAY';
