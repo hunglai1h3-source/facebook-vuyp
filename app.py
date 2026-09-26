@@ -3137,7 +3137,7 @@ def create_facebook_account(customer_id, display_name, facebook_user_id="", devi
     accounts = load_facebook_accounts(customer_id)
     user = find_user_by_id(customer_id) or {}
     raw_limit = user.get("max_facebook_accounts")
-    account_limit = max(10, int(raw_limit if raw_limit is not None else 10))
+    account_limit = max(1, int(raw_limit if raw_limit is not None else 10))
     if len(accounts) >= account_limit:
         raise ValueError(f"Tài khoản đã đạt giới hạn {account_limit} Facebook account.")
     if any(item.get("display_name", "").casefold() == display_name.casefold() for item in accounts):
@@ -9732,17 +9732,26 @@ def extension_pair():
         device_id = req_device_id
     else:
         if len(devices) >= device_limit:
-            offline_candidates = [
-                (d_id, d_data) for d_id, d_data in devices.items()
-                if d_data.get("status") in {"offline", "revoked"} or d_data.get("worker_state") == "offline" or not d_data.get("last_seen")
-            ]
-            if offline_candidates:
-                offline_candidates.sort(key=lambda x: x[1].get("last_seen") or x[1].get("paired_at") or "")
-                devices.pop(offline_candidates[0][0], None)
+            if SIMPLE_MODE:
+                offline_candidates = [
+                    (d_id, d_data) for d_id, d_data in devices.items()
+                    if d_data.get("status") in {"offline", "revoked"} or d_data.get("worker_state") == "offline" or not d_data.get("last_seen")
+                ]
+                if offline_candidates:
+                    offline_candidates.sort(key=lambda x: x[1].get("last_seen") or x[1].get("paired_at") or "")
+                    devices.pop(offline_candidates[0][0], None)
+                else:
+                    return jsonify({
+                        "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
+                    }), 409
             else:
-                return jsonify({
-                    "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
-                }), 409
+                revoked = [(d_id, d) for d_id, d in devices.items() if d.get("status") == "revoked" or d.get("revoked_at")]
+                if revoked:
+                    devices.pop(revoked[0][0], None)
+                else:
+                    return jsonify({
+                        "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
+                    }), 409
         device_id = sanitize_device_id("ext_" + uuid.uuid4().hex[:16])
 
     token = secrets.token_urlsafe(40)
@@ -9754,9 +9763,9 @@ def extension_pair():
         'token_expires_at': (utc_now() + timedelta(days=DEVICE_TOKEN_TTL_DAYS)).isoformat(timespec='seconds'),
         "mode": "chrome_extension",
         "paired_at": now_iso(),
-        "last_seen": now_iso(),
-        "status": "online",
-        "worker_state": "idle",
+        "last_seen": "",
+        "status": "offline",
+        "worker_state": "offline",
         "current_job_id": "",
         "facebook_logged_in": False,
         "extension_version": str(payload.get("extension_version", ""))[:30],

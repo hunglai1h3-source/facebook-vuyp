@@ -53,8 +53,8 @@ def check_contracts():
             # System hardening replaces the old runner success heuristic; its
             # delivery/identity contracts are exercised by worker_safety_regression.js.
             "extension/facebook_runner.js",
-            # Phase 12 modern navigation, dashboard, and management
-            "templates/base.html", "templates/dashboard.html",
+            # Phase 12 & Simple Mode modern navigation, dashboard, and settings
+            "templates/base.html", "templates/dashboard.html", "templates/settings.html",
         }:
             continue
         assert contract(ROOT / relative) == digest, f"Business contract changed: {relative}"

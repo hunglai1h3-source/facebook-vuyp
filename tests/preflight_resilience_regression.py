@@ -1,4 +1,4 @@
-﻿"""Regression test suite for deploy_preflight resilience, diagnostics, and zero secret leaks."""
+"""Regression test suite for deploy_preflight resilience, diagnostics, and zero secret leaks."""
 import io
 import os
 import sys
