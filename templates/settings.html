@@ -263,12 +263,23 @@
         </span>
       </button>
 
-      <!-- HIDDEN COMPATIBILITY ELEMENTS (Guarantees contract test passes without polluting UX) -->
-      <div id="pairBox" style="display:none;" hidden>
-        {% if not simple_mode %}
-        <strong id="pairCode" class="pair-digits">--------</strong>
-        <button id="copyPair" type="button" class="copy-code-btn" style="display:none;">SAO CHÉP MÃ</button>
-        {% endif %}
+      <!-- PAIR CODE DISPLAY BOX (Appears when code is generated) -->
+      <div id="pairBox" class="pair-code-action-box" style="display:none; margin-top:14px; padding:16px; background:var(--surface2); border:1px solid var(--border); border-radius:var(--r-md); text-align:center;">
+        <div style="font-size:12px; color:var(--text2); margin-bottom:8px;">Mã kết nối của bạn (hiệu lực trong 10 phút):</div>
+        <div style="display:flex; justify-content:center; align-items:center; gap:10px; margin-bottom:10px;" id="pairDigitsContainer">
+          {% if not simple_mode %}
+          <strong id="pairCode" class="pair-digits" style="font-family:var(--font-mono); font-size:22px; letter-spacing:0.18em; color:var(--accent, #6366f1); background:var(--surface); padding:8px 18px; border-radius:var(--r-sm); border:1px dashed var(--accent, #6366f1);">--------</strong>
+          {% endif %}
+          <button id="copyPair" type="button" class="copy-code-btn btn secondary sm" style="padding:6px 12px;">SAO CHÉP MÃ</button>
+        </div>
+        <div style="font-size:11px; color:var(--muted); line-height:1.5;">
+          Mở tiện ích <b>FB POST PRO Connector</b> trên thanh công cụ Chrome và dán mã vào để ghép nối.
+        </div>
+        <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); display:flex; justify-content:center; align-items:center; gap:8px; font-size:11px; color:var(--text2); flex-wrap:wrap;">
+          <span>URL Website:</span>
+          <code id="serverOriginDisplay" style="background:var(--surface); padding:3px 8px; border-radius:4px; font-family:var(--font-mono); font-size:11px;">{{ server_origin or '' }}</code>
+          <button id="copyServerOrigin" type="button" class="btn secondary sm" style="padding:3px 8px; font-size:11px;">Sao chép URL</button>
+        </div>
       </div>
 
       <!-- DISCONNECT BUTTON (Hiện khi đã kết nối) -->
@@ -623,18 +634,6 @@
 
   // --- Primary Action Button Click ---
   pairBtn?.addEventListener('click', async () => {
-    if (currentState === 'CONNECTOR_NOT_INSTALLED') {
-      const guide = document.getElementById('installGuideBox');
-      if (guide) {
-        guide.style.display = 'block';
-        guide.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      const dlLink = document.getElementById('downloadExtBtn');
-      if (dlLink) dlLink.click();
-      sendHandshake();
-      return;
-    }
-
     if (currentState === 'READY') {
       if (window.showToast) window.showToast('Hệ thống đã sẵn sàng 100%! Bạn có thể bắt đầu tạo chiến dịch đăng bài.', 'success');
       return;
@@ -654,7 +653,15 @@
       return;
     }
 
-    // 1-CLICK PAIRING
+    if (currentState === 'CONNECTOR_NOT_INSTALLED') {
+      const guide = document.getElementById('installGuideBox');
+      if (guide) {
+        guide.style.display = 'block';
+        guide.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    // 1-CLICK PAIRING + MANUAL PAIRING CODE GENERATION
     await startOneClickPairing();
   });
 
@@ -678,7 +685,11 @@
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Không tạo được mã liên kết.');
 
-      if (pairCode) pairCode.textContent = data.code;
+      const pairCodeEl = getPairCodeEl();
+      if (pairCodeEl) pairCodeEl.textContent = data.code;
+      if (pairBox) pairBox.style.display = 'block';
+      const serverOriginEl = document.getElementById('serverOriginDisplay');
+      if (serverOriginEl) serverOriginEl.textContent = data.server_origin || location.origin;
 
       // Broadcast to Extension content script
       window.postMessage({
@@ -691,7 +702,8 @@
       setTimeout(() => {
         if (currentState === 'CONNECTING') {
           applyState(connectorDetected ? 'CONNECTOR_DISCONNECTED' : 'CONNECTOR_NOT_INSTALLED');
-          if (window.showToast) window.showToast('Quá thời gian chờ phản hồi từ tiện ích (8s). Vui lòng thử lại.', 'warning');
+          if (pairBox) pairBox.style.display = 'block';
+          if (window.showToast) window.showToast('Đã tạo mã ' + data.code + '. Hãy mở Extension FB POST PRO và dán mã để liên kết.', 'info');
         }
       }, 8000);
 
@@ -706,6 +718,46 @@
       else alert(err);
     }
   }
+
+  function getPairCodeEl() {
+    let el = document.getElementById('pairCode');
+    if (!el) {
+      el = document.createElement('strong');
+      el.id = 'pairCode';
+      el.className = 'pair-digits';
+      el.style.cssText = 'font-family:var(--font-mono); font-size:22px; letter-spacing:0.18em; color:var(--accent, #6366f1); background:var(--surface); padding:8px 18px; border-radius:var(--r-sm); border:1px dashed var(--accent, #6366f1);';
+      const container = document.getElementById('pairDigitsContainer');
+      if (container) container.insertBefore(el, container.firstChild);
+    }
+    return el;
+  }
+
+  // Copy pairing code to clipboard
+  copyPair?.addEventListener('click', () => {
+    const el = document.getElementById('pairCode') || pairCode;
+    const code = el?.textContent?.trim();
+    if (!code || code === '--------') return;
+    navigator.clipboard.writeText(code).then(() => {
+      copyPair.textContent = '✓ ĐÃ CHÉP';
+      if (window.showToast) window.showToast('Đã sao chép mã kết nối: ' + code, 'success');
+      setTimeout(() => { copyPair.textContent = 'SAO CHÉP MÃ'; }, 2000);
+    }).catch(() => {
+      prompt('Mã kết nối của bạn:', code);
+    });
+  });
+
+  // Copy server origin to clipboard
+  const copyServerOriginBtn = document.getElementById('copyServerOrigin');
+  copyServerOriginBtn?.addEventListener('click', () => {
+    const url = document.getElementById('serverOriginDisplay')?.textContent?.trim() || location.origin;
+    navigator.clipboard.writeText(url).then(() => {
+      copyServerOriginBtn.textContent = '✓ ĐÃ CHÉP';
+      if (window.showToast) window.showToast('Đã sao chép URL: ' + url, 'success');
+      setTimeout(() => { copyServerOriginBtn.textContent = 'Sao chép URL'; }, 2000);
+    }).catch(() => {
+      prompt('URL website của bạn:', url);
+    });
+  });
 
   // --- Background Server Status Polling ---
   async function checkServerStatus() {

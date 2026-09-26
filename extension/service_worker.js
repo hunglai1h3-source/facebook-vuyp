@@ -231,6 +231,19 @@ async function heartbeat(
   return lastHeartbeatResult;
 }
 
+function ensureAlarm() {
+  try {
+    if (chrome.alarms) {
+      chrome.alarms.get('fbpost-poll', (alarm) => {
+        if (!alarm) {
+          chrome.alarms.create('fbpost-poll', { periodInMinutes: 0.5 });
+        }
+      });
+    }
+  } catch (e) {}
+}
+ensureAlarm();
+
 function isAuthorizedOrigin(serverOrigin, senderOrigin) {
   if (!serverOrigin || !senderOrigin) return false;
   let srv, snd;
@@ -247,12 +260,12 @@ function isAuthorizedOrigin(serverOrigin, senderOrigin) {
   if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') {
     return true;
   }
-  // 2. Production FB POST PRO domain
-  if (host === 'fb-post-pro.onrender.com') {
+  // 2. Local network private IPs
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)) {
     return true;
   }
-  // 3. Staging/preview deployments
-  if (host.endsWith('.onrender.com') && host.startsWith('fb-post-pro')) {
+  // 3. Render deployments (including custom Render app names)
+  if (host.endsWith('.onrender.com')) {
     return true;
   }
   return false;
@@ -331,6 +344,9 @@ async function pairFromWeb(
               code:
                 pairCode,
 
+              device_id:
+                linked.deviceId || '',
+
               device_name:
                 'Google Chrome • FB POST PRO',
 
@@ -373,6 +389,8 @@ async function pairFromWeb(
     const hb =
       await heartbeat(true);
 
+    ensureAlarm();
+
     return {
       ok: true,
 
@@ -388,6 +406,79 @@ async function pairFromWeb(
   } catch (e) {
     return {
       ok: false,
+      error:
+        e?.message ||
+        String(e)
+    };
+  }
+}
+
+async function pairFromPopup(serverInput, codeInput) {
+  if (busy) return { ok: false, error: 'Hãy dừng campaign trước khi liên kết lại Connector.' };
+  let server = String(serverInput || '').trim();
+  if (!server) return { ok: false, error: 'Vui lòng nhập URL website.' };
+
+  if (!/^https?:\/\//i.test(server)) {
+    if (server.startsWith('localhost') || server.startsWith('127.0.0.1') || /^192\.168\./.test(server) || /^10\./.test(server)) {
+      server = 'http://' + server;
+    } else {
+      server = 'https://' + server;
+    }
+  }
+  try {
+    const u = new URL(server);
+    server = u.origin;
+  } catch (e) {
+    return { ok: false, error: 'URL website không hợp lệ: ' + server };
+  }
+
+  const pairCode = String(codeInput || '').trim().toUpperCase();
+  if (!pairCode) return { ok: false, error: 'Vui lòng nhập mã liên kết.' };
+
+  const linked = await cfg();
+  try {
+    const r = await fetch(server + '/api/extension/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: pairCode,
+        device_id: linked.deviceId || '',
+        device_name: 'Google Chrome • FB POST PRO',
+        extension_version: VERSION
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      throw new Error(d.error || ('Liên kết thất bại (HTTP ' + r.status + ')'));
+    }
+    await chrome.storage.local.set({
+      serverOrigin: server,
+      deviceId: d.device_id,
+      token: d.token,
+      customerId: d.customer_id,
+      repairRequired: false,
+      lastError: ''
+    });
+
+    lastHeartbeatAt = 0;
+    lastHeartbeatResult = null;
+
+    const hb = await heartbeat(true);
+    ensureAlarm();
+
+    return {
+      ok: true,
+      deviceId: d.device_id,
+      facebookLoggedIn: hb.facebookLoggedIn,
+      deviceName: 'Google Chrome'
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e?.message || String(e)
+    };
+  }
+}
 
       error:
         e?.message ||
@@ -1656,6 +1747,7 @@ chrome.runtime.onInstalled.addListener(
 
 chrome.runtime.onStartup.addListener(
   () => {
+    ensureAlarm();
     poll();
   }
 );
@@ -1690,6 +1782,20 @@ chrome.runtime.onMessage.addListener(
           sendResponse
         );
 
+      return true;
+    }
+
+    if (msg?.type === 'FORCE_POLL') {
+      heartbeat(true)
+        .then(hb => sendResponse({ ok: true, facebookLoggedIn: hb.facebookLoggedIn, deviceName: 'Google Chrome' }))
+        .catch(err => sendResponse({ ok: false, error: err?.message || String(err) }));
+      return true;
+    }
+
+    if (msg?.type === 'PAIR_FROM_POPUP') {
+      pairFromPopup(msg.server, msg.code)
+        .then(sendResponse)
+        .catch(err => sendResponse({ ok: false, error: err?.message || String(err) }));
       return true;
     }
 

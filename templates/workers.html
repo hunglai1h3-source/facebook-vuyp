@@ -55,6 +55,11 @@
             </button>
           </div>
           <span id="pairCodeTimer" style="font-size:11px; color:var(--muted); text-align:center; display:none">Mã có hiệu lực trong 10 phút</span>
+          <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); display:flex; justify-content:center; align-items:center; gap:8px; font-size:11px; color:var(--text2); flex-wrap:wrap;">
+            <span>URL Website:</span>
+            <code id="serverOriginDisplay" style="background:var(--surface2); padding:3px 8px; border-radius:4px; font-family:var(--font-mono); font-size:11px;">{{ server_origin or '' }}</code>
+            <button id="btnCopyServerOrigin" type="button" class="btn secondary sm" style="padding:3px 8px; font-size:11px;">Sao chép URL</button>
+          </div>
           <div id="pairStatusNotice" style="display:none; font-size:12px; margin-top:8px; padding:8px 10px; border-radius:var(--r-sm); line-height:1.4"></div>
         </div>
       </div>
@@ -365,6 +370,19 @@
       setTimeout(() => { btnCopyPairCode.textContent = 'Sao chép'; }, 2000);
     }).catch(() => {
       prompt('Mã kết nối của bạn:', code);
+    });
+  });
+
+  // Copy server origin to clipboard
+  const btnCopyServerOrigin = document.getElementById('btnCopyServerOrigin');
+  btnCopyServerOrigin?.addEventListener('click', () => {
+    const url = document.getElementById('serverOriginDisplay')?.textContent?.trim() || location.origin;
+    navigator.clipboard.writeText(url).then(() => {
+      btnCopyServerOrigin.textContent = '✓ Đã chép!';
+      if (window.showToast) window.showToast('Đã sao chép URL: ' + url, 'success');
+      setTimeout(() => { btnCopyServerOrigin.textContent = 'Sao chép URL'; }, 2000);
+    }).catch(() => {
+      prompt('URL website của bạn:', url);
     });
   });
 

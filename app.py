@@ -11,6 +11,8 @@ from flask import (
     send_file,
     g,
     has_request_context,
+    make_response,
+    Response,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
@@ -34,6 +36,8 @@ try:
 except ImportError:
     sync_playwright = None
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -330,9 +334,18 @@ def production_request_guard():
     if request.is_json and (request.content_length or 0) > MAX_JSON_REQUEST_BYTES:
         return jsonify({"error": "JSON payload too large.", "request_id": g.request_id}), 413
 
+    if request.method == "OPTIONS" and (request.path.startswith("/api/agent/") or request.path.startswith("/api/extension/")):
+        resp = make_response("", 204)
+        origin = request.headers.get("Origin") or "*"
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Device-ID, X-Agent-Token, Authorization, X-Requested-With, Accept"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        return resp
+
     if not IS_PRODUCTION or request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
-    token_api_prefixes = ("/api/agent/", "/api/cloud/")
+    token_api_prefixes = ("/api/agent/", "/api/cloud/", "/api/extension/")
     token_api_paths = {
         "/api/extension/pair",
         "/api/extension/pair-code",
@@ -366,13 +379,19 @@ def production_response_headers(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.path.startswith("/api/agent/") or request.path.startswith("/api/extension/"):
+        origin = request.headers.get("Origin") or "*"
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Device-ID, X-Agent-Token, Authorization, X-Requested-With, Accept"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     if IS_PRODUCTION:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; "
-            "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            "connect-src 'self' *; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         )
     if request.path.startswith("/admin") or request.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
@@ -2454,13 +2473,14 @@ def require_customer_login():
         or path.startswith("/api/admin/")
         or path.startswith("/api/cloud/")
         or path.startswith("/api/agent/")
-        or path == "/api/extension/pair"
+        or path.startswith("/api/extension/")
         or path in {
             "/login",
             "/register",
             "/logout",
             "/health",
             "/ready",
+            "/download/extension",
         }
     ):
         return None
@@ -2472,6 +2492,8 @@ def require_customer_login():
         session.pop("user_id", None)
         session.pop("username", None)
         session.pop("customer_id", None)
+        if path.startswith("/api/"):
+            return jsonify({"error": "Bạn chưa đăng nhập hoặc phiên làm việc đã hết hạn.", "code": "UNAUTHORIZED"}), 401
         next_url = request.full_path if request.query_string else request.path
         return redirect(
             url_for(
@@ -3371,8 +3393,14 @@ def ensure_simple_mode_context(customer_id):
         if active_device_id:
             target_account = next((a for a in accounts if a.get("device_id") == active_device_id), None)
         if not target_account:
-            target_account = accounts[0]
-            if active_device_id and target_account.get("device_id") != active_device_id:
+            dev_uid = str((active_device or {}).get("facebook_user_id") or "").strip()
+            if dev_uid:
+                target_account = next((a for a in accounts if a.get("facebook_user_id") == dev_uid and not a.get("device_id")), None)
+            if not target_account:
+                target_account = next((a for a in accounts if not a.get("device_id")), None)
+            if not target_account and len(accounts) == 1:
+                target_account = accounts[0]
+            if target_account and active_device_id and target_account.get("device_id") != active_device_id:
                 try:
                     target_account = update_facebook_account(
                         customer_id,
@@ -9319,6 +9347,7 @@ def workers_view():
         customer_id=customer_id,
         agent_online=(active_device is not None),
         settings=load_settings(customer_id),
+        server_origin=get_public_server_origin(),
     )
 
 
@@ -9531,6 +9560,7 @@ def settings():
         connector_device=active_device,
         paired_device=paired_device,
         paired_status=paired_status,
+        server_origin=get_public_server_origin(),
     )
 
 
@@ -9602,8 +9632,10 @@ def _make_pairing_code(existing_codes=None):
     raise RuntimeError("Không tạo được mã liên kết. Hãy thử lại.")
 
 
-@app.route("/api/extension/pair-code", methods=["POST"])
+@app.route("/api/extension/pair-code", methods=["POST", "OPTIONS"])
 def extension_pair_code():
+    if request.method == "OPTIONS":
+        return "", 204
     customer_id = get_customer_id()
     if not customer_id:
         return jsonify({"error": "Bạn chưa đăng nhập."}), 401
@@ -9630,9 +9662,11 @@ def extension_pair_code():
     })
 
 
-@app.route("/api/extension/pair", methods=["POST"])
+@app.route("/api/extension/pair", methods=["POST", "OPTIONS"])
 @synchronized_state
 def extension_pair():
+    if request.method == "OPTIONS":
+        return "", 204
     if not auth_rate_allowed("extension_pair", 20, 600):
         return jsonify({"error": "Too many pairing attempts. Try again later."}), 429
     payload = request_json_object()
@@ -9650,17 +9684,31 @@ def extension_pair():
     if not customer_id:
         return jsonify({"error": "Mã liên kết không hợp lệ."}), 400
 
-    device_id = sanitize_device_id("ext_" + uuid.uuid4().hex[:16])
-    token = secrets.token_urlsafe(40)
     devices = load_devices(customer_id)
     user = find_user_by_id(customer_id) or {}
     if not user or not user.get('is_active', True):
         return jsonify({'error': 'Account is unavailable.'}), 403
     device_limit = max(1, int(user.get("max_devices", 3) or 3))
-    if len(devices) >= device_limit:
-        return jsonify({
-            "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
-        }), 409
+
+    req_device_id = sanitize_device_id(payload.get("device_id", ""))
+    if req_device_id and req_device_id in devices:
+        device_id = req_device_id
+    else:
+        if len(devices) >= device_limit:
+            offline_candidates = [
+                (d_id, d_data) for d_id, d_data in devices.items()
+                if d_data.get("status") in {"offline", "revoked"} or d_data.get("worker_state") == "offline" or not d_data.get("last_seen")
+            ]
+            if offline_candidates:
+                offline_candidates.sort(key=lambda x: x[1].get("last_seen") or x[1].get("paired_at") or "")
+                devices.pop(offline_candidates[0][0], None)
+            else:
+                return jsonify({
+                    "error": f"Tài khoản đã đạt giới hạn {device_limit} desktop worker/device."
+                }), 409
+        device_id = sanitize_device_id("ext_" + uuid.uuid4().hex[:16])
+
+    token = secrets.token_urlsafe(40)
     devices[device_id] = {
         "device_id": device_id,
         "name": device_name,
@@ -9669,9 +9717,9 @@ def extension_pair():
         'token_expires_at': (utc_now() + timedelta(days=DEVICE_TOKEN_TTL_DAYS)).isoformat(timespec='seconds'),
         "mode": "chrome_extension",
         "paired_at": now_iso(),
-        "last_seen": "",
-        "status": "offline",
-        "worker_state": "offline",
+        "last_seen": now_iso(),
+        "status": "online",
+        "worker_state": "idle",
         "current_job_id": "",
         "facebook_logged_in": False,
         "extension_version": str(payload.get("extension_version", ""))[:30],
@@ -9701,8 +9749,10 @@ def extension_pair():
     })
 
 
-@app.route("/api/extension/status", methods=["GET"])
+@app.route("/api/extension/status", methods=["GET", "OPTIONS"])
 def extension_status():
+    if request.method == "OPTIONS":
+        return "", 204
     customer_id = get_customer_id()
     if not customer_id:
         return jsonify({"error": "Bạn chưa đăng nhập."}), 401
@@ -9712,9 +9762,16 @@ def extension_status():
     devices = load_devices(customer_id)
 
     device = devices.get(active_id) if active_id else None
-    if not device and devices:
-        device = next(iter(devices.values()), None)
-        active_id = device.get("device_id", "") if device else ""
+    if devices:
+        def _dev_prio(d):
+            is_on = 1 if device_is_online(d) else 0
+            return (is_on, d.get("last_seen") or d.get("paired_at") or "")
+        best_candidate = max(devices.values(), key=_dev_prio)
+        if not device or (not device_is_online(device) and device_is_online(best_candidate)):
+            device = best_candidate
+            active_id = device.get("device_id", "")
+            settings_data["active_device_id"] = active_id
+            save_settings(customer_id, settings_data)
 
     if not device:
         return jsonify({
@@ -11681,9 +11738,11 @@ def cloud_control_ack():
 # AGENT / EXTENSION HEARTBEAT
 # ============================================================
 
-@app.route("/api/agent/heartbeat", methods=["POST"])
+@app.route("/api/agent/heartbeat", methods=["POST", "OPTIONS"])
 @synchronized_state
 def agent_heartbeat():
+    if request.method == "OPTIONS":
+        return "", 204
     auth = authenticate_agent()
     if not auth:
         return jsonify({"error": "Unauthorized"}), 401
@@ -11869,10 +11928,12 @@ def agent_heartbeat():
 
 @app.route(
     "/api/agent/job",
-    methods=["GET"],
+    methods=["GET", "OPTIONS"],
 )
 @synchronized_state
 def agent_get_job():
+    if request.method == "OPTIONS":
+        return "", 204
 
     auth = (
         authenticate_agent()
@@ -11971,10 +12032,12 @@ def agent_get_job():
 
 @app.route(
     "/api/agent/status",
-    methods=["POST"],
+    methods=["POST", "OPTIONS"],
 )
 @synchronized_state
 def agent_update_status():
+    if request.method == "OPTIONS":
+        return "", 204
     auth = authenticate_agent()
     if not auth:
         return jsonify({"error": "Unauthorized"}), 401
@@ -12130,10 +12193,11 @@ def agent_update_status():
 
 @app.route(
     "/api/agent/control",
-    methods=["GET"],
+    methods=["GET", "OPTIONS"],
 )
 def agent_control():
-
+    if request.method == "OPTIONS":
+        return "", 204
     auth = (
         authenticate_agent()
     )
@@ -12177,11 +12241,12 @@ def agent_control():
 
 @app.route(
     "/api/agent/control/ack",
-    methods=["POST"],
+    methods=["POST", "OPTIONS"],
 )
 @synchronized_state
 def agent_control_ack():
-
+    if request.method == "OPTIONS":
+        return "", 204
     auth = (
         authenticate_agent()
     )

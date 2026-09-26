@@ -30,13 +30,6 @@
     document.addEventListener('DOMContentLoaded', notifyReady);
   }
 
-  // Save current serverOrigin if not yet configured
-  chrome.storage.local.get(['serverOrigin', 'deviceId', 'token']).then(c => {
-    if (!c.deviceId || !c.token) {
-      chrome.storage.local.set({ serverOrigin: origin }).catch(() => {});
-    }
-  }).catch(() => {});
-
   const ping = () => {
     try {
       chrome.runtime.sendMessage({ type: 'POLL_NOW' }).catch(() => {});
@@ -101,7 +94,8 @@
 
     // C. Reconnect / Force Heartbeat
     if (data.type === 'RECONNECT_CONNECTOR' || data.type === 'POLL_NOW') {
-      chrome.runtime.sendMessage({ type: 'POLL_NOW' })
+      const msgType = data.type === 'RECONNECT_CONNECTOR' ? 'FORCE_POLL' : 'POLL_NOW';
+      chrome.runtime.sendMessage({ type: msgType })
         .then(result => {
           window.postMessage({
             source: 'FBPOST_EXTENSION',

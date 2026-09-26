@@ -15,7 +15,8 @@
     "https://facebook.com/*",
     "https://*.onrender.com/*",
     "http://127.0.0.1/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "*://*/*"
   ],
   "externally_connectable": {
     "matches": [
