@@ -1,3 +1,1042 @@
 {% extends "base.html" %}
-{% block title %}Groups • FB POST PRO{% endblock %}{% block page_title %}Quản lý Groups{% endblock %}{% block page_subtitle %}Danh sách Group Facebook dùng cho chiến dịch.{% endblock %}
-{% block content %}<section style="display:grid;gap:18px"><article class="panel" style="padding:20px"><h3 style="margin-top:0">Thêm Group</h3><form method="post" action="{{ url_for('add_group') }}" style="display:flex;gap:10px;flex-wrap:wrap"><input style="flex:1;min-width:250px" type="url" name="group_url" placeholder="https://www.facebook.com/groups/..." required><button class="btn primary" type="submit">＋ THÊM GROUP</button></form></article><article class="panel" style="padding:20px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h3 style="margin:0">Danh sách Groups</h3><span style="font-size:11px;color:var(--muted)">{{ groups|length }} Group</span></div>{% if groups %}<div style="display:grid;margin-top:15px">{% for group in groups %}<div style="display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)"><div style="width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:rgba(59,130,246,.13)">f</div><a href="{{ group }}" target="_blank" style="color:var(--text);text-decoration:none;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ group }}</a><form method="post" action="{{ url_for('delete_group', index=loop.index0) }}" onsubmit="return confirm('Xóa Group này?')"><button class="btn danger" type="submit">Xóa</button></form></div>{% endfor %}</div>{% else %}<div class="empty-state" style="margin-top:15px">Chưa có Group nào.</div>{% endif %}</article></section>{% endblock %}
+
+{% block title %}Quản lý Groups • FB POST PRO{% endblock %}
+{% block page_title %}Quản lý Groups{% endblock %}
+{% block page_subtitle %}Nhập danh sách Group Facebook bằng cách kéo thả file Excel, dán (Ctrl+V) hoặc nhập tay.{% endblock %}
+
+{% block head %}
+<style>
+/* CSS cho Quản lý Group Nâng cao */
+.groups-container {
+    display: grid;
+    gap: 20px;
+}
+
+/* Thống kê & Thanh hành động */
+.groups-header-card {
+    padding: 20px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 90%, transparent), color-mix(in srgb, var(--panel2) 85%, transparent));
+}
+
+.stats-info {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+
+.stats-badge-count {
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #a78bfa, #60a5fa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.stats-desc strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.stats-desc small {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.header-action-group {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Tabs nhập liệu */
+.import-card {
+    padding: 22px;
+}
+
+.tab-nav {
+    display: flex;
+    gap: 10px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+}
+
+.tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 750;
+    padding: 8px 16px;
+    border-radius: 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--panel2) 80%, transparent);
+}
+
+.tab-btn.active {
+    color: #fff;
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.25), rgba(37, 99, 235, 0.2));
+    border-color: rgba(124, 58, 237, 0.35);
+}
+
+.tab-pane {
+    display: none;
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+/* Dropzone Kéo Thả File Excel */
+.dropzone {
+    border: 2px dashed rgba(124, 58, 237, 0.4);
+    background: radial-gradient(circle at 50% 50%, rgba(124, 58, 237, 0.05), transparent 70%), color-mix(in srgb, var(--panel2) 60%, transparent);
+    border-radius: 16px;
+    padding: 38px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    user-select: none;
+}
+
+.dropzone:hover, .dropzone.dragover {
+    border-color: #8b5cf6;
+    background: radial-gradient(circle at 50% 50%, rgba(124, 58, 237, 0.14), transparent 70%), color-mix(in srgb, var(--panel2) 90%, transparent);
+    transform: scale(1.006);
+    box-shadow: 0 10px 30px rgba(124, 58, 237, 0.15);
+}
+
+.dropzone-icon-wrap {
+    width: 60px;
+    height: 60px;
+    margin: 0 auto 14px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(37, 99, 235, 0.2));
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    display: grid;
+    place-items: center;
+    font-size: 26px;
+    color: #34d399;
+}
+
+.dropzone h4 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text);
+}
+
+.dropzone p {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dropzone-badges {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 10px;
+}
+
+.dropzone-tag {
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+    border: 1px solid var(--line);
+    padding: 3px 9px;
+    border-radius: 999px;
+    color: var(--muted);
+}
+
+/* Khung Dán Clipboard */
+.paste-box-wrap {
+    display: grid;
+    gap: 12px;
+}
+
+.paste-textarea {
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 12px 14px;
+    line-height: 1.5;
+}
+
+.paste-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+/* Hộp Xem Trước (Preview Panel) */
+.preview-card {
+    display: none;
+    padding: 20px;
+    border: 1px solid rgba(124, 58, 237, 0.3);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--panel2) 95%, transparent), color-mix(in srgb, var(--panel) 90%, transparent));
+    border-radius: 16px;
+    margin-top: 18px;
+    animation: fadeIn 0.25s ease-out;
+}
+
+.preview-card.show {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.preview-stats-bar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 11px;
+}
+
+.pill-stat {
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-weight: 750;
+    border: 1px solid transparent;
+}
+
+.pill-stat.total { background: rgba(124, 58, 237, 0.15); color: #c4b5fd; border-color: rgba(124, 58, 237, 0.3); }
+.pill-stat.new { background: rgba(34, 197, 94, 0.15); color: #86efac; border-color: rgba(34, 197, 94, 0.3); }
+.pill-stat.dup { background: rgba(245, 158, 11, 0.15); color: #fde68a; border-color: rgba(245, 158, 11, 0.3); }
+
+.preview-list-scroll {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg) 75%, transparent);
+    padding: 6px;
+    display: grid;
+    gap: 4px;
+    margin-bottom: 16px;
+}
+
+.preview-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+}
+
+.preview-item:hover {
+    background: color-mix(in srgb, var(--panel2) 90%, transparent);
+}
+
+.preview-item-url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: ltr;
+}
+
+.preview-item-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+
+.preview-item-btn:hover {
+    color: var(--red);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.preview-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+/* Thêm link đơn lẻ */
+.single-add-box {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--line);
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Danh sách Group đã lưu */
+.groups-list-card {
+    padding: 22px;
+}
+
+.list-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.search-input-wrap {
+    position: relative;
+    flex: 1;
+    max-width: 380px;
+    min-width: 220px;
+}
+
+.search-input-wrap input {
+    padding-left: 36px;
+    font-size: 12px;
+}
+
+.search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.group-items-wrap {
+    display: grid;
+    gap: 8px;
+}
+
+.group-row {
+    display: grid;
+    grid-template-columns: 36px 34px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    border-radius: 13px;
+    border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 75%, transparent);
+    transition: all 0.16s ease;
+}
+
+.group-row:hover {
+    background: color-mix(in srgb, var(--panel2) 90%, transparent);
+    border-color: rgba(124, 58, 237, 0.25);
+}
+
+.group-num {
+    font-size: 11px;
+    font-weight: 750;
+    color: var(--muted);
+    text-align: center;
+}
+
+.group-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(124, 58, 237, 0.2));
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    color: #60a5fa;
+    font-weight: 900;
+    font-size: 14px;
+}
+
+.group-link-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.group-link-text:hover {
+    color: #a78bfa;
+    text-decoration: underline;
+}
+
+.group-actions-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.btn-icon-sm {
+    background: color-mix(in srgb, var(--panel2) 80%, transparent);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 6px 9px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: 0.15s ease;
+}
+
+.btn-icon-sm:hover {
+    color: var(--text);
+    border-color: rgba(124, 58, 237, 0.4);
+}
+
+.btn-icon-sm.danger:hover {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* Toast thông báo nhanh */
+.toast-notice {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: #1e1b4b;
+    border: 1px solid #6366f1;
+    color: #e0e7ff;
+    padding: 12px 20px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    z-index: 9999;
+    opacity: 0;
+    transform: translateY(12px);
+    transition: all 0.25s ease;
+    pointer-events: none;
+}
+
+.toast-notice.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+</style>
+<!-- Thư viện SheetJS phục vụ đọc file Excel tức thì phía Client -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<section class="groups-container">
+
+    <!-- ========================================== -->
+    <!-- 1. THẺ THỐNG KÊ & HÀNH ĐỘNG NHANH -->
+    <!-- ========================================== -->
+    <article class="panel groups-header-card">
+        <div class="stats-info">
+            <span class="stats-badge-count" id="headerCount">{{ groups|length }}</span>
+            <div class="stats-desc">
+                <strong>Nhóm Facebook đã lưu</strong>
+                <small id="headerSubtext">Sẵn sàng dùng để đăng bài trong Tạo chiến dịch</small>
+            </div>
+        </div>
+
+        <div class="header-action-group">
+            <a class="btn secondary" href="{{ url_for('groups_export', format='xlsx') }}" title="Tải file Excel danh sách Groups">
+                📥 Xuất file Excel
+            </a>
+            <button type="button" class="btn secondary" onclick="copyAllGroups()" id="btnCopyAll" title="Sao chép toàn bộ link">
+                📋 Sao chép tất cả
+            </button>
+            {% if groups %}
+            <form method="post" action="{{ url_for('groups_clear') }}" onsubmit="return confirm('Bạn có chắc muốn xóa TOÀN BỘ danh sách Group? Thao tác này không thể hoàn tác.')" style="display:inline">
+                <button type="submit" class="btn danger" title="Xóa hết danh sách">
+                    🗑️ Xóa toàn bộ
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </article>
+
+    <!-- ========================================== -->
+    <!-- 2. KHU VỰC NHẬP DỮ LIỆU: KÉO THẢ EXCEL & DÁN -->
+    <!-- ========================================== -->
+    <article class="panel import-card">
+        <div class="tab-nav">
+            <button type="button" class="tab-btn active" onclick="switchTab('excel')">
+                📊 Kéo Thả File Excel (.xlsx, .xls)
+            </button>
+            <button type="button" class="tab-btn" onclick="switchTab('paste')">
+                📋 Dán Danh Sách Link (Ctrl + V)
+            </button>
+        </div>
+
+        <!-- TAB 1: KÉO THẢ FILE EXCEL -->
+        <div id="tab-excel" class="tab-pane active">
+            <input type="file" id="fileInput" accept=".xlsx, .xls, .csv, .txt" style="display: none;">
+            
+            <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+                <div class="dropzone-icon-wrap">
+                    📁
+                </div>
+                <h4>KÉO THẢ FILE EXCEL VÀO ĐÂY HOẶC NHẤP ĐỂ CHỌN</h4>
+                <p>Hệ thống tự động quét toàn bộ Sheet và Cột để trích xuất link Facebook Groups</p>
+                <div class="dropzone-badges">
+                    <span class="dropzone-tag">.XLSX</span>
+                    <span class="dropzone-tag">.XLS</span>
+                    <span class="dropzone-tag">.CSV</span>
+                    <span class="dropzone-tag">.TXT</span>
+                    <span class="dropzone-tag" style="color:#a78bfa;border-color:rgba(124,58,237,.3)">💡 Mẹo: Bấm Ctrl+V bất kỳ lúc nào để dán</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: DÁN DANH SÁCH LINK (TEXTAREA) -->
+        <div id="tab-paste" class="tab-pane">
+            <div class="paste-box-wrap">
+                <textarea
+                    id="pasteTextarea"
+                    class="paste-textarea"
+                    placeholder="Dán (Ctrl + V) danh sách link Group tại đây...&#10;Mỗi dòng một link hoặc copy trực tiếp 1 cột từ Excel rồi dán vào:&#10;https://www.facebook.com/groups/123456789&#10;https://www.facebook.com/groups/congdongmarketing&#10;9876543210123"
+                ></textarea>
+                <div class="paste-footer">
+                    <span style="font-size:11px;color:var(--muted)">
+                        Hỗ trợ link đầy đủ, link mobile, m.facebook.com hoặc chỉ dãy số ID Group.
+                    </span>
+                    <button type="button" class="btn primary" onclick="parsePastedText()">
+                        🔍 Phân tích & Xem trước
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- THÊM NHANH 1 GROUP ĐƠN LẺ -->
+        <div class="single-add-box">
+            <span style="font-size:11px;color:var(--muted);white-space:nowrap">Hoặc thêm nhanh 1 link:</span>
+            <form method="post" action="{{ url_for('add_group') }}" style="display:flex;gap:8px;flex:1;min-width:260px">
+                <input type="text" name="group_url" placeholder="https://www.facebook.com/groups/... hoặc Group ID" style="flex:1" required>
+                <button type="submit" class="btn secondary">＋ Thêm</button>
+            </form>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- HỘP XEM TRƯỚC (PREVIEW) KHI VỪA THẢ HOẶC DÁN -->
+        <!-- ========================================== -->
+        <div id="previewCard" class="preview-card">
+            <div class="preview-header">
+                <div>
+                    <strong style="font-size:13px;color:var(--text)" id="previewTitle">Kết quả quét dữ liệu</strong>
+                    <div style="font-size:10px;color:var(--muted)" id="previewSource">Nguồn: File tải lên</div>
+                </div>
+                <div class="preview-stats-bar">
+                    <span class="pill-stat total" id="previewTotalBadge">Tổng: 0</span>
+                    <span class="pill-stat new" id="previewNewBadge">Mới: 0</span>
+                    <span class="pill-stat dup" id="previewDupBadge">Đã có: 0</span>
+                </div>
+            </div>
+
+            <div class="preview-list-scroll" id="previewListScroll">
+                <!-- Danh sách xem trước sẽ được JS render ở đây -->
+            </div>
+
+            <div class="preview-actions">
+                <button type="button" class="btn secondary" onclick="cancelPreview()">
+                    ✖ Hủy bỏ
+                </button>
+                <button type="button" class="btn secondary" onclick="submitImport('replace')" title="Xóa danh sách cũ và đặt bằng danh sách này">
+                    ↺ Thay thế toàn bộ
+                </button>
+                <button type="button" class="btn primary" onclick="submitImport('append')" title="Giữ các nhóm cũ và bổ sung nhóm mới">
+                    ➕ Thêm vào danh sách hiện tại
+                </button>
+            </div>
+        </div>
+    </article>
+
+    <!-- ========================================== -->
+    <!-- 3. DANH SÁCH GROUPS HIỆN CÓ -->
+    <!-- ========================================== -->
+    <article class="panel groups-list-card">
+        <div class="list-topbar">
+            <div style="display:flex;align-items:center;gap:10px">
+                <h3 style="margin:0;font-size:16px">Danh sách Groups</h3>
+                <span class="pill-stat total" id="currentCountBadge">{{ groups|length }} Group</span>
+            </div>
+
+            <div class="search-input-wrap">
+                <span class="search-icon">🔍</span>
+                <input type="text" id="searchInput" placeholder="Tìm kiếm nhanh theo link hoặc tên group..." oninput="filterGroups()">
+            </div>
+        </div>
+
+        <div id="groupsListContainer" class="group-items-wrap">
+            {% if groups %}
+                {% for group in groups %}
+                <div class="group-row" data-url="{{ group }}">
+                    <div class="group-num">#{{ loop.index }}</div>
+                    <div class="group-icon">f</div>
+                    <a class="group-link-text" href="{{ group }}" target="_blank" rel="noopener noreferrer" title="{{ group }}">
+                        {{ group }}
+                    </a>
+                    <div class="group-actions-right">
+                        <button type="button" class="btn-icon-sm" onclick="copySingleUrl('{{ group }}')" title="Sao chép link">
+                            📋
+                        </button>
+                        <button type="button" class="btn-icon-sm danger" onclick="deleteGroupItem('{{ group }}', {{ loop.index0 }})" title="Xóa group này">
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state" id="emptyStateBox">
+                    <div style="font-size:32px;margin-bottom:8px">📂</div>
+                    <strong>Chưa có Group Facebook nào</strong>
+                    <p style="margin:6px 0 0;font-size:11px">Hãy kéo thả file Excel (.xlsx) hoặc dán link ở trên để bắt đầu!</p>
+                </div>
+            {% endif %}
+        </div>
+    </article>
+
+</section>
+
+<!-- Toast thông báo -->
+<div id="toastNotice" class="toast-notice"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Dữ liệu group hiện có trên máy khách
+let existingGroups = {{ groups|tojson if groups else '[]' }};
+let parsedCandidateGroups = []; // Danh sách trích xuất tạm thời đang chờ xem trước
+
+// 1. Chuyển Tab (Excel / Paste)
+function switchTab(type) {
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+
+    if (type === 'excel') {
+        document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
+        document.getElementById('tab-excel').classList.add('active');
+    } else {
+        document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
+        document.getElementById('tab-paste').classList.add('active');
+        document.getElementById('pasteTextarea').focus();
+    }
+}
+
+// 2. Hàm chuẩn hóa URL group Facebook bằng regex thông minh
+function normalizeFbGroupUrl(raw) {
+    if (!raw) return '';
+    const str = String(raw).trim();
+    if (!str) return '';
+
+    // Regex bắt link Facebook group
+    const match = str.match(/(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)\/groups\/([a-zA-Z0-9._-]+)/i);
+    if (match && match[1]) {
+        return `https://www.facebook.com/groups/${match[1]}`;
+    }
+
+    // Nếu chỉ là chuỗi số ID group (5 - 25 chữ số)
+    if (/^\d{5,25}$/.test(str)) {
+        return `https://www.facebook.com/groups/${str}`;
+    }
+
+    return '';
+}
+
+// 3. Trích xuất URL từ text thô
+function extractUrlsFromText(text) {
+    if (!text) return [];
+    const results = [];
+    const seen = new Set();
+    const lines = text.split(/\r?\n/);
+
+    for (const line of lines) {
+        // Tìm trực tiếp các link trong dòng
+        const directMatches = line.match(/(?:https?:\/\/)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)\/groups\/[a-zA-Z0-9._-]+/gi);
+        if (directMatches) {
+            for (const item of directMatches) {
+                const norm = normalizeFbGroupUrl(item);
+                if (norm && !seen.has(norm)) {
+                    seen.add(norm);
+                    results.push(norm);
+                }
+            }
+            continue;
+        }
+
+        // Tách dòng theo tab, phẩy, chấm phẩy, khoảng trắng
+        const tokens = line.split(/[\t,;|\s]+/);
+        for (const token of tokens) {
+            const norm = normalizeFbGroupUrl(token);
+            if (norm && !seen.has(norm)) {
+                seen.add(norm);
+                results.push(norm);
+            }
+        }
+    }
+    return results;
+}
+
+// 4. Xử lý File Excel bằng SheetJS trên client (Fallback server nếu cần)
+async function processExcelFile(file) {
+    showToast(`Đang đọc file: ${file.name}...`);
+    
+    // Kiểm tra xem thư viện XLSX có sẵn không
+    if (window.XLSX) {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+            const extracted = [];
+            const seen = new Set();
+
+            workbook.SheetNames.forEach(sheetName => {
+                const sheet = workbook.Sheets[sheetName];
+                const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+                rows.forEach(row => {
+                    if (Array.isArray(row)) {
+                        row.forEach(cell => {
+                            if (cell) {
+                                const urls = extractUrlsFromText(String(cell));
+                                urls.forEach(u => {
+                                    if (!seen.has(u)) {
+                                        seen.add(u);
+                                        extracted.push(u);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                });
+            });
+
+            if (extracted.length === 0) {
+                alert(`Không tìm thấy link Facebook Group nào trong file "${file.name}". Vui lòng kiểm tra lại cột link!`);
+                return;
+            }
+
+            renderPreview(extracted, `File: ${file.name}`);
+            return;
+        } catch (err) {
+            console.warn("Client parse failed, falling back to server...", err);
+        }
+    }
+
+    // Nếu XLSX không có hoặc lỗi, gửi file lên server
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('mode', 'append');
+
+    try {
+        const res = await fetch("{{ url_for('groups_upload') }}", {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body: formData
+        });
+        const json = await res.json();
+        if (json.success) {
+            showToast(json.message);
+            window.location.reload();
+        } else {
+            alert(json.message || "Lỗi đọc file trên máy chủ.");
+        }
+    } catch (e) {
+        alert("Lỗi kết nối máy chủ khi tải file: " + e.message);
+    }
+}
+
+// 5. Xử lý Textarea dán
+function parsePastedText() {
+    const text = document.getElementById('pasteTextarea').value;
+    const extracted = extractUrlsFromText(text);
+    if (extracted.length === 0) {
+        alert("Không tìm thấy link Facebook Group hợp lệ nào trong nội dung dán.");
+        return;
+    }
+    renderPreview(extracted, "Dữ liệu từ khung dán");
+}
+
+// 6. Hiển thị Panel Xem Trước (Preview Panel)
+function renderPreview(urls, sourceName) {
+    parsedCandidateGroups = [...urls];
+    const previewCard = document.getElementById('previewCard');
+    const previewTitle = document.getElementById('previewTitle');
+    const previewSource = document.getElementById('previewSource');
+    const scrollBox = document.getElementById('previewListScroll');
+
+    previewTitle.textContent = `Tìm thấy ${urls.length} link Group Facebook`;
+    previewSource.textContent = `Nguồn: ${sourceName}`;
+
+    // Phân loại mới vs trùng
+    const existSet = new Set(existingGroups);
+    const newItems = urls.filter(u => !existSet.has(u));
+    const dupItems = urls.filter(u => existSet.has(u));
+
+    document.getElementById('previewTotalBadge').textContent = `Tổng: ${urls.length}`;
+    document.getElementById('previewNewBadge').textContent = `Mới: ${newItems.length}`;
+    document.getElementById('previewDupBadge').textContent = `Trùng lặp: ${dupItems.length}`;
+
+    // Render danh sách các item xem trước
+    scrollBox.innerHTML = '';
+    urls.forEach((url, idx) => {
+        const isDup = existSet.has(url);
+        const div = document.createElement('div');
+        div.className = 'preview-item';
+        div.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                <span style="color:var(--muted)">#${idx + 1}</span>
+                <span class="preview-item-url" style="${isDup ? 'opacity:0.75' : 'color:#86efac;font-weight:700'}">${url}</span>
+                ${isDup ? '<span style="font-size:9px;color:#fde68a;background:rgba(245,158,11,.15);padding:2px 6px;border-radius:4px">Đã có</span>' : ''}
+            </div>
+            <button type="button" class="preview-item-btn" onclick="removeCandidateItem(${idx})" title="Bỏ link này">✕</button>
+        `;
+        scrollBox.appendChild(div);
+    });
+
+    previewCard.classList.add('show');
+    previewCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function removeCandidateItem(idx) {
+    parsedCandidateGroups.splice(idx, 1);
+    if (parsedCandidateGroups.length === 0) {
+        cancelPreview();
+    } else {
+        renderPreview(parsedCandidateGroups, "Danh sách chỉnh sửa");
+    }
+}
+
+function cancelPreview() {
+    parsedCandidateGroups = [];
+    document.getElementById('previewCard').classList.remove('show');
+}
+
+// 7. Gửi danh sách đã xác nhận lưu lên server
+async function submitImport(mode) {
+    if (!parsedCandidateGroups || parsedCandidateGroups.length === 0) {
+        alert("Không có link nào để lưu.");
+        return;
+    }
+
+    if (mode === 'replace' && !confirm("Bạn có chắc muốn THAY THẾ toàn bộ danh sách hiện tại bằng danh sách mới này?")) {
+        return;
+    }
+
+    showToast("Đang lưu danh sách Group...");
+
+    try {
+        const res = await fetch("{{ url_for('groups_bulk_save') }}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: JSON.stringify({
+                groups: parsedCandidateGroups,
+                mode: mode
+            })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.message || "Đã lưu thành công!");
+            setTimeout(() => {
+                window.location.reload();
+            }, 600);
+        } else {
+            alert(data.message || "Không thể lưu dữ liệu.");
+        }
+    } catch (err) {
+        alert("Lỗi kết nối khi lưu: " + err.message);
+    }
+}
+
+// 8. Kéo thả file Drag & Drop
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+['dragenter', 'dragover'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('dragover');
+    });
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('dragover');
+    });
+});
+
+dropzone.addEventListener('drop', (e) => {
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+        processExcelFile(files[0]);
+    }
+});
+
+fileInput.addEventListener('change', (e) => {
+    if (fileInput.files && fileInput.files.length > 0) {
+        processExcelFile(fileInput.files[0]);
+    }
+});
+
+// 9. LẮNG NGHE SỰ KIỆN DÁN TOÀN CỤC (GLOBAL PASTE - CTRL + V)
+window.addEventListener('paste', (e) => {
+    // Nếu đang gõ trong một input search thì không can thiệp
+    if (e.target && e.target.id === 'searchInput') return;
+
+    // Kiểm tra nếu paste file (file Excel copy trong máy)
+    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+        e.preventDefault();
+        const file = e.clipboardData.files[0];
+        showToast("🎉 Đã nhận file từ Clipboard!");
+        processExcelFile(file);
+        return;
+    }
+
+    // Nếu paste văn bản
+    const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+    if (pastedText && pastedText.trim()) {
+        const urls = extractUrlsFromText(pastedText);
+        if (urls.length > 0) {
+            e.preventDefault();
+            showToast(`🎉 Đã phát hiện ${urls.length} link Group từ Clipboard (Ctrl+V)!`);
+            renderPreview(urls, "Dán từ Clipboard (Ctrl + V)");
+        }
+    }
+});
+
+// 10. Tìm kiếm / Lọc danh sách Groups
+function filterGroups() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    const rows = document.querySelectorAll('.group-row');
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+        const url = row.getAttribute('data-url').toLowerCase();
+        if (!q || url.includes(q)) {
+            row.style.display = 'grid';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    const badge = document.getElementById('currentCountBadge');
+    if (badge) {
+        badge.textContent = q ? `${visibleCount}/${rows.length} Group` : `${rows.length} Group`;
+    }
+}
+
+// 11. Xóa từng Group bằng AJAX
+async function deleteGroupItem(url, index) {
+    if (!confirm(`Bạn có chắc muốn xóa Group này khỏi danh sách?\n${url}`)) {
+        return;
+    }
+
+    try {
+        const res = await fetch("{{ url_for('groups_delete_item') }}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: JSON.stringify({ url: url, index: index })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast("Đã xóa group!");
+            // Cập nhật lại UI
+            existingGroups = existingGroups.filter(u => u !== url);
+            const row = document.querySelector(`.group-row[data-url="${CSS.escape(url)}"]`);
+            if (row) row.remove();
+            
+            // Cập nhật số đếm
+            const total = existingGroups.length;
+            document.getElementById('headerCount').textContent = total;
+            document.getElementById('currentCountBadge').textContent = `${total} Group`;
+            
+            if (total === 0) {
+                document.getElementById('groupsListContainer').innerHTML = `
+                    <div class="empty-state" id="emptyStateBox">
+                        <div style="font-size:32px;margin-bottom:8px">📂</div>
+                        <strong>Chưa có Group Facebook nào</strong>
+                        <p style="margin:6px 0 0;font-size:11px">Hãy kéo thả file Excel (.xlsx) hoặc dán link ở trên để bắt đầu!</p>
+                    </div>
+                `;
+            }
+        } else {
+            alert(data.message || "Lỗi khi xóa group.");
+        }
+    } catch (e) {
+        alert("Lỗi kết nối máy chủ: " + e.message);
+    }
+}
+
+// 12. Sao chép tất cả link Group vào Clipboard
+function copyAllGroups() {
+    if (!existingGroups || existingGroups.length === 0) {
+        alert("Danh sách hiện tại đang trống.");
+        return;
+    }
+    const text = existingGroups.join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+        showToast(`📋 Đã sao chép toàn bộ ${existingGroups.length} link Group vào bộ nhớ tạm!`);
+    }).catch(err => {
+        alert("Lỗi sao chép: " + err);
+    });
+}
+
+// 13. Sao chép 1 URL
+function copySingleUrl(url) {
+    navigator.clipboard.writeText(url).then(() => {
+        showToast("Đã sao chép link!");
+    });
+}
+
+// 14. Hiển thị Toast
+function showToast(msg) {
+    const toast = document.getElementById('toastNotice');
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+        toast.classList.remove('show');
+    }, 2800);
+}
+</script>
+{% endblock %}

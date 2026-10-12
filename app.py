@@ -9,6 +9,7 @@ from flask import (
     jsonify,
     session,
     send_from_directory,
+    send_file,
 )
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -33,6 +34,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
+import io
 import os
 import re
 import secrets
@@ -42,6 +44,11 @@ import time
 import random
 import uuid
 from urllib.parse import urlencode
+
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
 
 
 # ============================================================
@@ -1322,12 +1329,98 @@ def normalize_group_url(url):
     url = str(url or "").strip()
     if not url:
         return ""
-    url = url.replace("https://facebook.com/", "https://www.facebook.com/")
-    url = url.replace("http://facebook.com/", "https://www.facebook.com/")
-    url = url.replace("http://www.facebook.com/", "https://www.facebook.com/")
-    url = url.split("?", 1)[0]
-    url = url.rstrip("/")
-    return url
+    m = re.search(
+        r'(?:https?://)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)/groups/([a-zA-Z0-9._-]+)',
+        url,
+        re.IGNORECASE,
+    )
+    if m:
+        return f"https://www.facebook.com/groups/{m.group(1)}"
+    if re.match(r'^\d{5,25}$', url):
+        return f"https://www.facebook.com/groups/{url}"
+    if "facebook.com" in url or "fb.com" in url:
+        url = url.replace("https://facebook.com/", "https://www.facebook.com/")
+        url = url.replace("http://facebook.com/", "https://www.facebook.com/")
+        url = url.replace("http://www.facebook.com/", "https://www.facebook.com/")
+        url = url.split("?", 1)[0]
+        url = url.rstrip("/")
+        return url
+    return ""
+
+
+def extract_group_urls_from_text(raw_text):
+    if not raw_text:
+        return []
+    urls = []
+    seen = set()
+    for line in str(raw_text).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        found_matches = re.findall(
+            r'(?:https?://)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)/groups/[a-zA-Z0-9._-]+',
+            line,
+            re.IGNORECASE,
+        )
+        if found_matches:
+            for item in found_matches:
+                norm = normalize_group_url(item)
+                if norm and norm not in seen:
+                    seen.add(norm)
+                    urls.append(norm)
+            continue
+
+        tokens = re.split(r'[\t,;|\s]+', line)
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+            norm = normalize_group_url(token)
+            if norm and norm not in seen:
+                seen.add(norm)
+                urls.append(norm)
+    return urls
+
+
+def extract_group_urls_from_excel(file_bytes):
+    urls = []
+    seen = set()
+    if openpyxl is None:
+        return urls
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+        for sheetname in wb.sheetnames:
+            sheet = wb[sheetname]
+            for row in sheet.iter_rows(values_only=True):
+                for cell in row:
+                    if cell is None:
+                        continue
+                    cell_str = str(cell).strip()
+                    if not cell_str:
+                        continue
+                    extracted = extract_group_urls_from_text(cell_str)
+                    for u in extracted:
+                        if u not in seen:
+                            seen.add(u)
+                            urls.append(u)
+        wb.close()
+    except Exception as exc:
+        print(f"[excel] Error reading excel: {exc}")
+    return urls
+
+
+def extract_group_urls_from_file(filename, file_bytes):
+    filename = str(filename or "").lower()
+    if filename.endswith((".xlsx", ".xlsm", ".xltx")):
+        return extract_group_urls_from_excel(file_bytes)
+
+    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1258"):
+        try:
+            text = file_bytes.decode(enc)
+            return extract_group_urls_from_text(text)
+        except UnicodeDecodeError:
+            continue
+    return []
 
 
 def load_groups(customer_id):
@@ -3993,142 +4086,264 @@ def delete_all_post_images():
 
 @app.route("/groups")
 def groups():
-
-    customer_id = (
-        get_customer_id()
-    )
-
+    customer_id = get_customer_id()
     return render_template(
         "groups.html",
         page="groups",
-        groups=load_groups(
-            customer_id
-        ),
-        settings=load_settings(
-            customer_id
-        ),
-        customer_id=
-            customer_id,
+        groups=load_groups(customer_id),
+        settings=load_settings(customer_id),
+        customer_id=customer_id,
     )
 
 
-@app.route(
-    "/add-group",
-    methods=["POST"],
-)
+@app.route("/add-group", methods=["POST"])
 def add_group():
+    customer_id = get_customer_id()
+    raw_url = request.form.get("group_url", "").strip()
+    norm = normalize_group_url(raw_url)
 
-    customer_id = (
-        get_customer_id()
-    )
+    if not norm:
+        flash("Bạn chưa nhập link Group hoặc link không hợp lệ.", "warning")
+        return redirect(url_for("groups"))
 
-    group_url = (
-        request.form.get(
-            "group_url",
-            "",
-        ).strip()
-    )
+    current = load_groups(customer_id)
+    if norm in current:
+        flash("Group đã tồn tại trong danh sách.", "warning")
+        return redirect(url_for("groups"))
 
-    if not group_url:
+    current.append(norm)
+    save_groups(customer_id, current)
+    add_history(customer_id, "info", "Đã thêm Group", norm)
+    flash("Đã thêm Group thành công.", "success")
+    return redirect(url_for("groups"))
 
-        flash(
-            "Bạn chưa nhập link Group.",
-            "warning",
-        )
 
-        return redirect(
-            url_for(
-                "groups"
-            )
-        )
+@app.route("/delete-group/<int:index>", methods=["POST"])
+def delete_group(index):
+    customer_id = get_customer_id()
+    current = load_groups(customer_id)
 
-    current = (
-        load_groups(
-            customer_id
-        )
-    )
+    if 0 <= index < len(current):
+        deleted = current.pop(index)
+        save_groups(customer_id, current)
+        add_history(customer_id, "info", "Đã xóa Group", deleted)
+        flash("Đã xóa Group thành công.", "success")
 
-    if group_url in current:
+    return redirect(url_for("groups"))
 
-        flash(
-            "Group đã tồn tại.",
-            "warning",
-        )
 
-        return redirect(
-            url_for(
-                "groups"
-            )
-        )
+@app.route("/groups/bulk-save", methods=["POST"])
+def groups_bulk_save():
+    customer_id = get_customer_id()
+    is_json = request.is_json or (request.content_type and "application/json" in request.content_type)
 
-    current.append(
-        group_url
-    )
+    if is_json:
+        data = request.get_json(silent=True) or {}
+        raw_items = data.get("groups", [])
+        mode = data.get("mode", "append")
+    else:
+        raw_text = request.form.get("groups_text", "")
+        raw_items = extract_group_urls_from_text(raw_text)
+        mode = request.form.get("mode", "append")
 
-    save_groups(
-        customer_id,
-        current,
-    )
+    clean_new = []
+    seen = set()
+    for item in raw_items:
+        norm = normalize_group_url(item)
+        if norm and norm not in seen:
+            seen.add(norm)
+            clean_new.append(norm)
 
+    if not clean_new and mode == "append":
+        if is_json:
+            return jsonify({"success": False, "message": "Không có link Group hợp lệ nào để thêm."}), 400
+        flash("Không có link Group hợp lệ nào để thêm.", "warning")
+        return redirect(url_for("groups"))
+
+    current = load_groups(customer_id)
+    if mode == "replace":
+        final_list = clean_new
+        added_count = len(final_list)
+    else:
+        existing_set = set(current)
+        new_items = [g for g in clean_new if g not in existing_set]
+        final_list = current + new_items
+        added_count = len(new_items)
+
+    save_groups(customer_id, final_list)
     add_history(
         customer_id,
         "info",
-        "Đã thêm Group",
-        group_url,
+        "Cập nhật Groups",
+        f"Tổng {len(final_list)} group (thêm mới {added_count}, chế độ: {mode})",
     )
 
-    return redirect(
-        url_for(
-            "groups"
-        )
+    msg = f"Đã lưu thành công! Tổng cộng {len(final_list)} group (thêm mới {added_count})."
+    if is_json:
+        return jsonify({
+            "success": True,
+            "total": len(final_list),
+            "added": added_count,
+            "groups": final_list,
+            "message": msg,
+        })
+
+    flash(msg, "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/upload", methods=["POST"])
+def groups_upload():
+    customer_id = get_customer_id()
+    file = request.files.get("file")
+    mode = request.form.get("mode", "append")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest" or (
+        request.accept_mimetypes.best == "application/json"
     )
 
+    if not file or not file.filename:
+        if is_ajax:
+            return jsonify({"success": False, "message": "Vui lòng chọn file Excel hoặc TXT/CSV."}), 400
+        flash("Vui lòng chọn file Excel hoặc TXT/CSV.", "warning")
+        return redirect(url_for("groups"))
 
-@app.route(
-    "/delete-group/<int:index>",
-    methods=["POST"],
-)
-def delete_group(
-    index
-):
+    try:
+        file_bytes = file.read()
+        extracted = extract_group_urls_from_file(file.filename, file_bytes)
+    except Exception as exc:
+        if is_ajax:
+            return jsonify({"success": False, "message": f"Lỗi đọc file: {exc}"}), 400
+        flash(f"Lỗi đọc file: {exc}", "danger")
+        return redirect(url_for("groups"))
 
-    customer_id = (
-        get_customer_id()
+    if not extracted:
+        msg = f"Không tìm thấy link Group Facebook nào trong file {file.filename}."
+        if is_ajax:
+            return jsonify({"success": False, "message": msg}), 400
+        flash(msg, "warning")
+        return redirect(url_for("groups"))
+
+    current = load_groups(customer_id)
+    if mode == "replace":
+        final_list = extracted
+        added_count = len(final_list)
+    else:
+        existing_set = set(current)
+        new_items = [g for g in extracted if g not in existing_set]
+        final_list = current + new_items
+        added_count = len(new_items)
+
+    save_groups(customer_id, final_list)
+    add_history(
+        customer_id,
+        "info",
+        "Nhập Groups từ file",
+        f"File: {file.filename} ({len(final_list)} group, thêm {added_count})",
     )
 
-    current = (
-        load_groups(
-            customer_id
-        )
-    )
+    msg = f"Đã nhập thành công từ file {file.filename}! Tổng cộng {len(final_list)} group (thêm mới {added_count})."
+    if is_ajax:
+        return jsonify({
+            "success": True,
+            "total": len(final_list),
+            "added": added_count,
+            "groups": final_list,
+            "message": msg,
+        })
 
-    if (
-        0 <= index
-        < len(current)
-    ):
+    flash(msg, "success")
+    return redirect(url_for("groups"))
 
-        deleted = (
-            current.pop(
-                index
-            )
+
+@app.route("/groups/clear", methods=["POST"])
+def groups_clear():
+    customer_id = get_customer_id()
+    save_groups(customer_id, [])
+    add_history(customer_id, "info", "Xóa toàn bộ Groups", "Đã xóa toàn bộ danh sách group.")
+
+    is_ajax = request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if is_ajax:
+        return jsonify({"success": True, "total": 0, "message": "Đã xóa toàn bộ danh sách group."})
+
+    flash("Đã xóa toàn bộ danh sách Group.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/delete-item", methods=["POST"])
+def groups_delete_item():
+    customer_id = get_customer_id()
+    is_json = request.is_json or (request.content_type and "application/json" in request.content_type)
+    data = request.get_json(silent=True) if is_json else {}
+    url = (data.get("url") if data else None) or request.form.get("url")
+    idx = (data.get("index") if data else None) or request.form.get("index")
+
+    current = load_groups(customer_id)
+    deleted = None
+
+    if url and url in current:
+        current.remove(url)
+        deleted = url
+    elif idx is not None:
+        try:
+            i = int(idx)
+            if 0 <= i < len(current):
+                deleted = current.pop(i)
+        except (ValueError, TypeError):
+            pass
+
+    if deleted:
+        save_groups(customer_id, current)
+        add_history(customer_id, "info", "Đã xóa Group", deleted)
+        if is_json:
+            return jsonify({"success": True, "total": len(current), "deleted": deleted})
+        flash(f"Đã xóa: {deleted}", "success")
+    else:
+        if is_json:
+            return jsonify({"success": False, "message": "Không tìm thấy group cần xóa"}), 404
+
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/export")
+def groups_export():
+    customer_id = get_customer_id()
+    groups_list = load_groups(customer_id)
+    fmt = request.args.get("format", "xlsx").lower()
+
+    if fmt == "csv" or openpyxl is None:
+        output = io.StringIO()
+        output.write("STT,Link Group Facebook\n")
+        for i, g in enumerate(groups_list, 1):
+            output.write(f'{i},"{g}"\n')
+        mem = io.BytesIO()
+        mem.write(output.getvalue().encode("utf-8-sig"))
+        mem.seek(0)
+        return send_file(
+            mem,
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name="fb_groups_list.csv",
         )
 
-        save_groups(
-            customer_id,
-            current,
-        )
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Danh sách Groups"
+    ws.append(["STT", "Link Group Facebook", "Ghi chú"])
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 55
+    ws.column_dimensions["C"].width = 25
 
-        add_history(
-            customer_id,
-            "info",
-            "Đã xóa Group",
-            deleted,
-        )
+    for i, g in enumerate(groups_list, 1):
+        ws.append([i, g, ""])
 
-    return redirect(
-        url_for(
-            "groups"
-        )
+    mem = io.BytesIO()
+    wb.save(mem)
+    mem.seek(0)
+    return send_file(
+        mem,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="fb_groups_list.xlsx",
     )
 
 
