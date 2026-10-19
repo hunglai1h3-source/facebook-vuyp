@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FB POST PRO Connector",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Liên kết FB POST PRO với Facebook đang đăng nhập trên Chrome. Không gửi mật khẩu hoặc cookie Facebook lên server.",
   "permissions": [
     "storage",

@@ -7285,13 +7285,21 @@ def agent_update_status():
 
     # Mọi cập nhật tiến độ cũng được tính là heartbeat để Connector
     # không bị hiển thị offline trong chiến dịch dài.
-    devices = load_devices(customer_id)
-    device = devices.get(device_id, {})
-    if device:
-        device["last_seen"] = now_iso()
-        device["status"] = "online"
-        devices[device_id] = device
-        save_devices(customer_id, devices)
+    # Throttle: chỉ ghi file thiết bị tối đa mỗi 30 giây để giảm I/O
+    # trong các chiến dịch dài (stoppableDelay gọi endpoint này rất thường xuyên).
+    import time as _time
+    _now_ts = _time.time()
+    _device_write_key = f"_dev_write_{customer_id}_{device_id}"
+    _last_dev_write = getattr(app, _device_write_key, 0)
+    if _now_ts - _last_dev_write >= 30:
+        devices = load_devices(customer_id)
+        device = devices.get(device_id, {})
+        if device:
+            device["last_seen"] = now_iso()
+            device["status"] = "online"
+            devices[device_id] = device
+            save_devices(customer_id, devices)
+        setattr(app, _device_write_key, _now_ts)
 
     status = str(
         data.get(
