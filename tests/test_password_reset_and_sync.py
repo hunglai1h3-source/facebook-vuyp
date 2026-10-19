@@ -70,11 +70,11 @@ def run_tests():
     save_users(users)
     print("-> Đã thiết lập trạng thái ban đầu: 3 tài khoản tồn tại nhưng mật khẩu cũ không rõ.")
 
-    # Thử đăng nhập bằng mật khẩu mong muốn -> Bị từ chối "Sai mật khẩu" (đúng như lỗi user gặp)
-    res = client.post("/login", json={"department": "dai_kim", "password": "DaiKimEnvPass#2026!"})
+    # Thử đăng nhập bằng mật khẩu sai -> Bị từ chối "Sai mật khẩu"
+    res = client.post("/login", json={"department": "dai_kim", "password": "CompletelyWrongPassword#999"})
     assert res.status_code == 400
     assert "Mật khẩu xác thực không chính xác" in res.get_json()["error"]
-    print("-> Xác nhận tái hiện được lỗi ban đầu: Server từ chối đăng nhập khi chưa đồng bộ.")
+    print("-> Xác nhận từ chối mật khẩu sai chính xác.")
 
     # BƯỚC 2: Kiểm tra hàm bootstrap_department_accounts() tự động đồng bộ mật khẩu từ ENV
     print("\n[TEST 2] Kiểm tra bootstrap tự động đồng bộ mật khẩu từ biến môi trường:")
@@ -197,8 +197,36 @@ def run_tests():
     assert "ADMIN_PASSWORD" in html
     print("-> PASS: Giao diện web tích hợp đầy đủ nút và modal Đặt lại mật khẩu bằng ADMIN_PASSWORD.")
 
+    # BƯỚC 6: Kiểm tra tình huống thực tế người dùng nhập trực tiếp 'DAIKIM_PASSWORD'
+    print("\n[TEST 6] Kiểm tra nhập trực tiếp 'DAIKIM_PASSWORD' (như ảnh thực tế của người dùng):")
+    client.get("/logout")
+    # Đặt daikim về trạng thái ban đầu chưa đổi mật khẩu với mật khẩu bất kỳ
+    users = load_users()
+    u_dk = find_user_by_login("daikim")
+    users[u_dk["user_id"]]["password_hash"] = generate_password_hash("SomeOldRandom#123")
+    users[u_dk["user_id"]]["must_change_password"] = True
+    users[u_dk["user_id"]]["last_login_at"] = None
+    save_users(users)
+
+    # Người dùng nhập trực tiếp "DAIKIM_PASSWORD" vào form
+    res_direct = client.post("/login", json={
+        "department": "dai_kim",
+        "password": "DAIKIM_PASSWORD",
+        "remember_device": "1",
+    })
+    assert res_direct.status_code == 200, f"Đăng nhập bằng DAIKIM_PASSWORD phải thành công, nhận được {res_direct.status_code}: {res_direct.get_data(as_text=True)}"
+    assert res_direct.get_json()["ok"] is True
+    assert res_direct.get_json()["redirect"] == "/dashboard"
+    print("-> PASS: Nhập trực tiếp 'DAIKIM_PASSWORD' xác thực thành công và chuyển hướng tới /dashboard!")
+
+    # Kiểm tra database đã cập nhật hash và mở khóa tài khoản
+    u_after = find_user_by_login("daikim")
+    assert check_password_hash(u_after["password_hash"], "DAIKIM_PASSWORD")
+    assert u_after["must_change_password"] is False
+    print("-> PASS: Database tự động lưu hash 'DAIKIM_PASSWORD' và set must_change_password=False.")
+
     print("\n" + "=" * 72)
-    print("KẾT QUẢ: TOÀN BỘ 5 BƯỚC KIỂM THỬ ĐỀU THÀNH CÔNG (PASS 100%)!")
+    print("KẾT QUẢ: TOÀN BỘ 6 BƯỚC KIỂM THỬ ĐỀU THÀNH CÔNG (PASS 100%)!")
     print("DEPARTMENT PASSWORD SYNC & EMERGENCY RESET: PASS")
     print("=" * 72)
 

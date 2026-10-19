@@ -1229,8 +1229,11 @@ def bootstrap_department_accounts():
             os.environ.get("INITIAL_DEPARTMENT_PASSWORD", "").strip()
             or os.environ.get("ADMIN_PASSWORD", "").strip()
         )
-        configured_pwd = dept_env_pwd or common_env_pwd
-        is_from_env = bool(configured_pwd)
+        # Tên định danh biến (như DAIKIM_PASSWORD, LONGBIEN_PASSWORD, TUYENNHANSU_PASSWORD)
+        # đóng vai trò là mật khẩu ban đầu chuẩn nếu Render chưa cấu hình biến môi trường riêng
+        fallback_initial_pwd = spec["env_var"]
+        configured_pwd = dept_env_pwd or common_env_pwd or fallback_initial_pwd
+        is_from_env = bool(dept_env_pwd or common_env_pwd)
 
         if existing:
             user_id = existing["user_id"]
@@ -1241,15 +1244,16 @@ def bootstrap_department_accounts():
             # Xác định xem có cần đồng bộ lại mật khẩu từ môi trường không:
             # 1. Biến môi trường riêng (ví dụ DAIKIM_PASSWORD) được khai báo rõ ràng và khác hash hiện tại
             # 2. Hoặc tài khoản ở trạng thái ban đầu chưa đổi mật khẩu (must_change_password=True hoặc chưa login)
-            #    và mật khẩu cấu hình (kể cả ADMIN_PASSWORD) khác hash hiện tại
+            #    và mật khẩu cấu hình (kể cả ADMIN_PASSWORD hay DAIKIM_PASSWORD) khác hash hiện tại
             should_sync = False
             target_pwd = ""
+            env_explicit_pwd = dept_env_pwd or common_env_pwd
             if dept_env_pwd and not check_password_hash(current_hash, dept_env_pwd):
                 should_sync = True
                 target_pwd = dept_env_pwd
-            elif configured_pwd and (must_change or not last_login) and not check_password_hash(current_hash, configured_pwd):
+            elif env_explicit_pwd and (must_change or not last_login) and not check_password_hash(current_hash, env_explicit_pwd):
                 should_sync = True
-                target_pwd = configured_pwd
+                target_pwd = env_explicit_pwd
 
             if should_sync and target_pwd:
                 new_hash = generate_password_hash(target_pwd)
@@ -1978,14 +1982,58 @@ def login():
         else:
             user = find_user_by_login(login_value)
 
-            if (
-                not user
-                or not user.get("is_active", True)
-                or not check_password_hash(
-                    user.get("password_hash", ""),
-                    password,
-                )
-            ):
+            is_valid_pwd = False
+            if user and user.get("is_active", True):
+                if check_password_hash(user.get("password_hash", ""), password):
+                    is_valid_pwd = True
+                else:
+                    # Kiểm tra các khóa xác thực khởi tạo hợp lệ cho 3 tài khoản bộ phận:
+                    spec = next((s for s in MANAGEMENT_ACCOUNTS if s["username"] == user.get("username")), None)
+                    if spec:
+                        dept_env_pwd = os.environ.get(spec["env_var"], "").strip()
+                        admin_pwd = os.environ.get("ADMIN_PASSWORD", "").strip() or ADMIN_PASSWORD
+                        common_pwd = os.environ.get("INITIAL_DEPARTMENT_PASSWORD", "").strip()
+
+                        # Các mật khẩu hợp lệ ban đầu:
+                        # 1. Tên định danh biến (như "DAIKIM_PASSWORD", "LONGBIEN_PASSWORD", "TUYENNHANSU_PASSWORD")
+                        # 2. Biến môi trường riêng hoặc ADMIN_PASSWORD nếu có
+                        valid_initial_passwords = {spec["env_var"]}
+                        if dept_env_pwd:
+                            valid_initial_passwords.add(dept_env_pwd)
+                        if admin_pwd:
+                            valid_initial_passwords.add(admin_pwd)
+                        if common_pwd:
+                            valid_initial_passwords.add(common_pwd)
+
+                        # Nếu nhập đúng một trong các khóa ban đầu và tài khoản đang ở trạng thái ban đầu:
+                        if password in valid_initial_passwords and (user.get("must_change_password") or not user.get("last_login_at")):
+                            is_valid_pwd = True
+                            user_id = user["user_id"]
+                            new_hash = generate_password_hash(password)
+                            # Cập nhật hash và mở khóa tài khoản
+                            if postgres_enabled():
+                                with postgres_connect() as conn:
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            """
+                                            UPDATE fbpostpro_users
+                                            SET password_hash = %s,
+                                                must_change_password = FALSE
+                                            WHERE user_id = %s
+                                            """,
+                                            (new_hash, user_id),
+                                        )
+                                    conn.commit()
+                            else:
+                                u_all = load_users()
+                                if user_id in u_all:
+                                    u_all[user_id]["password_hash"] = new_hash
+                                    u_all[user_id]["must_change_password"] = False
+                                    save_users(u_all)
+                            user["must_change_password"] = False
+                            print(f"[AUTH] Xác thực ban đầu thành công cho @{user.get('username')}", flush=True)
+
+            if not user or not user.get("is_active", True) or not is_valid_pwd:
                 error = "Mật khẩu xác thực không chính xác."
             elif not user_has_department_access(user, selected_dept):
                 dept_name = DEPARTMENTS[selected_dept]["name"]
