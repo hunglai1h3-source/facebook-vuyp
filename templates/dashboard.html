@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Tổng quan • FB POST PRO{% endblock %}
-{% block page_title %}Tổng quan{% endblock %}
-{% block page_subtitle %}Theo dõi chiến dịch, Connector và hiệu suất đăng bài.{% endblock %}
+{% block title %}{{ current_department.title if current_department else 'Tổng quan • FB POST PRO' }}{% endblock %}
+{% block page_title %}{{ current_department.title if current_department else 'FB POST PRO' }}{% endblock %}
+{% block page_subtitle %}Không gian quản lý {{ current_department.name if current_department else '' }} • Theo dõi chiến dịch, Connector và hiệu suất đăng bài.{% endblock %}
 
 {% block content %}
 <section class="fb-dashboard">
   <div class="hero-card">
     <div>
-      <div class="hero-eyebrow">FB POST PRO LOCAL</div>
+      <div class="hero-eyebrow">{{ current_department.title if current_department else 'FB POST PRO LOCAL' }}</div>
       <h2>Chào {{ current_user.display_name if current_user else session.get('username','bạn') }} 👋</h2>
       <p>Quản lý chiến dịch Facebook và dùng chính phiên Facebook đang đăng nhập trên Chrome của khách.</p>
     </div>

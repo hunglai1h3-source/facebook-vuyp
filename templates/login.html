@@ -4,30 +4,602 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Đăng nhập • FB POST PRO</title>
+<title>Đăng nhập quản trị • FB POST PRO</title>
 <style>
-*{box-sizing:border-box}:root{--bg:#070a12;--panel:#101727;--line:rgba(255,255,255,.09);--text:#f8fafc;--muted:#94a3b8;--violet:#7c3aed;--blue:#2563eb;--red:#ef4444}body{margin:0;min-height:100vh;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text);background:radial-gradient(circle at 13% 9%,rgba(124,58,237,.25),transparent 30%),radial-gradient(circle at 88% 88%,rgba(37,99,235,.18),transparent 32%),var(--bg);display:grid;place-items:center;padding:24px}.shell{width:min(1040px,100%);min-height:610px;display:grid;grid-template-columns:1.08fr .92fr;border:1px solid var(--line);border-radius:30px;overflow:hidden;background:rgba(8,12,23,.89);box-shadow:0 38px 110px rgba(0,0,0,.48);backdrop-filter:blur(18px)}.visual{padding:55px;position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(124,58,237,.22),rgba(37,99,235,.07))}.visual:before,.visual:after{content:"";position:absolute;border-radius:50%;filter:blur(4px)}.visual:before{width:300px;height:300px;right:-120px;top:-90px;background:rgba(59,130,246,.15)}.visual:after{width:280px;height:280px;left:-130px;bottom:-120px;background:rgba(139,92,246,.16)}.brand{position:relative;z-index:2;display:flex;align-items:center;gap:13px}.logo{width:51px;height:51px;border-radius:16px;display:grid;place-items:center;font-weight:950;background:linear-gradient(135deg,#8b5cf6,#2563eb);box-shadow:0 14px 36px rgba(99,102,241,.32)}.brand strong{font-size:18px}.brand small{display:block;color:#a5b4fc;font-size:11px;margin-top:3px}.visual-copy{position:relative;z-index:2;margin-top:100px}.eyebrow{font-size:10px;letter-spacing:.18em;font-weight:850;color:#a78bfa}.visual h1{font-size:47px;line-height:1.02;letter-spacing:-1.8px;margin:14px 0 18px;max-width:520px}.visual p{font-size:14px;line-height:1.75;color:#cbd5e1;max-width:490px}.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:28px}.chip{font-size:11px;padding:8px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.045);color:#dbeafe}.login{padding:52px 48px;display:flex;flex-direction:column;justify-content:center}.login .eyebrow{margin-bottom:7px}.login h2{font-size:29px;margin:0 0 8px;letter-spacing:-.5px}.sub{font-size:13px;line-height:1.65;color:var(--muted);margin-bottom:24px}.error{padding:11px 13px;border-radius:12px;border:1px solid rgba(239,68,68,.23);background:rgba(239,68,68,.07);color:#fecaca;font-size:12px;margin-bottom:13px}.field{margin-bottom:14px}.field label{display:block;font-size:11px;color:#cbd5e1;font-weight:750;margin-bottom:8px}.field input[type="text"],.field input[type="password"]{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:13px;background:#090f1d;color:#fff;outline:none;font-size:14px}.field input:focus{border-color:rgba(124,58,237,.65);box-shadow:0 0 0 4px rgba(124,58,237,.1)}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 15px;font-size:11px;color:var(--muted)}.remember{display:flex;align-items:center;gap:8px}.remember input{accent-color:#7c3aed}.submit{width:100%;border:0;border-radius:13px;padding:14px 15px;color:white;font-weight:850;cursor:pointer;background:linear-gradient(135deg,#7c3aed,#2563eb);box-shadow:0 14px 34px rgba(99,102,241,.27)}.register-link{text-align:center;margin-top:18px;color:var(--muted);font-size:12px}.register-link a{color:#c4b5fd;text-decoration:none;font-weight:800}.security{text-align:center;color:#5f6d86;font-size:10px;margin-top:20px}.next{display:none}@media(max-width:800px){.shell{grid-template-columns:1fr;min-height:auto}.visual{display:none}.login{padding:38px 26px}}
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --bg: #070a12;
+    --card-bg: rgba(15, 23, 42, 0.78);
+    --border-color: rgba(255, 255, 255, 0.08);
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --primary-purple: #7c3aed;
+    --primary-blue: #2563eb;
+    --glow-purple: rgba(124, 58, 237, 0.35);
+    --glow-blue: rgba(37, 99, 235, 0.25);
+    --error-bg: rgba(239, 68, 68, 0.1);
+    --error-border: rgba(239, 68, 68, 0.3);
+    --error-text: #fca5a5;
+}
+
+body {
+    min-height: 100vh;
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text-primary);
+    background: 
+        radial-gradient(circle at 15% 15%, rgba(124, 58, 237, 0.22), transparent 35%),
+        radial-gradient(circle at 85% 85%, rgba(37, 99, 235, 0.2), transparent 35%),
+        radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.6), transparent 80%),
+        var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    line-height: 1.5;
+}
+
+.login-wrapper {
+    width: 100%;
+    max-width: 520px;
+}
+
+.login-card {
+    background: var(--card-bg);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border: 1px solid var(--border-color);
+    border-radius: 26px;
+    padding: 38px 36px;
+    box-shadow: 
+        0 25px 65px -12px rgba(0, 0, 0, 0.55),
+        0 0 50px -10px var(--glow-purple);
+    position: relative;
+    overflow: hidden;
+}
+
+.login-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #7c3aed, #2563eb, #38bdf8);
+}
+
+/* Header & Logo */
+.brand-header {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.logo-badge {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 16px;
+    border-radius: 17px;
+    background: linear-gradient(135deg, #8b5cf6, #2563eb);
+    box-shadow: 0 12px 30px rgba(99, 102, 241, 0.35);
+    display: grid;
+    place-items: center;
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: -0.5px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.system-tag {
+    display: inline-block;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    font-weight: 850;
+    color: #c4b5fd;
+    text-transform: uppercase;
+    background: rgba(124, 58, 237, 0.12);
+    border: 1px solid rgba(124, 58, 237, 0.25);
+    padding: 4px 10px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+}
+
+.brand-header h1 {
+    font-size: 25px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+.brand-header p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    max-width: 400px;
+    margin: 0 auto;
+    line-height: 1.55;
+}
+
+/* Khu vực chọn bộ phận quản lý (3 lựa chọn: Đại Kim, Long Biên, Tuyển nhân sự) */
+.dept-section {
+    margin-bottom: 24px;
+}
+
+.dept-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    color: #cbd5e1;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+
+.dept-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}
+
+.dept-btn {
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 15px;
+    padding: 14px 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    user-select: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.dept-btn:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(124, 58, 237, 0.4);
+    transform: translateY(-2px);
+}
+
+.dept-btn.selected {
+    background: linear-gradient(145deg, rgba(124, 58, 237, 0.22), rgba(37, 99, 235, 0.16));
+    border-color: #8b5cf6;
+    box-shadow: 
+        0 8px 24px rgba(124, 58, 237, 0.28),
+        inset 0 0 12px rgba(139, 92, 246, 0.15);
+    transform: translateY(-1px);
+}
+
+.dept-icon {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.dept-title {
+    font-size: 12px;
+    font-weight: 750;
+    color: #f1f5f9;
+}
+
+.dept-btn.selected .dept-title {
+    color: #ffffff;
+    font-weight: 850;
+}
+
+.dept-sub {
+    font-size: 9.5px;
+    color: var(--text-secondary);
+}
+
+.dept-btn.selected .dept-sub {
+    color: #c4b5fd;
+}
+
+.dept-check {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #7c3aed;
+    color: white;
+    font-size: 9px;
+    display: none;
+    place-items: center;
+}
+
+.dept-btn.selected .dept-check {
+    display: grid;
+}
+
+/* Thông báo lỗi */
+.alert-error {
+    background: var(--error-bg);
+    border: 1px solid var(--error-border);
+    color: var(--error-text);
+    padding: 12px 14px;
+    border-radius: 13px;
+    font-size: 12px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    line-height: 1.5;
+}
+
+/* Form Fields */
+.form-field {
+    margin-bottom: 18px;
+}
+
+.form-label {
+    display: block;
+    font-size: 11.5px;
+    font-weight: 750;
+    color: #e2e8f0;
+    margin-bottom: 8px;
+}
+
+.input-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.input-icon-left {
+    position: absolute;
+    left: 14px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    pointer-events: none;
+}
+
+.input-control {
+    width: 100%;
+    padding: 13px 14px 13px 40px;
+    font-size: 13.5px;
+    color: #ffffff;
+    background: rgba(9, 15, 29, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    outline: none;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.input-control::placeholder {
+    color: #64748b;
+    font-size: 13px;
+}
+
+.input-control:focus {
+    border-color: #8b5cf6;
+    background: rgba(9, 15, 29, 1);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.18);
+}
+
+.password-toggle-btn {
+    position: absolute;
+    right: 12px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    font-size: 15px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    transition: color 0.15s ease;
+}
+
+.password-toggle-btn:hover {
+    color: #ffffff;
+}
+
+/* Checkbox & Options */
+.options-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 22px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.remember-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.remember-label input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--primary-purple);
+    cursor: pointer;
+}
+
+/* Submit Button */
+.btn-submit {
+    width: 100%;
+    padding: 14px 18px;
+    font-size: 13.5px;
+    font-weight: 850;
+    letter-spacing: 0.04em;
+    color: #ffffff;
+    background: linear-gradient(135deg, #7c3aed 0%, #2563eb 100%);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 14px;
+    cursor: pointer;
+    box-shadow: 0 12px 32px rgba(99, 102, 241, 0.32);
+    transition: all 0.22s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-submit:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 40px rgba(99, 102, 241, 0.45);
+    filter: brightness(1.06);
+}
+
+.btn-submit:active {
+    transform: translateY(0);
+}
+
+/* Footer & Security Note */
+.footer-note {
+    text-align: center;
+    margin-top: 22px;
+    font-size: 11.5px;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.register-text {
+    text-align: center;
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.register-text a {
+    color: #c4b5fd;
+    text-decoration: none;
+    font-weight: 750;
+    transition: text-decoration 0.15s ease;
+}
+
+.register-text a:hover {
+    text-decoration: underline;
+}
+
+/* Mobile responsive */
+@media (max-width: 480px) {
+    .login-card {
+        padding: 28px 20px;
+        border-radius: 20px;
+    }
+    .dept-grid {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+    .dept-btn {
+        flex-direction: row;
+        justify-content: flex-start;
+        padding: 12px 14px;
+        gap: 12px;
+    }
+    .dept-btn.selected .dept-check {
+        top: 50%;
+        transform: translateY(-50%);
+        right: 12px;
+    }
+    .brand-header h1 {
+        font-size: 22px;
+    }
+}
 </style>
 </head>
 <body>
-<div class="shell">
-  <section class="visual">
-    <div class="brand"><div class="logo">FB</div><div><strong>FB POST PRO</strong><small>Local Chrome</small></div></div>
-    <div class="visual-copy"><div class="eyebrow">MULTI-USER AUTOMATION</div><h1>Quản lý chiến dịch Facebook trong một nơi.</h1><p>Đăng nhập để quản lý Groups, nội dung, lịch sử chiến dịch và Chrome profile Facebook riêng cho tài khoản của bạn.</p><div class="chips"><span class="chip">🌐 Chrome</span><span class="chip">◉ PostgreSQL</span><span class="chip">⚡ Local</span></div></div>
-  </section>
-  <section class="login">
-    <div class="eyebrow">WELCOME BACK</div><h2>Đăng nhập</h2><div class="sub">Tiếp tục vào FB POST PRO bằng username hoặc email.</div>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
-    <form method="post">
-      <input class="next" type="hidden" name="next" value="{{ next_url }}">
-      <div class="field"><label>Username hoặc Email</label><input type="text" name="login" placeholder="username@example.com" autocomplete="username" autofocus required></div>
-      <div class="field"><label>Mật khẩu</label><input type="password" name="password" placeholder="••••••••" autocomplete="current-password" required></div>
-      <div class="row"><label class="remember"><input type="checkbox" name="remember" value="1"> Ghi nhớ đăng nhập</label><span>FB POST PRO</span></div>
-      <button class="submit" type="submit">ĐĂNG NHẬP →</button>
-    </form>
-    <div class="register-link">Chưa có tài khoản? <a href="{{ url_for('register') }}">Tạo tài khoản</a></div>
-    <div class="security">🔒 Mật khẩu FB POST PRO được lưu dưới dạng hash.</div>
-  </section>
+
+<div class="login-wrapper">
+    <div class="login-card">
+        <!-- Logo & Brand Header -->
+        <div class="brand-header">
+            <div class="logo-badge">FB</div>
+            <span class="system-tag">FB POST PRO • ENTERPRISE</span>
+            <h1>Đăng nhập quản trị</h1>
+            <p>Đăng nhập để quản lý chiến dịch, bài đăng và dữ liệu được phân quyền.</p>
+        </div>
+
+        <!-- Thông báo lỗi nếu có -->
+        {% if error %}
+        <div class="alert-error" role="alert">
+            <span style="font-size: 15px;">⚠️</span>
+            <div>{{ error }}</div>
+        </div>
+        {% endif %}
+
+        <!-- Form Đăng Nhập -->
+        <form method="post" action="{{ url_for('login') }}" id="loginForm">
+            <input type="hidden" name="next" value="{{ next_url }}">
+            <!-- Input ẩn lưu mã bộ phận đã chọn -->
+            <input type="hidden" name="department" id="selectedDepartment" value="{{ selected_dept or 'dai_kim' }}">
+
+            <!-- 1. KHU VỰC CHỌN BỘ PHẬN QUẢN LÝ (ĐẠI KIM, LONG BIÊN, TUYỂN NHÂN SỰ) -->
+            <div class="dept-section">
+                <div class="dept-label">
+                    <span>Chọn bộ phận quản lý</span>
+                    <span style="font-size:10px;color:#a78bfa;font-weight:600">3 Không gian</span>
+                </div>
+                <div class="dept-grid">
+                    <!-- 1. ĐẠI KIM -->
+                    <div class="dept-btn {{ 'selected' if (selected_dept == 'dai_kim' or not selected_dept) else '' }}" 
+                         data-dept="dai_kim" 
+                         onclick="selectDepartment('dai_kim')">
+                        <span class="dept-icon">🏛️</span>
+                        <span class="dept-title">Đại Kim</span>
+                        <span class="dept-sub">Chi nhánh 1</span>
+                        <span class="dept-check">✓</span>
+                    </div>
+
+                    <!-- 2. LONG BIÊN -->
+                    <div class="dept-btn {{ 'selected' if selected_dept == 'long_bien' else '' }}" 
+                         data-dept="long_bien" 
+                         onclick="selectDepartment('long_bien')">
+                        <span class="dept-icon">🏢</span>
+                        <span class="dept-title">Long Biên</span>
+                        <span class="dept-sub">Chi nhánh 2</span>
+                        <span class="dept-check">✓</span>
+                    </div>
+
+                    <!-- 3. TUYỂN NHÂN SỰ -->
+                    <div class="dept-btn {{ 'selected' if selected_dept == 'tuyen_nhan_su' else '' }}" 
+                         data-dept="tuyen_nhan_su" 
+                         onclick="selectDepartment('tuyen_nhan_su')">
+                        <span class="dept-icon">👥</span>
+                        <span class="dept-title">Tuyển nhân sự</span>
+                        <span class="dept-sub">Khối Nhân sự</span>
+                        <span class="dept-check">✓</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. EMAIL HOẶC SỐ ĐIỆN THOẠI -->
+            <div class="form-field">
+                <label class="form-label">Email hoặc số điện thoại</label>
+                <div class="input-container">
+                    <span class="input-icon-left">👤</span>
+                    <input 
+                        type="text" 
+                        class="input-control" 
+                        name="login" 
+                        id="loginInput" 
+                        placeholder="Nhập email hoặc số điện thoại của bạn" 
+                        autocomplete="username" 
+                        required 
+                        autofocus
+                    >
+                </div>
+            </div>
+
+            <!-- 3. MẬT KHẨU (KÈM NÚT ẨN/HIỆN MẬT KHẨU) -->
+            <div class="form-field">
+                <label class="form-label">Mật khẩu</label>
+                <div class="input-container">
+                    <span class="input-icon-left">🔒</span>
+                    <input 
+                        type="password" 
+                        class="input-control" 
+                        name="password" 
+                        id="passwordInput" 
+                        placeholder="Nhập mật khẩu quản trị" 
+                        autocomplete="current-password" 
+                        required
+                    >
+                    <button 
+                        type="button" 
+                        class="password-toggle-btn" 
+                        id="togglePasswordBtn" 
+                        onclick="togglePasswordVisibility()" 
+                        title="Hiện/Ẩn mật khẩu"
+                    >
+                        👁️
+                    </button>
+                </div>
+            </div>
+
+            <!-- Ghi nhớ & tùy chọn -->
+            <div class="options-row">
+                <label class="remember-label">
+                    <input type="checkbox" name="remember" value="1">
+                    <span>Ghi nhớ phiên đăng nhập</span>
+                </label>
+                <span style="font-size:11px;color:#7c3aed;font-weight:700">Bảo mật SSL</span>
+            </div>
+
+            <!-- Nút ĐĂNG NHẬP -->
+            <button type="submit" class="btn-submit" id="submitBtn">
+                ĐĂNG NHẬP →
+            </button>
+        </form>
+
+        <div class="register-text">
+            Chưa có tài khoản? <a href="{{ url_for('register') }}">Tạo tài khoản mới</a>
+        </div>
+
+        <div class="footer-note">
+            <span>🔒</span>
+            <span>Hệ thống phân quyền độc lập theo từng bộ phận quản lý.</span>
+        </div>
+    </div>
 </div>
+
+<script>
+// 1. Hàm chọn bộ phận quản lý (Đại Kim, Long Biên, Tuyển nhân sự)
+function selectDepartment(deptId) {
+    const input = document.getElementById('selectedDepartment');
+    input.value = deptId;
+
+    document.querySelectorAll('.dept-btn').forEach(btn => {
+        if (btn.getAttribute('data-dept') === deptId) {
+            btn.classList.add('selected');
+        } else {
+            btn.classList.remove('selected');
+        }
+    });
+
+    // Lưu vào localStorage để ghi nhớ lần đăng nhập sau
+    try {
+        localStorage.setItem('fbpostpro_preferred_department', deptId);
+    } catch(e) {}
+}
+
+// 2. Hàm ẩn/hiện mật khẩu
+function togglePasswordVisibility() {
+    const passInput = document.getElementById('passwordInput');
+    const toggleBtn = document.getElementById('togglePasswordBtn');
+
+    if (passInput.type === 'password') {
+        passInput.type = 'text';
+        toggleBtn.textContent = '🙈';
+        toggleBtn.title = 'Ẩn mật khẩu';
+    } else {
+        passInput.type = 'password';
+        toggleBtn.textContent = '👁️';
+        toggleBtn.title = 'Hiện mật khẩu';
+    }
+}
+
+// 3. Khôi phục bộ phận ưu tiên từ localStorage nếu có và chưa chọn
+window.addEventListener('DOMContentLoaded', () => {
+    try {
+        const savedDept = localStorage.getItem('fbpostpro_preferred_department');
+        const currentInput = document.getElementById('selectedDepartment').value;
+        if (savedDept && ['dai_kim', 'long_bien', 'tuyen_nhan_su'].includes(savedDept) && (!currentInput || currentInput === 'dai_kim')) {
+            selectDepartment(savedDept);
+        }
+    } catch(e) {}
+});
+</script>
+
 </body>
 </html>

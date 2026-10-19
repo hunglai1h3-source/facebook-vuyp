@@ -290,18 +290,121 @@ def sanitize_device_id(value):
     )
 
 
-def get_customer_id():
+# ============================================================
+# DEPARTMENTS (3 BỘ PHẬN QUẢN LÝ)
+# ============================================================
 
-    # Từ bản có tài khoản, toàn bộ dữ liệu được gắn vào user_id cố định.
-    # Không còn sinh customer_xxx ngẫu nhiên theo trình duyệt.
+DEPARTMENTS = {
+    "dai_kim": {
+        "id": "dai_kim",
+        "name": "Đại Kim",
+        "full_name": "ĐẠI KIM",
+        "title": "FB POST PRO — ĐẠI KIM",
+        "badge_color": "#8b5cf6",
+        "icon": "🏛️",
+        "desc": "Chi nhánh Đại Kim",
+    },
+    "long_bien": {
+        "id": "long_bien",
+        "name": "Long Biên",
+        "full_name": "LONG BIÊN",
+        "title": "FB POST PRO — LONG BIÊN",
+        "badge_color": "#2563eb",
+        "icon": "🏢",
+        "desc": "Chi nhánh Long Biên",
+    },
+    "tuyen_nhan_su": {
+        "id": "tuyen_nhan_su",
+        "name": "Tuyển nhân sự",
+        "full_name": "TUYỂN NHÂN SỰ",
+        "title": "FB POST PRO — TUYỂN NHÂN SỰ",
+        "badge_color": "#06b6d4",
+        "icon": "👥",
+        "desc": "Khối Nhân sự & Tuyển dụng",
+    },
+}
+
+VALID_DEPARTMENTS = list(DEPARTMENTS.keys())
+DEFAULT_DEPARTMENT = "dai_kim"
+
+
+def migrate_legacy_to_dept(user_id, scoped_id):
+    """
+    Tương thích ngược: Sao chép an toàn dữ liệu từ user_id cũ sang scoped_id
+    (user_xxx__dept) nếu scoped_id mới tạo chưa có dữ liệu.
+    Không xóa hay ghi đè dữ liệu đã tồn tại.
+    """
+    user_id = sanitize_customer_id(user_id)
+    scoped_id = sanitize_customer_id(scoped_id)
+    if not user_id or not scoped_id or user_id == scoped_id:
+        return
+
+    source = CUSTOMERS_ROOT / user_id
+    dest = CUSTOMERS_ROOT / scoped_id
+
+    # Nếu thư mục scoped đã có dữ liệu groups hoặc settings thì không sao chép nữa
+    if (dest / "data" / "groups.txt").exists() or (dest / "data" / "settings.json").exists():
+        return
+
+    if source.exists() and source.is_dir():
+        dest.mkdir(parents=True, exist_ok=True)
+        for item in source.rglob("*"):
+            rel = item.relative_to(source)
+            target = dest / rel
+            if item.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(item, target)
+                except Exception:
+                    pass
+
+    # Nếu có PostgreSQL, kiểm tra và sao chép groups từ user_id sang scoped_id
+    if postgres_enabled():
+        try:
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) AS c FROM fbpostpro_groups WHERE customer_id = %s",
+                        (scoped_id,),
+                    )
+                    row = cur.fetchone() or {}
+                    if row.get("c", 0) == 0:
+                        cur.execute(
+                            """
+                            INSERT INTO fbpostpro_groups (customer_id, group_url, created_at)
+                            SELECT %s, group_url, created_at
+                            FROM fbpostpro_groups
+                            WHERE customer_id = %s
+                            ON CONFLICT DO NOTHING
+                            """,
+                            (scoped_id, user_id),
+                        )
+                conn.commit()
+        except Exception:
+            pass
+
+
+def get_customer_id():
+    # Toàn bộ dữ liệu được gắn theo user_id và bộ phận đang chọn
     user_id = session.get(
         "user_id",
         "",
     )
+    if not user_id:
+        return ""
 
-    return sanitize_customer_id(
-        user_id
-    )
+    user_id = sanitize_customer_id(user_id)
+    dept = session.get("department", "")
+
+    if dept and dept in DEPARTMENTS:
+        scoped_id = f"{user_id}__{dept}"
+        customer_root(scoped_id)
+        migrate_legacy_to_dept(user_id, scoped_id)
+        return scoped_id
+
+    return user_id
 
 
 # ============================================================
@@ -559,22 +662,24 @@ def write_json(
 # ============================================================
 
 def normalize_username(value):
-
     return str(value or "").strip().lower()
 
 
 def normalize_email(value):
-
     return str(value or "").strip().lower()
 
 
-def postgres_enabled():
+def normalize_phone(value):
+    """Chuẩn hóa số điện thoại: chỉ giữ lại chữ số và dấu + nếu có."""
+    raw = str(value or "").strip()
+    return re.sub(r"[^\d+]", "", raw)
 
+
+def postgres_enabled():
     return bool(DATABASE_URL)
 
 
 def postgres_connect():
-
     if not postgres_enabled():
         raise RuntimeError("DATABASE_URL chưa được cấu hình.")
 
@@ -591,7 +696,6 @@ def postgres_connect():
 
 
 def init_users_table():
-
     if not postgres_enabled():
         return
 
@@ -611,6 +715,25 @@ def init_users_table():
                 )
                 """
             )
+            # Migration an toàn thêm các cột phân quyền và số điện thoại
+            cur.execute(
+                """
+                ALTER TABLE fbpostpro_users
+                ADD COLUMN IF NOT EXISTS departments TEXT DEFAULT '[]';
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE fbpostpro_users
+                ADD COLUMN IF NOT EXISTS role VARCHAR(32) DEFAULT 'user';
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE fbpostpro_users
+                ADD COLUMN IF NOT EXISTS phone VARCHAR(32) DEFAULT '';
+                """
+            )
             cur.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_fbpostpro_users_username
@@ -623,46 +746,73 @@ def init_users_table():
                 ON fbpostpro_users (LOWER(email))
                 """
             )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fbpostpro_users_phone
+                ON fbpostpro_users (phone)
+                """
+            )
         conn.commit()
 
 
 def _serialize_dt(value):
-
     if value is None:
         return ""
-
     if hasattr(value, "isoformat"):
         return value.isoformat(timespec="seconds")
-
     return str(value)
 
 
 def _postgres_row_to_user(row):
-
     if not row:
         return None
+
+    raw_depts = row.get("departments")
+    if isinstance(raw_depts, list):
+        depts_list = [d for d in raw_depts if d in VALID_DEPARTMENTS]
+    elif isinstance(raw_depts, str):
+        try:
+            parsed = json.loads(raw_depts) if raw_depts.strip() else []
+            depts_list = [d for d in parsed if d in VALID_DEPARTMENTS] if isinstance(parsed, list) else []
+        except Exception:
+            depts_list = [d.strip() for d in raw_depts.split(",") if d.strip() in VALID_DEPARTMENTS]
+    else:
+        depts_list = []
 
     return {
         "user_id": row.get("user_id", ""),
         "username": row.get("username", ""),
         "email": row.get("email", ""),
+        "phone": row.get("phone", "") or "",
         "display_name": row.get("display_name", ""),
         "password_hash": row.get("password_hash", ""),
         "is_active": bool(row.get("is_active", True)),
+        "role": str(row.get("role", "user") or "user").strip().lower(),
+        "departments": depts_list,
         "created_at": _serialize_dt(row.get("created_at")),
         "last_login_at": _serialize_dt(row.get("last_login_at")),
     }
 
 
 def load_users():
-
     # Local fallback để bạn vẫn chạy python app.py mà chưa cần PostgreSQL.
     if not postgres_enabled():
         data = read_json(
             USERS_FILE,
             {},
         )
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        # Chuẩn hóa các trường role và departments cho local
+        for uid, u in data.items():
+            if isinstance(u, dict):
+                if "role" not in u:
+                    u["role"] = "user"
+                if "departments" not in u:
+                    u["departments"] = list(VALID_DEPARTMENTS)
+                if "phone" not in u:
+                    u["phone"] = ""
+        return data
 
     init_users_table()
 
@@ -674,9 +824,12 @@ def load_users():
                     user_id,
                     username,
                     email,
+                    phone,
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    departments,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -686,7 +839,6 @@ def load_users():
             rows = cur.fetchall()
 
     result = {}
-
     for row in rows:
         user = _postgres_row_to_user(row)
         if not user:
@@ -698,7 +850,6 @@ def load_users():
 
 
 def save_users(users):
-
     if not postgres_enabled():
         write_json(
             USERS_FILE,
@@ -714,20 +865,29 @@ def save_users(users):
                 if not isinstance(user, dict):
                     continue
 
+                depts = user.get("departments", [])
+                if isinstance(depts, list):
+                    depts_str = json.dumps([d for d in depts if d in VALID_DEPARTMENTS])
+                else:
+                    depts_str = "[]"
+
                 cur.execute(
                     """
                     INSERT INTO fbpostpro_users (
                         user_id,
                         username,
                         email,
+                        phone,
                         display_name,
                         password_hash,
                         is_active,
+                        role,
+                        departments,
                         created_at,
                         last_login_at
                     )
                     VALUES (
-                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         COALESCE(%s::timestamptz, NOW()),
                         %s::timestamptz
                     )
@@ -735,18 +895,24 @@ def save_users(users):
                     DO UPDATE SET
                         username = EXCLUDED.username,
                         email = EXCLUDED.email,
+                        phone = EXCLUDED.phone,
                         display_name = EXCLUDED.display_name,
                         password_hash = EXCLUDED.password_hash,
                         is_active = EXCLUDED.is_active,
+                        role = EXCLUDED.role,
+                        departments = EXCLUDED.departments,
                         last_login_at = EXCLUDED.last_login_at
                     """,
                     (
                         user_id,
                         normalize_username(user.get("username")),
                         normalize_email(user.get("email")),
+                        normalize_phone(user.get("phone")),
                         str(user.get("display_name", "")).strip(),
                         str(user.get("password_hash", "")),
                         bool(user.get("is_active", True)),
+                        str(user.get("role", "user") or "user").strip().lower(),
+                        depts_str,
                         user.get("created_at") or None,
                         user.get("last_login_at") or None,
                     ),
@@ -754,21 +920,66 @@ def save_users(users):
         conn.commit()
 
 
+def get_user_departments(user):
+    """
+    Lấy danh sách mã các bộ phận mà user được cấp quyền.
+    Admin hệ thống có quyền truy cập cả 3 bộ phận.
+    User thường chỉ truy cập các bộ phận được gán trong list departments.
+    """
+    if not user:
+        return []
+
+    # Admin có toàn quyền cả 3 bộ phận
+    if user.get("role") == "admin":
+        return list(VALID_DEPARTMENTS)
+
+    raw_depts = user.get("departments")
+    if isinstance(raw_depts, list):
+        depts_list = [d for d in raw_depts if d in VALID_DEPARTMENTS]
+    elif isinstance(raw_depts, str):
+        try:
+            parsed = json.loads(raw_depts) if raw_depts.strip() else []
+            depts_list = [d for d in parsed if d in VALID_DEPARTMENTS] if isinstance(parsed, list) else []
+        except Exception:
+            depts_list = [d.strip() for d in raw_depts.split(",") if d.strip() in VALID_DEPARTMENTS]
+    else:
+        depts_list = []
+
+    # Tương thích ngược: Nếu tài khoản legacy chưa từng được phân quyền, cấp quyền cả 3
+    if not depts_list and "departments" not in user:
+        return list(VALID_DEPARTMENTS)
+
+    return depts_list
+
+
+def user_has_department_access(user, dept_id):
+    """Kiểm tra xem user có quyền truy cập bộ phận dept_id hay không."""
+    if not user or not dept_id or dept_id not in VALID_DEPARTMENTS:
+        return False
+    return dept_id in get_user_departments(user)
+
+
 def find_user_by_login(login_value):
-
-    login_value = str(login_value or "").strip().lower()
-
-    if not login_value:
+    raw_login = str(login_value or "").strip()
+    if not raw_login:
         return None
+
+    login_lower = raw_login.lower()
+    phone_clean = normalize_phone(raw_login)
 
     if not postgres_enabled():
         for user_id, user in load_users().items():
             if not isinstance(user, dict):
                 continue
 
+            u_name = normalize_username(user.get("username"))
+            u_email = normalize_email(user.get("email"))
+            u_phone = normalize_phone(user.get("phone"))
+
             if (
-                normalize_username(user.get("username")) == login_value
-                or normalize_email(user.get("email")) == login_value
+                u_name == login_lower
+                or u_email == login_lower
+                or (phone_clean and u_phone and u_phone == phone_clean)
             ):
                 result = dict(user)
                 result["user_id"] = user_id
@@ -786,17 +997,21 @@ def find_user_by_login(login_value):
                     user_id,
                     username,
                     email,
+                    phone,
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    departments,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
                 WHERE LOWER(username) = %s
                    OR LOWER(email) = %s
+                   OR (phone != '' AND phone = %s)
                 LIMIT 1
                 """,
-                (login_value, login_value),
+                (login_lower, login_lower, phone_clean),
             )
             row = cur.fetchone()
 
@@ -804,9 +1019,7 @@ def find_user_by_login(login_value):
 
 
 def find_user_by_id(user_id):
-
     user_id = sanitize_customer_id(user_id)
-
     if not user_id:
         return None
 
@@ -828,9 +1041,12 @@ def find_user_by_id(user_id):
                     user_id,
                     username,
                     email,
+                    phone,
                     display_name,
                     password_hash,
                     is_active,
+                    role,
+                    departments,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -1111,16 +1327,25 @@ def safe_next_url(value):
 
 
 @app.context_processor
-def inject_current_user():
+def inject_context():
+    curr_user = get_current_user()
+    curr_dept_id = session.get("department", "")
+    curr_dept = DEPARTMENTS.get(curr_dept_id) if curr_dept_id in DEPARTMENTS else None
+    user_depts = []
+    if curr_user:
+        allowed_ids = get_user_departments(curr_user)
+        user_depts = [DEPARTMENTS[d] for d in allowed_ids if d in DEPARTMENTS]
 
     return {
-        "current_user": get_current_user(),
+        "current_user": curr_user,
+        "current_department": curr_dept,
+        "user_departments": user_depts,
+        "DEPARTMENTS": DEPARTMENTS,
     }
 
 
 @app.before_request
 def require_customer_login():
-
     path = request.path or "/"
 
     # Những endpoint này phải hoạt động mà không cần tài khoản khách.
@@ -1139,7 +1364,8 @@ def require_customer_login():
     ):
         return None
 
-    if not session.get("user_id"):
+    user_id = session.get("user_id")
+    if not user_id:
         next_url = request.full_path if request.query_string else request.path
         return redirect(
             url_for(
@@ -1147,6 +1373,23 @@ def require_customer_login():
                 next=next_url,
             )
         )
+
+    curr_user = get_current_user()
+    if not curr_user or not curr_user.get("is_active", True):
+        session.clear()
+        return redirect(url_for("login"))
+
+    allowed_depts = get_user_departments(curr_user)
+    if not allowed_depts:
+        session.clear()
+        flash("Tài khoản chưa được phân quyền bộ phận nào. Vui lòng liên hệ quản trị viên.", "danger")
+        return redirect(url_for("login"))
+
+    curr_dept = session.get("department")
+    if not curr_dept or curr_dept not in allowed_depts:
+        # Gán tự động bộ phận hợp lệ đầu tiên
+        session["department"] = allowed_depts[0]
+        session["allowed_departments"] = allowed_depts
 
     return None
 
@@ -1217,12 +1460,16 @@ def register():
                     user_id,
                 )
 
-                session.pop("customer_id", None)
+                session.clear()
                 session["user_id"] = user_id
                 session["username"] = username
+                session["department"] = DEFAULT_DEPARTMENT
+                session["allowed_departments"] = list(VALID_DEPARTMENTS)
                 session.permanent = True
 
-                customer_root(user_id)
+                scoped_id = f"{user_id}__{DEFAULT_DEPARTMENT}"
+                customer_root(scoped_id)
+                migrate_legacy_to_dept(user_id, scoped_id)
 
                 return redirect(url_for("dashboard"))
 
@@ -1243,56 +1490,96 @@ def login():
 
     error = ""
     next_url = request.args.get("next", "")
+    selected_dept = request.args.get("department", "dai_kim")
 
     if request.method == "POST":
         next_url = request.form.get("next", "")
-        login_value = request.form.get("login", "")
+        login_value = str(request.form.get("login", "")).strip()
         password = request.form.get("password", "")
+        selected_dept = str(request.form.get("department", "")).strip()
         remember = request.form.get("remember") == "1"
 
-        user = find_user_by_login(login_value)
-
-        if (
-            not user
-            or not user.get("is_active", True)
-            or not check_password_hash(
-                user.get("password_hash", ""),
-                password,
-            )
-        ):
-            error = "Tên đăng nhập/email hoặc mật khẩu không đúng."
+        if not selected_dept or selected_dept not in DEPARTMENTS:
+            error = "Vui lòng chọn bộ phận quản lý (Đại Kim, Long Biên hoặc Tuyển nhân sự)."
+        elif not login_value:
+            error = "Vui lòng nhập Email hoặc số điện thoại."
+        elif not password:
+            error = "Vui lòng nhập mật khẩu."
         else:
-            user_id = user["user_id"]
-            update_user_last_login(user_id)
+            user = find_user_by_login(login_value)
 
-            session.pop("customer_id", None)
-            session["user_id"] = user_id
-            session["username"] = user.get("username", "")
-            session.permanent = remember
+            if (
+                not user
+                or not user.get("is_active", True)
+                or not check_password_hash(
+                    user.get("password_hash", ""),
+                    password,
+                )
+            ):
+                error = "Email/số điện thoại hoặc mật khẩu không chính xác."
+            elif not user_has_department_access(user, selected_dept):
+                dept_name = DEPARTMENTS[selected_dept]["name"]
+                error = f"Tài khoản của bạn không được phân quyền truy cập bộ phận {dept_name}. Vui lòng chọn bộ phận khác hoặc liên hệ quản trị viên."
+            else:
+                user_id = user["user_id"]
+                update_user_last_login(user_id)
 
-            customer_root(user_id)
+                session.clear()
+                session["user_id"] = user_id
+                session["username"] = user.get("username", "")
+                session["department"] = selected_dept
+                session["allowed_departments"] = get_user_departments(user)
+                session.permanent = remember
 
-            return redirect(
-                safe_next_url(next_url)
-            )
+                scoped_id = f"{user_id}__{selected_dept}"
+                customer_root(scoped_id)
+                migrate_legacy_to_dept(user_id, scoped_id)
+
+                return redirect(
+                    safe_next_url(next_url)
+                )
 
     return render_template(
         "login.html",
         error=error,
         next_url=next_url,
+        selected_dept=selected_dept,
+        departments=DEPARTMENTS,
     )
 
 
 @app.route("/logout")
 def logout():
-
-    session.pop("user_id", None)
-    session.pop("username", None)
-    session.pop("customer_id", None)
-
+    session.clear()
     return redirect(
         url_for("login")
     )
+
+
+@app.route("/switch-department", methods=["GET", "POST"])
+def switch_department():
+    user = get_current_user()
+    if not user:
+        return redirect(url_for("login"))
+
+    dept_id = str(request.form.get("department") or request.args.get("department", "")).strip()
+
+    if not dept_id or dept_id not in DEPARTMENTS:
+        flash("Bộ phận quản lý không hợp lệ.", "warning")
+        return redirect(url_for("dashboard"))
+
+    if not user_has_department_access(user, dept_id):
+        dept_name = DEPARTMENTS[dept_id]["name"]
+        flash(f"Tài khoản của bạn không có quyền truy cập bộ phận {dept_name}.", "danger")
+        return redirect(url_for("dashboard"))
+
+    session["department"] = dept_id
+    scoped_id = f"{user['user_id']}__{dept_id}"
+    customer_root(scoped_id)
+    migrate_legacy_to_dept(user["user_id"], scoped_id)
+
+    flash(f"Đã chuyển sang không gian quản lý: {DEPARTMENTS[dept_id]['name']}.", "success")
+    return redirect(url_for("dashboard"))
 
 
 # ============================================================
@@ -3319,11 +3606,11 @@ def admin_required(
         *args,
         **kwargs,
     ):
+        is_admin_session = bool(session.get("admin_logged_in"))
+        curr_user = get_current_user()
+        is_admin_user = bool(curr_user and curr_user.get("role") == "admin")
 
-        if not session.get(
-            "admin_logged_in"
-        ):
-
+        if not is_admin_session and not is_admin_user:
             return redirect(
                 url_for(
                     "admin_login",
@@ -5036,6 +5323,64 @@ def admin_logout():
             "admin_login"
         )
     )
+
+
+# ============================================================
+# ADMIN USERS & ROLES MANAGEMENT
+# ============================================================
+
+@app.route("/admin/users")
+@admin_required
+def admin_users():
+    users_dict = load_users()
+    users_list = []
+    for uid, u in users_dict.items():
+        if not isinstance(u, dict):
+            continue
+        item = dict(u)
+        item["user_id"] = uid
+        item["allowed_departments"] = get_user_departments(item)
+        users_list.append(item)
+
+    users_list.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+
+    return render_template(
+        "admin_users.html",
+        users=users_list,
+        departments=DEPARTMENTS,
+    )
+
+
+@app.route("/admin/users/<user_id>/update", methods=["POST"])
+@admin_required
+def admin_user_update(user_id):
+    user_id = sanitize_customer_id(user_id)
+    users = load_users()
+
+    if user_id not in users:
+        flash("Không tìm thấy người dùng.", "danger")
+        return redirect(url_for("admin_users"))
+
+    user = users[user_id]
+    new_role = request.form.get("role", "user").strip().lower()
+    if new_role not in {"admin", "user"}:
+        new_role = "user"
+
+    selected_depts = request.form.getlist("departments")
+    clean_depts = [d for d in selected_depts if d in VALID_DEPARTMENTS]
+    new_phone = normalize_phone(request.form.get("phone", ""))
+    is_active = request.form.get("is_active") == "1"
+
+    user["role"] = new_role
+    user["departments"] = clean_depts
+    user["phone"] = new_phone
+    user["is_active"] = is_active
+
+    users[user_id] = user
+    save_users(users)
+
+    flash(f"Đã cập nhật phân quyền cho tài khoản {user.get('username')}.", "success")
+    return redirect(url_for("admin_users"))
 
 
 # ============================================================

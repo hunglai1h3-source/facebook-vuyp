@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+
+{% block title %}Quản lý Phân quyền Người dùng • FB POST PRO{% endblock %}
+{% block page_title %}Phân quyền Người dùng{% endblock %}
+{% block page_subtitle %}Cấp quyền và quản lý 3 bộ phận: Đại Kim, Long Biên, Tuyển nhân sự.{% endblock %}
+
+{% block head %}
+<style>
+.admin-users-wrap {
+    display: grid;
+    gap: 20px;
+}
+
+.admin-card {
+    padding: 24px;
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 14px;
+}
+
+.admin-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.admin-table td {
+    padding: 14px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+}
+
+.user-badge-role {
+    font-size: 10px;
+    font-weight: 800;
+    padding: 3px 8px;
+    border-radius: 999px;
+    text-transform: uppercase;
+}
+
+.user-badge-role.admin {
+    background: rgba(124, 58, 237, 0.2);
+    color: #c4b5fd;
+    border: 1px solid rgba(124, 58, 237, 0.35);
+}
+
+.user-badge-role.user {
+    background: rgba(37, 99, 235, 0.15);
+    color: #93c5fd;
+    border: 1px solid rgba(37, 99, 235, 0.25);
+}
+
+.dept-checkbox-group {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.dept-check-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel2) 80%, transparent);
+    cursor: pointer;
+    user-select: none;
+    transition: 0.15s ease;
+}
+
+.dept-check-item:hover {
+    border-color: rgba(124, 58, 237, 0.4);
+}
+
+.dept-check-item input[type="checkbox"] {
+    accent-color: #7c3aed;
+}
+
+.user-form-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="admin-users-wrap">
+    <article class="panel admin-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+            <div>
+                <h3 style="margin:0;font-size:17px">Danh sách tài khoản & Phân quyền</h3>
+                <small style="color:var(--muted);font-size:12px">Quản lý phân quyền truy cập 3 không gian: Đại Kim, Long Biên, Tuyển nhân sự</small>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center">
+                <span class="user-badge-role admin">Tổng: {{ users|length }} tài khoản</span>
+                <a class="btn secondary" href="{{ url_for('admin_devices') }}" style="font-size:11px">📱 Quản lý Devices</a>
+            </div>
+        </div>
+
+        <div style="overflow-x:auto">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>Tài khoản</th>
+                        <th>Email & Số ĐT</th>
+                        <th>Vai trò</th>
+                        <th>Phân quyền 3 Bộ phận</th>
+                        <th>Trạng thái</th>
+                        <th style="text-align:right">Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <form method="post" action="{{ url_for('admin_user_update', user_id=u.user_id) }}">
+                            <td>
+                                <strong style="font-size:12.5px;color:var(--text)">{{ u.display_name or u.username }}</strong>
+                                <div style="color:var(--muted);font-size:11px">@{{ u.username }}</div>
+                                <div style="color:#64748b;font-size:9.5px;font-family:monospace">{{ u.user_id }}</div>
+                            </td>
+                            <td>
+                                <div>{{ u.email }}</div>
+                                <div style="margin-top:4px">
+                                    <input 
+                                        type="text" 
+                                        name="phone" 
+                                        value="{{ u.phone or '' }}" 
+                                        placeholder="Số ĐT..." 
+                                        style="padding:4px 8px;font-size:11px;border-radius:6px;width:120px"
+                                    >
+                                </div>
+                            </td>
+                            <td>
+                                <select name="role" style="padding:6px 10px;font-size:11px;border-radius:8px">
+                                    <option value="user" {{ 'selected' if u.role == 'user' or not u.role else '' }}>Người dùng</option>
+                                    <option value="admin" {{ 'selected' if u.role == 'admin' else '' }}>Quản trị viên (Admin)</option>
+                                </select>
+                            </td>
+                            <td>
+                                <div class="dept-checkbox-group">
+                                    {% for dept_key, dept in departments.items() %}
+                                    <label class="dept-check-item">
+                                        <input 
+                                            type="checkbox" 
+                                            name="departments" 
+                                            value="{{ dept_key }}"
+                                            {{ 'checked' if dept_key in u.allowed_departments else '' }}
+                                        >
+                                        <span>{{ dept.icon }} {{ dept.name }}</span>
+                                    </label>
+                                    {% endfor %}
+                                </div>
+                            </td>
+                            <td>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer">
+                                    <input type="checkbox" name="is_active" value="1" {{ 'checked' if u.is_active else '' }} style="accent-color:#22c55e">
+                                    <span style="color:{{ '#86efac' if u.is_active else '#fca5a5' }}">{{ 'Hoạt động' if u.is_active else 'Đã khóa' }}</span>
+                                </label>
+                            </td>
+                            <td style="text-align:right">
+                                <button type="submit" class="btn primary" style="padding:7px 12px;font-size:11px">
+                                    💾 Lưu
+                                </button>
+                            </td>
+                        </form>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+</section>
+{% endblock %}

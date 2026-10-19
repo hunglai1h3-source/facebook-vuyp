@@ -14,7 +14,15 @@
 <body>
 <div class="app-shell">
 <aside class="sidebar" id="sidebar">
-  <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">FB</span><span><strong>FB POST PRO</strong><small>Chrome Connector</small></span></a>
+  <a class="brand" href="{{ url_for('dashboard') }}">
+    <span class="brand-mark">FB</span>
+    <span>
+      <strong>FB POST PRO</strong>
+      <small style="color:{{ current_department.badge_color if current_department else '#a78bfa' }};font-weight:750">
+        {{ current_department.icon if current_department else '🏢' }} {{ current_department.full_name if current_department else 'Chrome Connector' }}
+      </small>
+    </span>
+  </a>
   <div class="nav-label">WORKSPACE</div>
   <nav class="nav">
     <a class="{{ 'active' if page == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"><span class="nav-icon">⌂</span>Tổng quan</a>
@@ -22,15 +30,55 @@
     <a class="{{ 'active' if page == 'groups' else '' }}" href="{{ url_for('groups') }}"><span class="nav-icon">▦</span>Quản lý Groups</a>
     <a class="{{ 'active' if page == 'history' else '' }}" href="{{ url_for('history') }}"><span class="nav-icon">◷</span>Lịch sử</a>
     <a class="{{ 'active' if page == 'settings' else '' }}" href="{{ url_for('settings') }}"><span class="nav-icon">⚙</span>Cài đặt</a>
+    {% if current_user and current_user.role == 'admin' %}
+    <div class="nav-label" style="margin-top:8px">HỆ THỐNG</div>
+    <a class="{{ 'active' if page == 'admin_users' else '' }}" href="{{ url_for('admin_users') }}"><span class="nav-icon">👥</span>Phân quyền User</a>
+    {% endif %}
   </nav>
   <div class="sidebar-bottom">
-    <div class="side-status"><span class="live-dot" style="display:inline-block;margin-right:8px"></span>Render + Connector</div>
+    <div class="side-status"><span class="live-dot" style="display:inline-block;margin-right:8px"></span>{{ current_department.name if current_department else 'Render + Connector' }}</div>
     {% if session.get('user_id') %}<div class="user-card"><div class="user-avatar">{{ (current_user.display_name[0] if current_user and current_user.display_name else 'U')|upper }}</div><div class="user-info"><strong>{{ current_user.display_name if current_user else session.get('username','Tài khoản') }}</strong><small>@{{ current_user.username if current_user else session.get('username','user') }}</small></div><a class="logout-mini" href="{{ url_for('logout') }}" title="Đăng xuất">↪</a></div>{% endif %}
   </div>
 </aside>
 <div class="mobile-overlay" id="mobileOverlay"></div>
 <main class="main">
-  <header class="topbar"><div style="display:flex;align-items:center;gap:11px"><button class="menu-toggle" id="menuToggle">☰</button><div><h1>{% block page_title %}FB POST PRO{% endblock %}</h1><p>{% block page_subtitle %}Automation Dashboard{% endblock %}</p></div></div><div class="top-actions"><span class="live-pill"><span class="live-dot"></span>Web online</span><div class="user-avatar">{{ (current_user.display_name[0] if current_user and current_user.display_name else 'U')|upper }}</div></div></header>
+  <header class="topbar">
+    <div style="display:flex;align-items:center;gap:11px">
+      <button class="menu-toggle" id="menuToggle">☰</button>
+      <div>
+        <h1>{% block page_title %}FB POST PRO{% endblock %}</h1>
+        <p>{% block page_subtitle %}Automation Dashboard{% endblock %}</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      {% if current_department %}
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="live-pill" style="border-color:{{ current_department.badge_color or 'rgba(124,58,237,.3)' }};background:color-mix(in srgb, {{ current_department.badge_color or '#7c3aed' }} 14%, transparent);color:#fff;font-weight:750">
+          <span>{{ current_department.icon }}</span>
+          <span>{{ current_department.full_name }}</span>
+        </span>
+        {% if user_departments and user_departments|length > 1 %}
+        <div style="position:relative;display:inline-block">
+          <button type="button" class="btn secondary" style="padding:5px 9px;font-size:10px;border-radius:8px" onclick="toggleDeptMenu(event)">
+            ⇄ Đổi bộ phận ▾
+          </button>
+          <div id="deptDropdown" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;min-width:170px;box-shadow:var(--shadow);z-index:99">
+            {% for d in user_departments %}
+            <a href="{{ url_for('switch_department', department=d.id) }}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;font-size:11px;color:{{ '#a78bfa' if d.id == current_department.id else 'var(--text)' }};text-decoration:none;font-weight:{{ '800' if d.id == current_department.id else '600' }};background:{{ 'rgba(124,58,237,.12)' if d.id == current_department.id else 'transparent' }}">
+              <span>{{ d.icon }}</span>
+              <span>{{ d.name }}</span>
+              {% if d.id == current_department.id %}<span style="margin-left:auto;font-size:10px">✓</span>{% endif %}
+            </a>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+      <span class="live-pill"><span class="live-dot"></span>Online</span>
+      <div class="user-avatar">{{ (current_user.display_name[0] if current_user and current_user.display_name else 'U')|upper }}</div>
+    </div>
+  </header>
   <section class="content">
     {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}{% endwith %}
     {% block content %}{% endblock %}
@@ -39,6 +87,8 @@
 </div>
 <script>
 const menu=document.getElementById('menuToggle'),side=document.getElementById('sidebar'),overlay=document.getElementById('mobileOverlay');function closeMenu(){side?.classList.remove('open');overlay?.classList.remove('show')}menu?.addEventListener('click',()=>{side?.classList.toggle('open');overlay?.classList.toggle('show')});overlay?.addEventListener('click',closeMenu);
+function toggleDeptMenu(e){e.stopPropagation();const m=document.getElementById('deptDropdown');if(m)m.style.display=m.style.display==='block'?'none':'block'}
+document.addEventListener('click',()=>document.getElementById('deptDropdown')?.style.setProperty('display','none'));
 </script>
 {% block scripts %}{% endblock %}
 </body>
