@@ -103,11 +103,10 @@ def run_tests():
     assert "Đại Kim" in html
     assert "Long Biên" in html
     assert "Tuyển nhân sự" in html
-    assert "selectedDepartment" in html
-    assert "togglePasswordBtn" in html
-    assert "Email hoặc số điện thoại" in html
-    assert "Mật khẩu" in html
-    print("-> PASS: UI trang dang nhap day du 3 bo phan, toggle password, nhan email/so dien thoai.")
+    assert "card-daikim" in html
+    assert "card-longbien" in html
+    assert "card-tuyennhansu" in html
+    print("-> PASS: UI trang dang nhap day du 3 the tai khoan: Dai Kim, Long Bien, Tuyen nhan su.")
 
     # 4. Kiểm tra đăng nhập bằng số điện thoại
     print("\n[TEST 3] Kiem tra dang nhap bang so dien thoai:")

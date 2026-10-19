@@ -37,7 +37,7 @@
   </nav>
   <div class="sidebar-bottom">
     <div class="side-status"><span class="live-dot" style="display:inline-block;margin-right:8px"></span>{{ current_department.name if current_department else 'Render + Connector' }}</div>
-    {% if session.get('user_id') %}<div class="user-card"><div class="user-avatar">{{ (current_user.display_name[0] if current_user and current_user.display_name else 'U')|upper }}</div><div class="user-info"><strong>{{ current_user.display_name if current_user else session.get('username','Tài khoản') }}</strong><small>@{{ current_user.username if current_user else session.get('username','user') }}</small></div><a class="logout-mini" href="{{ url_for('logout') }}" title="Đăng xuất">↪</a></div>{% endif %}
+    {% if session.get('user_id') %}<div class="user-card"><div class="user-avatar">{{ (current_user.display_name[0] if current_user and current_user.display_name else 'U')|upper }}</div><div class="user-info"><strong>{{ current_user.display_name if current_user else session.get('username','Tài khoản') }}</strong><small>{{ current_department.name if current_department else session.get('username','user') }}</small></div><div style="display:flex;align-items:center;gap:3px"><a class="logout-mini" href="{{ url_for('logout') }}" title="Đăng xuất phiên làm việc (Giữ 1-Click)">↪</a><a class="logout-mini" href="{{ url_for('logout', forget='1') }}" title="Đăng xuất & Quên thiết bị" style="color:#f87171;font-size:12px;text-decoration:none" onclick="return confirm('Bạn có chắc muốn đăng xuất và hủy ghi nhớ 1-Click trên thiết bị này?')">✕</a></div></div>{% endif %}
   </div>
 </aside>
 <div class="mobile-overlay" id="mobileOverlay"></div>

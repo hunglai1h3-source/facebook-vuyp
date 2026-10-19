@@ -19,6 +19,7 @@ pairing_codes.json
 *.pem
 *.credentials.json
 .bootstrap_credentials.json
+trusted_devices.json
 
 # IDE / OS
 .vscode/

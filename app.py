@@ -38,6 +38,7 @@ import io
 import os
 import re
 import secrets
+import hashlib
 import shutil
 import threading
 import time
@@ -326,6 +327,11 @@ DEPARTMENTS = {
 
 VALID_DEPARTMENTS = list(DEPARTMENTS.keys())
 DEFAULT_DEPARTMENT = "dai_kim"
+DEPARTMENT_USERNAMES = {
+    "dai_kim": "daikim",
+    "long_bien": "longbien",
+    "tuyen_nhan_su": "tuyennhansu",
+}
 
 
 def migrate_legacy_to_dept(user_id, scoped_id):
@@ -759,6 +765,210 @@ def init_users_table():
                 """
             )
         conn.commit()
+
+
+# ============================================================
+# TRUSTED DEVICES (GHI NHỚ THIẾT BỊ TIN CẬY CHO ĐĂNG NHẬP 1-CHẠM)
+# ============================================================
+
+TRUSTED_DEVICES_FILE = DATA_ROOT / "trusted_devices.json"
+
+
+def init_trusted_devices_table():
+    if not postgres_enabled():
+        return
+
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fbpostpro_trusted_devices (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id VARCHAR(40) NOT NULL,
+                    department VARCHAR(32) NOT NULL,
+                    token_hash VARCHAR(64) NOT NULL UNIQUE,
+                    device_name VARCHAR(255) DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    last_used_at TIMESTAMPTZ,
+                    revoked BOOLEAN NOT NULL DEFAULT FALSE
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fbpostpro_trust_lookup
+                ON fbpostpro_trusted_devices (department, token_hash, revoked)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_fbpostpro_trust_user
+                ON fbpostpro_trusted_devices (user_id)
+                """
+            )
+        conn.commit()
+
+
+def load_trusted_devices():
+    if not postgres_enabled():
+        data = read_json(TRUSTED_DEVICES_FILE, {})
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def save_trusted_devices(data):
+    if not postgres_enabled():
+        write_json(TRUSTED_DEVICES_FILE, data)
+
+
+def create_trusted_device_token(user_id, department, device_name="", expires_days=60):
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
+    expires_at_iso = expires_at.isoformat(timespec="seconds")
+
+    if not postgres_enabled():
+        devices = load_trusted_devices()
+        devices[token_hash] = {
+            "user_id": user_id,
+            "department": department,
+            "token_hash": token_hash,
+            "device_name": str(device_name or "Trình duyệt Web")[:200],
+            "created_at": now_iso(),
+            "expires_at": expires_at_iso,
+            "last_used_at": now_iso(),
+            "revoked": False,
+        }
+        save_trusted_devices(devices)
+        return raw_token
+
+    init_trusted_devices_table()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO fbpostpro_trusted_devices (
+                    user_id, department, token_hash, device_name, expires_at, last_used_at
+                )
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                """,
+                (user_id, department, token_hash, str(device_name or "Trình duyệt Web")[:200], expires_at),
+            )
+        conn.commit()
+
+    return raw_token
+
+
+def verify_trusted_device_token(department, raw_token):
+    raw_token = str(raw_token or "").strip()
+    if not raw_token or not department or department not in DEPARTMENTS:
+        return None
+
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+    if not postgres_enabled():
+        devices = load_trusted_devices()
+        rec = devices.get(token_hash)
+        if not rec or not isinstance(rec, dict):
+            return None
+        if rec.get("revoked", False):
+            return None
+        if rec.get("department") != department:
+            return None
+        exp_str = rec.get("expires_at", "")
+        if exp_str:
+            try:
+                exp_dt = datetime.fromisoformat(exp_str)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp_dt:
+                    return None
+            except Exception:
+                return None
+        rec["last_used_at"] = now_iso()
+        devices[token_hash] = rec
+        save_trusted_devices(devices)
+        return rec
+
+    init_trusted_devices_table()
+    with postgres_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, department, expires_at, revoked
+                FROM fbpostpro_trusted_devices
+                WHERE token_hash = %s
+                  AND department = %s
+                  AND revoked = FALSE
+                  AND expires_at > NOW()
+                LIMIT 1
+                """,
+                (token_hash, department),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            cur.execute(
+                """
+                UPDATE fbpostpro_trusted_devices
+                SET last_used_at = NOW()
+                WHERE id = %s
+                """,
+                (row["id"],),
+            )
+        conn.commit()
+
+    return row
+
+
+def revoke_trusted_device_token(department, raw_token=None, user_id=None):
+    if not department or department not in DEPARTMENTS:
+        return
+
+    if raw_token:
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        if not postgres_enabled():
+            devices = load_trusted_devices()
+            if token_hash in devices:
+                devices[token_hash]["revoked"] = True
+                save_trusted_devices(devices)
+            return
+
+        init_trusted_devices_table()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_trusted_devices
+                    SET revoked = TRUE
+                    WHERE token_hash = %s AND department = %s
+                    """,
+                    (token_hash, department),
+                )
+            conn.commit()
+    elif user_id:
+        if not postgres_enabled():
+            devices = load_trusted_devices()
+            for rec in devices.values():
+                if isinstance(rec, dict) and rec.get("user_id") == user_id and rec.get("department") == department:
+                    rec["revoked"] = True
+            save_trusted_devices(devices)
+            return
+
+        init_trusted_devices_table()
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_trusted_devices
+                    SET revoked = TRUE
+                    WHERE user_id = %s AND department = %s
+                    """,
+                    (user_id, department),
+                )
+            conn.commit()
 
 
 def _serialize_dt(value):
@@ -1425,6 +1635,7 @@ def migrate_json_users_to_postgres():
 # Nếu DATABASE_URL chưa có, local vẫn tiếp tục bằng users.json.
 if postgres_enabled():
     init_users_table()
+    init_trusted_devices_table()
     migrate_json_users_to_postgres()
 
 try:
@@ -1510,6 +1721,8 @@ def require_customer_login():
             "/register",
             "/logout",
             "/health",
+            "/quick-login",
+            "/forget-device",
         }
     ):
         return None
@@ -1640,26 +1853,45 @@ def register():
 )
 def login():
 
-    if session.get("user_id"):
+    if request.method == "GET" and session.get("user_id"):
         return redirect(url_for("dashboard"))
 
     error = ""
     next_url = request.args.get("next", "")
     selected_dept = request.args.get("department", "dai_kim")
 
+    # Kiểm tra trạng thái ghi nhớ thiết bị (trusted device) cho từng bộ phận
+    remembered_departments = {}
+    for dept in VALID_DEPARTMENTS:
+        cookie_name = f"fb_trust_{dept}"
+        raw_token = request.cookies.get(cookie_name, "")
+        is_rem = False
+        if raw_token:
+            device_rec = verify_trusted_device_token(dept, raw_token)
+            if device_rec:
+                u = find_user_by_id(device_rec["user_id"])
+                if u and u.get("is_active", True) and user_has_department_access(u, dept):
+                    is_rem = True
+        remembered_departments[dept] = is_rem
+
     if request.method == "POST":
-        next_url = request.form.get("next", "")
-        login_value = str(request.form.get("login", "")).strip()
-        password = request.form.get("password", "")
-        selected_dept = str(request.form.get("department", "")).strip()
-        remember = request.form.get("remember") == "1"
+        data = request.get_json(silent=True) if request.is_json else request.form
+        next_url = data.get("next", "")
+        selected_dept = str(data.get("department", "")).strip()
+        login_value = str(data.get("login", "")).strip()
+        password = data.get("password", "")
+        remember_device = str(data.get("remember_device", "")).lower() in {"1", "true", "on", "yes"}
+
+        # Nếu không nhập username, tự động ánh xạ theo bộ phận được chọn
+        if not login_value and selected_dept in DEPARTMENT_USERNAMES:
+            login_value = DEPARTMENT_USERNAMES[selected_dept]
 
         if not selected_dept or selected_dept not in DEPARTMENTS:
             error = "Vui lòng chọn bộ phận quản lý (Đại Kim, Long Biên hoặc Tuyển nhân sự)."
         elif not login_value:
-            error = "Vui lòng nhập Email hoặc số điện thoại."
+            error = "Vui lòng chọn tài khoản bộ phận."
         elif not password:
-            error = "Vui lòng nhập mật khẩu."
+            error = "Vui lòng nhập mật khẩu xác thực."
         else:
             user = find_user_by_login(login_value)
 
@@ -1671,7 +1903,7 @@ def login():
                     password,
                 )
             ):
-                error = "Email/số điện thoại hoặc mật khẩu không chính xác."
+                error = "Mật khẩu xác thực không chính xác."
             elif not user_has_department_access(user, selected_dept):
                 dept_name = DEPARTMENTS[selected_dept]["name"]
                 error = f"Tài khoản của bạn không được phân quyền truy cập bộ phận {dept_name}. Vui lòng chọn bộ phận khác hoặc liên hệ quản trị viên."
@@ -1684,15 +1916,42 @@ def login():
                 session["username"] = user.get("username", "")
                 session["department"] = selected_dept
                 session["allowed_departments"] = get_user_departments(user)
-                session.permanent = remember
+                session.permanent = True
 
                 scoped_id = f"{user_id}__{selected_dept}"
                 customer_root(scoped_id)
                 migrate_legacy_to_dept(user_id, scoped_id)
 
-                return redirect(
-                    safe_next_url(next_url)
-                )
+                target_url = safe_next_url(next_url) or url_for("dashboard")
+                if user.get("must_change_password"):
+                    target_url = url_for("change_password")
+
+                if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                    resp = jsonify({"ok": True, "redirect": target_url})
+                else:
+                    resp = redirect(target_url)
+
+                # Nếu chọn ghi nhớ thiết bị tin cậy -> Tạo token bảo mật và đặt cookie HttpOnly
+                if remember_device:
+                    raw_token = create_trusted_device_token(
+                        user_id,
+                        selected_dept,
+                        device_name=request.user_agent.string[:200],
+                    )
+                    resp.set_cookie(
+                        f"fb_trust_{selected_dept}",
+                        raw_token,
+                        max_age=60 * 86400,
+                        httponly=True,
+                        samesite="Lax",
+                        secure=request.is_secure,
+                        path="/",
+                    )
+
+                return resp
+
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"ok": False, "error": error}), 400
 
     return render_template(
         "login.html",
@@ -1700,15 +1959,148 @@ def login():
         next_url=next_url,
         selected_dept=selected_dept,
         departments=DEPARTMENTS,
+        remembered_departments=remembered_departments,
     )
+
+
+@app.route("/quick-login", methods=["POST"])
+def quick_login():
+    data = request.get_json(silent=True) if request.is_json else request.form
+    department = str(data.get("department", "")).strip()
+
+    if session.get("user_id") and session.get("department") == department:
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"ok": True, "redirect": url_for("dashboard")})
+        return redirect(url_for("dashboard"))
+
+    if not department or department not in DEPARTMENTS:
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"ok": False, "error": "Bộ phận không hợp lệ."}), 400
+        flash("Bộ phận không hợp lệ.", "warning")
+        return redirect(url_for("login"))
+
+    cookie_name = f"fb_trust_{department}"
+    raw_token = request.cookies.get(cookie_name, "")
+
+    if not raw_token:
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({
+                "ok": False,
+                "requires_auth": True,
+                "error": "Thiết bị chưa được xác thực cho bộ phận này.",
+            }), 401
+        flash("Thiết bị này chưa được xác thực. Vui lòng đăng nhập lần đầu.", "info")
+        return redirect(url_for("login", department=department))
+
+    device_rec = verify_trusted_device_token(department, raw_token)
+    if not device_rec:
+        # Token không hợp lệ hoặc đã hết hạn hoặc bị thu hồi
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            resp = jsonify({
+                "ok": False,
+                "requires_auth": True,
+                "error": "Phiên ghi nhớ đã hết hạn hoặc bị thu hồi. Vui lòng xác thực lại.",
+            })
+            resp.delete_cookie(cookie_name, path="/")
+            return resp, 401
+        flash("Phiên ghi nhớ đã hết hạn hoặc bị thu hồi. Vui lòng xác thực lại.", "warning")
+        resp = redirect(url_for("login", department=department))
+        resp.delete_cookie(cookie_name, path="/")
+        return resp
+
+    user = find_user_by_id(device_rec["user_id"])
+    if not user or not user.get("is_active", True) or not user_has_department_access(user, department):
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            resp = jsonify({
+                "ok": False,
+                "requires_auth": True,
+                "error": "Tài khoản không hợp lệ hoặc đã bị vô hiệu hóa.",
+            })
+            resp.delete_cookie(cookie_name, path="/")
+            return resp, 403
+        flash("Tài khoản không hợp lệ hoặc đã bị vô hiệu hóa.", "danger")
+        resp = redirect(url_for("login", department=department))
+        resp.delete_cookie(cookie_name, path="/")
+        return resp
+
+    # Thiết lập phiên đăng nhập thành công
+    user_id = user["user_id"]
+    update_user_last_login(user_id)
+
+    session.clear()
+    session["user_id"] = user_id
+    session["username"] = user.get("username", "")
+    session["department"] = department
+    session["allowed_departments"] = get_user_departments(user)
+    session.permanent = True
+
+    scoped_id = f"{user_id}__{department}"
+    customer_root(scoped_id)
+    migrate_legacy_to_dept(user_id, scoped_id)
+
+    target_url = url_for("dashboard")
+    if user.get("must_change_password"):
+        target_url = url_for("change_password")
+
+    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True, "redirect": target_url})
+
+    return redirect(target_url)
+
+
+@app.route("/forget-device", methods=["POST"])
+def forget_device():
+    data = request.get_json(silent=True) if request.is_json else request.form
+    department = str(data.get("department", "")).strip()
+
+    if not department or department not in DEPARTMENTS:
+        return jsonify({"ok": False, "error": "Bộ phận không hợp lệ."}), 400
+
+    cookie_name = f"fb_trust_{department}"
+    raw_token = request.cookies.get(cookie_name, "")
+    if raw_token:
+        revoke_trusted_device_token(department, raw_token=raw_token)
+
+    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        resp = jsonify({
+            "ok": True,
+            "message": f"Đã hủy ghi nhớ thiết bị cho bộ phận {DEPARTMENTS[department]['name']}.",
+        })
+        resp.delete_cookie(cookie_name, path="/")
+        return resp
+
+    flash(f"Đã hủy ghi nhớ thiết bị cho bộ phận {DEPARTMENTS[department]['name']}.", "info")
+    resp = redirect(url_for("login"))
+    resp.delete_cookie(cookie_name, path="/")
+    return resp
 
 
 @app.route("/logout")
 def logout():
+    forget = request.args.get("forget")
+    current_dept = session.get("department")
+
+    resp = redirect(url_for("login"))
     session.clear()
-    return redirect(
-        url_for("login")
-    )
+
+    if forget:
+        if forget == "all":
+            for d in VALID_DEPARTMENTS:
+                cookie_name = f"fb_trust_{d}"
+                raw_token = request.cookies.get(cookie_name)
+                if raw_token:
+                    revoke_trusted_device_token(d, raw_token=raw_token)
+                resp.delete_cookie(cookie_name, path="/")
+            flash("Đã đăng xuất và hủy ghi nhớ tất cả tài khoản trên thiết bị này.", "info")
+        elif current_dept and current_dept in DEPARTMENTS:
+            cookie_name = f"fb_trust_{current_dept}"
+            raw_token = request.cookies.get(cookie_name)
+            if raw_token:
+                revoke_trusted_device_token(current_dept, raw_token=raw_token)
+            resp.delete_cookie(cookie_name, path="/")
+            flash(f"Đã đăng xuất và hủy ghi nhớ thiết bị cho bộ phận {DEPARTMENTS[current_dept]['name']}.", "info")
+
+    return resp
 
 
 @app.route("/switch-department", methods=["GET", "POST"])
