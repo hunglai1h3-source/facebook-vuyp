@@ -715,7 +715,7 @@ def init_users_table():
                 )
                 """
             )
-            # Migration an toàn thêm các cột phân quyền và số điện thoại
+            # Migration an toàn thêm các cột phân quyền, số điện thoại và cờ đổi mật khẩu
             cur.execute(
                 """
                 ALTER TABLE fbpostpro_users
@@ -732,6 +732,12 @@ def init_users_table():
                 """
                 ALTER TABLE fbpostpro_users
                 ADD COLUMN IF NOT EXISTS phone VARCHAR(32) DEFAULT '';
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE fbpostpro_users
+                ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
                 """
             )
             cur.execute(
@@ -789,6 +795,7 @@ def _postgres_row_to_user(row):
         "is_active": bool(row.get("is_active", True)),
         "role": str(row.get("role", "user") or "user").strip().lower(),
         "departments": depts_list,
+        "must_change_password": bool(row.get("must_change_password", False)),
         "created_at": _serialize_dt(row.get("created_at")),
         "last_login_at": _serialize_dt(row.get("last_login_at")),
     }
@@ -803,7 +810,7 @@ def load_users():
         )
         if not isinstance(data, dict):
             return {}
-        # Chuẩn hóa các trường role và departments cho local
+        # Chuẩn hóa các trường cho local
         for uid, u in data.items():
             if isinstance(u, dict):
                 if "role" not in u:
@@ -812,6 +819,8 @@ def load_users():
                     u["departments"] = list(VALID_DEPARTMENTS)
                 if "phone" not in u:
                     u["phone"] = ""
+                if "must_change_password" not in u:
+                    u["must_change_password"] = False
         return data
 
     init_users_table()
@@ -830,6 +839,7 @@ def load_users():
                     is_active,
                     role,
                     departments,
+                    must_change_password,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -883,11 +893,12 @@ def save_users(users):
                         is_active,
                         role,
                         departments,
+                        must_change_password,
                         created_at,
                         last_login_at
                     )
                     VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         COALESCE(%s::timestamptz, NOW()),
                         %s::timestamptz
                     )
@@ -901,6 +912,7 @@ def save_users(users):
                         is_active = EXCLUDED.is_active,
                         role = EXCLUDED.role,
                         departments = EXCLUDED.departments,
+                        must_change_password = EXCLUDED.must_change_password,
                         last_login_at = EXCLUDED.last_login_at
                     """,
                     (
@@ -913,11 +925,142 @@ def save_users(users):
                         bool(user.get("is_active", True)),
                         str(user.get("role", "user") or "user").strip().lower(),
                         depts_str,
+                        bool(user.get("must_change_password", False)),
                         user.get("created_at") or None,
                         user.get("last_login_at") or None,
                     ),
                 )
         conn.commit()
+
+
+# ============================================================
+# BOOTSTRAP 3 TÀI KHOẢN BỘ PHẬN QUẢN LÝ
+# ============================================================
+
+MANAGEMENT_ACCOUNTS = [
+    {
+        "username": "daikim",
+        "display_name": "Quản lý Đại Kim",
+        "email": "daikim@fbpostpro.local",
+        "department": "dai_kim",
+        "env_var": "DAIKIM_PASSWORD",
+        "desc": "Bộ phận Đại Kim",
+    },
+    {
+        "username": "longbien",
+        "display_name": "Quản lý Long Biên",
+        "email": "longbien@fbpostpro.local",
+        "department": "long_bien",
+        "env_var": "LONGBIEN_PASSWORD",
+        "desc": "Bộ phận Long Biên",
+    },
+    {
+        "username": "tuyennhansu",
+        "display_name": "Quản lý Tuyển nhân sự",
+        "email": "tuyennhansu@fbpostpro.local",
+        "department": "tuyen_nhan_su",
+        "env_var": "TUYENNHANSU_PASSWORD",
+        "desc": "Bộ phận Tuyển nhân sự",
+    },
+]
+
+BOOTSTRAP_CREDENTIALS_FILE = DATA_ROOT / ".bootstrap_credentials.json"
+
+
+def generate_strong_password(length=14):
+    """Sinh mật khẩu mạnh có chữ hoa, chữ thường, số và ký tự đặc biệt."""
+    upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    lower = "abcdefghijkmnpqrstuvwxyz"
+    digits = "23456789"
+    symbols = "!@#$%^&*"
+    all_chars = upper + lower + digits + symbols
+    pwd = [
+        secrets.choice(upper),
+        secrets.choice(lower),
+        secrets.choice(digits),
+        secrets.choice(symbols),
+    ]
+    pwd += [secrets.choice(all_chars) for _ in range(max(length - 4, 4))]
+    secrets.SystemRandom().shuffle(pwd)
+    return "".join(pwd)
+
+
+def bootstrap_department_accounts():
+    """
+    Khởi tạo 3 tài khoản quản lý riêng biệt cho 3 bộ phận nếu chưa tồn tại.
+    - Idempotent: Nếu tài khoản đã tồn tại, TUYỆT ĐỐI KHÔNG TẠO LẠI HOẶC GHI ĐÈ MẬT KHẨU.
+    - Lấy mật khẩu từ biến môi trường nếu có (DAIKIM_PASSWORD, LONGBIEN_PASSWORD, TUYENNHANSU_PASSWORD).
+    - Nếu không có biến môi trường, sinh mật khẩu ngẫu nhiên an toàn.
+    - Đặt must_change_password = True khi tạo mới để yêu cầu đổi mật khẩu sau lần đăng nhập đầu tiên.
+    """
+    users = load_users()
+    created_any = False
+    bootstrap_info = {}
+    newly_created = {}
+
+    if BOOTSTRAP_CREDENTIALS_FILE.exists():
+        try:
+            bootstrap_info = read_json(BOOTSTRAP_CREDENTIALS_FILE, {})
+        except Exception:
+            bootstrap_info = {}
+
+    for spec in MANAGEMENT_ACCOUNTS:
+        username = spec["username"]
+        existing = find_user_by_login(username)
+
+        if existing:
+            # Tài khoản đã tồn tại -> Giữ nguyên mật khẩu và dữ liệu
+            continue
+
+        raw_password = os.environ.get(spec["env_var"], "").strip()
+        is_from_env = bool(raw_password)
+
+        if not raw_password:
+            raw_password = generate_strong_password(14)
+
+        user_id = make_user_id()
+        new_user = {
+            "user_id": user_id,
+            "username": username,
+            "display_name": spec["display_name"],
+            "email": spec["email"],
+            "phone": "",
+            "password_hash": generate_password_hash(raw_password),
+            "is_active": True,
+            "role": "user",
+            "departments": [spec["department"]],
+            "must_change_password": True,
+            "created_at": now_iso(),
+            "last_login_at": None,
+        }
+
+        users[user_id] = new_user
+        created_any = True
+
+        entry = {
+            "department": spec["department"],
+            "display_name": spec["display_name"],
+            "initial_password": raw_password if not is_from_env else "[Configured via Environment Variable]",
+            "source": "environment" if is_from_env else "generated",
+            "created_at": now_iso(),
+            "note": "Mật khẩu ban đầu. Hệ thống yêu cầu đổi mật khẩu sau lần đăng nhập đầu tiên.",
+        }
+        bootstrap_info[username] = entry
+        newly_created[username] = entry
+
+    if created_any:
+        save_users(users)
+        try:
+            write_json(BOOTSTRAP_CREDENTIALS_FILE, bootstrap_info)
+            if hasattr(os, "chmod") and os.name != "nt":
+                try:
+                    os.chmod(BOOTSTRAP_CREDENTIALS_FILE, 0o600)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return newly_created
 
 
 def get_user_departments(user):
@@ -1003,6 +1146,7 @@ def find_user_by_login(login_value):
                     is_active,
                     role,
                     departments,
+                    must_change_password,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -1047,6 +1191,7 @@ def find_user_by_id(user_id):
                     is_active,
                     role,
                     departments,
+                    must_change_password,
                     created_at,
                     last_login_at
                 FROM fbpostpro_users
@@ -1282,6 +1427,11 @@ if postgres_enabled():
     init_users_table()
     migrate_json_users_to_postgres()
 
+try:
+    bootstrap_department_accounts()
+except Exception as _bootstrap_err:
+    logger.warning("Không thể tự động bootstrap tài khoản bộ phận: %s", _bootstrap_err)
+
 def migrate_legacy_customer_data(old_customer_id, user_id):
 
     old_customer_id = sanitize_customer_id(old_customer_id)
@@ -1390,6 +1540,11 @@ def require_customer_login():
         # Gán tự động bộ phận hợp lệ đầu tiên
         session["department"] = allowed_depts[0]
         session["allowed_departments"] = allowed_depts
+
+    # Bắt buộc đổi mật khẩu sau lần đăng nhập đầu tiên
+    if curr_user.get("must_change_password"):
+        if path != "/change-password" and path != "/logout":
+            return redirect(url_for("change_password"))
 
     return None
 
@@ -1580,6 +1735,67 @@ def switch_department():
 
     flash(f"Đã chuyển sang không gian quản lý: {DEPARTMENTS[dept_id]['name']}.", "success")
     return redirect(url_for("dashboard"))
+
+
+# ============================================================
+# CHANGE PASSWORD
+# ============================================================
+
+@app.route("/change-password", methods=["GET", "POST"])
+def change_password():
+    user = get_current_user()
+    if not user:
+        return redirect(url_for("login"))
+
+    error = ""
+    must_change = bool(user.get("must_change_password", False))
+
+    if request.method == "POST":
+        old_password = request.form.get("old_password", "")
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not old_password:
+            error = "Vui lòng nhập mật khẩu hiện tại."
+        elif not check_password_hash(user.get("password_hash", ""), old_password):
+            error = "Mật khẩu hiện tại không chính xác."
+        elif len(new_password) < 8:
+            error = "Mật khẩu mới phải có ít nhất 8 ký tự."
+        elif new_password == old_password:
+            error = "Mật khẩu mới không được trùng với mật khẩu ban đầu."
+        elif new_password != confirm_password:
+            error = "Xác nhận mật khẩu mới không trùng khớp."
+        else:
+            user_id = user["user_id"]
+            new_hash = generate_password_hash(new_password)
+            if postgres_enabled():
+                with postgres_connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE fbpostpro_users
+                            SET password_hash = %s, must_change_password = FALSE
+                            WHERE user_id = %s
+                            """,
+                            (new_hash, user_id),
+                        )
+                    conn.commit()
+            else:
+                users = load_users()
+                if user_id in users:
+                    users[user_id]["password_hash"] = new_hash
+                    users[user_id]["must_change_password"] = False
+                    save_users(users)
+
+            flash("Đổi mật khẩu thành công! Bạn có thể tiếp tục sử dụng hệ thống.", "success")
+            return redirect(url_for("dashboard"))
+
+    return render_template(
+        "change_password.html",
+        must_change=must_change,
+        error=error,
+        user=user,
+    )
 
 
 # ============================================================
@@ -3963,6 +4179,7 @@ def dashboard_data(
 # ============================================================
 
 @app.route("/")
+@app.route("/dashboard")
 def dashboard():
 
     customer_id = (
@@ -5380,6 +5597,53 @@ def admin_user_update(user_id):
     save_users(users)
 
     flash(f"Đã cập nhật phân quyền cho tài khoản {user.get('username')}.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<user_id>/reset-password", methods=["POST"])
+@admin_required
+def admin_user_reset_password(user_id):
+    user_id = sanitize_customer_id(user_id)
+    user = find_user_by_id(user_id)
+    if not user:
+        flash("Không tìm thấy người dùng.", "danger")
+        return redirect(url_for("admin_users"))
+
+    custom_pass = request.form.get("new_password", "").strip()
+    if custom_pass:
+        if len(custom_pass) < 8:
+            flash("Mật khẩu mới phải có ít nhất 8 ký tự.", "danger")
+            return redirect(url_for("admin_users"))
+        new_password = custom_pass
+    else:
+        new_password = generate_strong_password(14)
+
+    new_hash = generate_password_hash(new_password)
+    must_change = request.form.get("must_change_password") != "0"
+
+    if postgres_enabled():
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_users
+                    SET password_hash = %s, must_change_password = %s
+                    WHERE user_id = %s
+                    """,
+                    (new_hash, must_change, user_id),
+                )
+            conn.commit()
+    else:
+        users = load_users()
+        if user_id in users:
+            users[user_id]["password_hash"] = new_hash
+            users[user_id]["must_change_password"] = must_change
+            save_users(users)
+
+    flash(
+        f"Đã đặt lại mật khẩu cho tài khoản '{user.get('username')}'. Mật khẩu mới: {new_password}",
+        "success",
+    )
     return redirect(url_for("admin_users"))
 
 

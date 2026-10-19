@@ -17,6 +17,8 @@ pairing_codes.json
 !.env.example
 *.key
 *.pem
+*.credentials.json
+.bootstrap_credentials.json
 
 # IDE / OS
 .vscode/
