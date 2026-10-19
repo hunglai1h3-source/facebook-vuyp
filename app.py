@@ -5279,7 +5279,7 @@ def groups_bulk_save():
 
     if not clean_new and mode == "append":
         if is_json:
-            return jsonify({"success": False, "message": "Không có link Group hợp lệ nào để thêm."}), 400
+            return jsonify({"ok": False, "success": False, "message": "Không có link Group hợp lệ nào để thêm."}), 400
         flash("Không có link Group hợp lệ nào để thêm.", "warning")
         return redirect(url_for("groups"))
 
@@ -5304,6 +5304,7 @@ def groups_bulk_save():
     msg = f"Đã lưu thành công! Tổng cộng {len(final_list)} group (thêm mới {added_count})."
     if is_json:
         return jsonify({
+            "ok": True,
             "success": True,
             "total": len(final_list),
             "added": added_count,
@@ -6689,6 +6690,9 @@ def run_campaign():
         return redirect(url_for("settings"))
 
     groups_list = load_groups(customer_id)
+    form_content = request.form.get("content", "").strip()
+    if form_content:
+        save_post_content(customer_id, form_content)
     content = load_post(customer_id).strip()
     settings_data = load_settings(customer_id)
 
@@ -6702,17 +6706,31 @@ def run_campaign():
     device_id = device["device_id"]
     job_id = "job_" + uuid.uuid4().hex[:20]
     jobs = load_jobs(customer_id)
+
+    form_campaign_name = request.form.get("campaign_name", "").strip()
+    campaign_name = form_campaign_name or settings_data.get("campaign_name", "Chiến dịch mới")
+    form_min_delay = request.form.get("min_delay")
+    form_max_delay = request.form.get("max_delay")
+    try:
+        min_delay_val = max(0, int(form_min_delay)) if form_min_delay is not None else max(0, int(settings_data.get("min_delay", 3)))
+    except (ValueError, TypeError):
+        min_delay_val = max(0, int(settings_data.get("min_delay", 3)))
+    try:
+        max_delay_val = max(0, int(form_max_delay)) if form_max_delay is not None else max(0, int(settings_data.get("max_delay", 7)))
+    except (ValueError, TypeError):
+        max_delay_val = max(0, int(settings_data.get("max_delay", 7)))
+
     jobs[device_id] = {
         "job_id": job_id,
         "status": "pending",
         "mode": "chrome_extension",
         "created_at": now_iso(),
-        "campaign_name": settings_data.get("campaign_name", "Chiến dịch mới"),
+        "campaign_name": campaign_name,
         "groups": list(groups_list),
         "content": content,
         "images": [Path(x).name for x in settings_data.get("post_images", [])],
-        "min_delay": max(0, int(settings_data.get("min_delay", 3))),
-        "max_delay": max(0, int(settings_data.get("max_delay", 7))),
+        "min_delay": min_delay_val,
+        "max_delay": max_delay_val,
     }
     save_jobs(customer_id, jobs)
 
@@ -6770,6 +6788,8 @@ def stop_campaign():
         message="Đã gửi yêu cầu dừng tới Connector...",
     )
     flash("Đã gửi yêu cầu dừng chiến dịch.", "warning")
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"ok": True, "status": "stopping", "message": "Đã gửi yêu cầu dừng tới Connector..."})
     return redirect(url_for("compose"))
 
 
