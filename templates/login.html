@@ -508,6 +508,27 @@ body {
     transform: translateY(-1px);
 }
 
+.btn-link-reset {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-link-reset:hover {
+    color: #c4b5fd;
+    background: rgba(124, 58, 237, 0.12);
+}
+
 /* Spinner */
 .spinner {
     width: 14px;
@@ -720,6 +741,90 @@ body {
                     <span>XÁC THỰC & VÀO</span>
                 </button>
             </div>
+
+            <div style="margin-top: 15px; text-align: center;">
+                <button type="button" class="btn-link-reset" onclick="openResetPasswordModal()">
+                    🔑 Quên hoặc chưa có mật khẩu? Đặt lại bằng Khóa ADMIN
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- MODAL ĐẶT LẠI MẬT KHẨU BAN ĐẦU BẰNG KHÓA QUẢN TRỊ ADMIN_PASSWORD -->
+<div class="modal-overlay" id="resetModal" onclick="handleResetOverlayClick(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <header class="modal-header">
+            <div class="modal-icon">🔑</div>
+            <h3 class="modal-title" id="resetModalTitle">Đặt lại mật khẩu ban đầu</h3>
+            <p class="modal-subtitle">Sử dụng Khóa quản trị <strong>ADMIN_PASSWORD</strong> (đã cấu hình trên Render) để đặt mật khẩu mới cho tài khoản.</p>
+        </header>
+
+        <div id="resetModalError" class="alert-box alert-error" style="display:none;margin-bottom:16px;"></div>
+        <div id="resetModalSuccess" class="status-pill remembered" style="display:none;margin-bottom:16px;width:100%;justify-content:center;padding:10px 14px;font-size:12.5px;"></div>
+
+        <form id="resetForm" onsubmit="handleResetSubmit(event)">
+            <div class="form-group">
+                <label class="form-label" for="resetDepartment">Tài khoản bộ phận</label>
+                <select id="resetDepartment" name="department" class="form-input" style="padding-right:14px;cursor:pointer;">
+                    <option value="dai_kim">ĐẠI KIM (daikim)</option>
+                    <option value="long_bien">LONG BIÊN (longbien)</option>
+                    <option value="tuyen_nhan_su">TUYỂN NHÂN SỰ (tuyennhansu)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="resetAdminKey">Khóa quản trị hệ thống (ADMIN_PASSWORD)</label>
+                <div class="input-container">
+                    <input 
+                        type="password" 
+                        id="resetAdminKey" 
+                        name="admin_key" 
+                        class="form-input" 
+                        placeholder="Nhập ADMIN_PASSWORD trên Render..." 
+                        required
+                        autocomplete="current-password"
+                    >
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="resetNewPassword">Mật khẩu mới</label>
+                <div class="input-container">
+                    <input 
+                        type="password" 
+                        id="resetNewPassword" 
+                        name="new_password" 
+                        class="form-input" 
+                        placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)..." 
+                        required 
+                        autocomplete="new-password"
+                    >
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="resetConfirmPassword">Xác nhận mật khẩu mới</label>
+                <div class="input-container">
+                    <input 
+                        type="password" 
+                        id="resetConfirmPassword" 
+                        name="confirm_password" 
+                        class="form-input" 
+                        placeholder="Nhập lại mật khẩu mới..." 
+                        required 
+                        autocomplete="new-password"
+                    >
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-modal-cancel" onclick="closeResetModal()">Hủy</button>
+                <button type="submit" class="btn-modal-submit" id="btnResetSubmit">
+                    <span class="spinner" id="resetSpinner"></span>
+                    <span>XÁC NHẬN ĐẶT LẠI</span>
+                </button>
+            </div>
         </form>
     </div>
 </div>
@@ -892,10 +997,110 @@ function toggleModalPassword() {
     input.type = input.type === "password" ? "text" : "password";
 }
 
-// Bấm Escape để đóng modal
+// Mở modal đặt lại mật khẩu bằng ADMIN_PASSWORD
+function openResetPasswordModal(department) {
+    closeAuthModal();
+    const modal = document.getElementById("resetModal");
+    const select = document.getElementById("resetDepartment");
+    const currentDept = department || document.getElementById("modalDepartment").value || "dai_kim";
+    if (select) select.value = currentDept;
+
+    const errBox = document.getElementById("resetModalError");
+    const succBox = document.getElementById("resetModalSuccess");
+    if (errBox) errBox.style.display = "none";
+    if (succBox) succBox.style.display = "none";
+
+    document.getElementById("resetAdminKey").value = "";
+    document.getElementById("resetNewPassword").value = "";
+    document.getElementById("resetConfirmPassword").value = "";
+
+    modal.classList.add("active");
+    setTimeout(() => document.getElementById("resetAdminKey").focus(), 80);
+}
+
+function closeResetModal() {
+    const modal = document.getElementById("resetModal");
+    modal.classList.remove("active");
+}
+
+function handleResetOverlayClick(e) {
+    if (e.target.id === "resetModal") {
+        closeResetModal();
+    }
+}
+
+async function handleResetSubmit(e) {
+    e.preventDefault();
+    const dept = document.getElementById("resetDepartment").value;
+    const adminKey = document.getElementById("resetAdminKey").value;
+    const newPassword = document.getElementById("resetNewPassword").value;
+    const confirmPassword = document.getElementById("resetConfirmPassword").value;
+
+    const errBox = document.getElementById("resetModalError");
+    const succBox = document.getElementById("resetModalSuccess");
+    const spinner = document.getElementById("resetSpinner");
+    const submitBtn = document.getElementById("btnResetSubmit");
+
+    errBox.style.display = "none";
+    succBox.style.display = "none";
+
+    if (newPassword !== confirmPassword) {
+        errBox.textContent = "Hai mật khẩu mới không khớp nhau.";
+        errBox.style.display = "flex";
+        return;
+    }
+
+    spinner.style.display = "inline-block";
+    submitBtn.disabled = true;
+
+    try {
+        const resp = await fetch("/api/auth/reset-department-password", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Requested-With": "XMLHttpRequest"
+            },
+            body: JSON.stringify({
+                department: dept,
+                admin_key: adminKey,
+                new_password: newPassword,
+                confirm_password: confirmPassword
+            })
+        });
+
+        const data = await resp.json();
+
+        if (resp.ok && data.ok) {
+            succBox.innerHTML = `<span>✓ ${data.message}</span>`;
+            succBox.style.display = "flex";
+
+            // Sau 1.2s tự động chuyển sang modal xác thực và điền sẵn mật khẩu mới
+            setTimeout(() => {
+                closeResetModal();
+                openAuthModal(dept);
+                const passInput = document.getElementById("modalPassword");
+                if (passInput) {
+                    passInput.value = newPassword;
+                }
+            }, 1200);
+        } else {
+            errBox.textContent = data.error || "Không thể đặt lại mật khẩu.";
+            errBox.style.display = "flex";
+        }
+    } catch (err) {
+        errBox.textContent = "Lỗi kết nối máy chủ khi đặt lại mật khẩu.";
+        errBox.style.display = "flex";
+    } finally {
+        spinner.style.display = "none";
+        submitBtn.disabled = false;
+    }
+}
+
+// Bấm Escape để đóng các modal
 document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
         closeAuthModal();
+        closeResetModal();
     }
 });
 </script>

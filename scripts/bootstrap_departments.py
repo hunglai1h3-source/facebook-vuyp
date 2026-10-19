@@ -96,15 +96,24 @@ def cmd_show_credentials():
 
 
 def cmd_reset_password(username, custom_password=None):
-    user = find_user_by_login(username)
+    dept_map = {
+        "dai_kim": "daikim",
+        "daikim": "daikim",
+        "long_bien": "longbien",
+        "longbien": "longbien",
+        "tuyen_nhan_su": "tuyennhansu",
+        "tuyennhansu": "tuyennhansu",
+    }
+    canonical_uname = dept_map.get(str(username or "").lower().strip(), str(username or "").strip())
+    user = find_user_by_login(canonical_uname)
     if not user:
         print(f"Lỗi: Không tìm thấy người dùng '{username}'!")
         return
 
     user_id = user["user_id"]
     if custom_password:
-        if len(custom_password) < 8:
-            print("Lỗi: Mật khẩu mới phải có ít nhất 8 ký tự!")
+        if len(custom_password) < 6:
+            print("Lỗi: Mật khẩu mới phải có ít nhất 6 ký tự!")
             return
         new_pass = custom_password
     else:
@@ -118,7 +127,7 @@ def cmd_reset_password(username, custom_password=None):
                 cur.execute(
                     """
                     UPDATE fbpostpro_users
-                    SET password_hash = %s, must_change_password = TRUE
+                    SET password_hash = %s, must_change_password = FALSE
                     WHERE user_id = %s
                     """,
                     (new_hash, user_id),
@@ -128,13 +137,13 @@ def cmd_reset_password(username, custom_password=None):
         users = load_users()
         if user_id in users:
             users[user_id]["password_hash"] = new_hash
-            users[user_id]["must_change_password"] = True
+            users[user_id]["must_change_password"] = False
             save_users(users)
 
     print("=" * 60)
-    print(f"ĐẶT LẠI MẬT KHẨU THÀNH CÔNG CHO: @{username}")
+    print(f"ĐẶT LẠI MẬT KHẨU THÀNH CÔNG CHO: @{canonical_uname}")
     print(f"  • Mật khẩu mới: {new_pass}")
-    print(f"  • Yêu cầu đổi mật khẩu ở lần đăng nhập tới: TRUE")
+    print(f"  • Trạng thái: Sẵn sàng đăng nhập ngay")
     print("=" * 60)
 
 
@@ -143,7 +152,12 @@ def main():
     parser.add_argument(
         "--init",
         action="store_true",
-        help="Khởi tạo 3 tài khoản bộ phận nếu chưa có",
+        help="Khởi tạo hoặc đồng bộ 3 tài khoản bộ phận từ biến môi trường",
+    )
+    parser.add_argument(
+        "--sync-env",
+        action="store_true",
+        help="Đồng bộ mật khẩu 3 tài khoản theo các biến môi trường hiện tại",
     )
     parser.add_argument(
         "--show-credentials",
@@ -152,11 +166,13 @@ def main():
     )
     parser.add_argument(
         "--reset-password",
-        metavar="USERNAME",
-        help="Đặt lại mật khẩu cho một tài khoản",
+        metavar="USERNAME_OR_DEPT",
+        help="Đặt lại mật khẩu cho một tài khoản (daikim, longbien, tuyennhansu)",
     )
     parser.add_argument(
         "--password",
+        "--set-password",
+        dest="password",
         metavar="NEW_PASS",
         help="Mật khẩu mới khi dùng với --reset-password (nếu không cung cấp, hệ thống tự sinh ngẫu nhiên)",
     )

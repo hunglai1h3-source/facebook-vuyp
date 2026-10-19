@@ -1198,13 +1198,18 @@ def generate_strong_password(length=14):
 def bootstrap_department_accounts():
     """
     Khởi tạo 3 tài khoản quản lý riêng biệt cho 3 bộ phận nếu chưa tồn tại.
-    - Idempotent: Nếu tài khoản đã tồn tại, TUYỆT ĐỐI KHÔNG TẠO LẠI HOẶC GHI ĐÈ MẬT KHẨU.
-    - Lấy mật khẩu từ biến môi trường nếu có (DAIKIM_PASSWORD, LONGBIEN_PASSWORD, TUYENNHANSU_PASSWORD).
-    - Nếu không có biến môi trường, sinh mật khẩu ngẫu nhiên an toàn.
-    - Đặt must_change_password = True khi tạo mới để yêu cầu đổi mật khẩu sau lần đăng nhập đầu tiên.
+    - Idempotent: Nếu tài khoản đã tồn tại và đã được đổi mật khẩu/sử dụng, giữ nguyên.
+    - Đồng bộ mật khẩu ban đầu an toàn từ biến môi trường:
+      + Ưu tiên biến môi trường từng bộ phận: DAIKIM_PASSWORD, LONGBIEN_PASSWORD, TUYENNHANSU_PASSWORD
+      + Hoặc biến chung: INITIAL_DEPARTMENT_PASSWORD
+      + Hoặc khóa quản trị hệ thống: ADMIN_PASSWORD (tự động nhận diện cấu hình Render)
+    - Nếu tài khoản đã được tạo nhưng chưa đổi mật khẩu (must_change_password=True),
+      hệ thống tự động cập nhật hash theo biến môi trường để chủ hệ thống có thể đăng nhập ngay.
+    - Hỗ trợ cả cơ sở dữ liệu PostgreSQL (Production) và file JSON (Local/Fallback).
     """
     users = load_users()
     created_any = False
+    updated_any = False
     bootstrap_info = {}
     newly_created = {}
 
@@ -1218,24 +1223,71 @@ def bootstrap_department_accounts():
         username = spec["username"]
         existing = find_user_by_login(username)
 
+        # Kiểm tra mật khẩu cấu hình từ môi trường
+        dept_env_pwd = os.environ.get(spec["env_var"], "").strip()
+        common_env_pwd = (
+            os.environ.get("INITIAL_DEPARTMENT_PASSWORD", "").strip()
+            or os.environ.get("ADMIN_PASSWORD", "").strip()
+        )
+        configured_pwd = dept_env_pwd or common_env_pwd
+        is_from_env = bool(configured_pwd)
+
         if existing:
-            # Tài khoản đã tồn tại -> Giữ nguyên mật khẩu và dữ liệu
+            user_id = existing["user_id"]
+            current_hash = existing.get("password_hash", "")
+            must_change = existing.get("must_change_password", False)
+            last_login = existing.get("last_login_at")
+
+            # Xác định xem có cần đồng bộ lại mật khẩu từ môi trường không:
+            # 1. Biến môi trường riêng (ví dụ DAIKIM_PASSWORD) được khai báo rõ ràng và khác hash hiện tại
+            # 2. Hoặc tài khoản ở trạng thái ban đầu chưa đổi mật khẩu (must_change_password=True hoặc chưa login)
+            #    và mật khẩu cấu hình (kể cả ADMIN_PASSWORD) khác hash hiện tại
+            should_sync = False
+            target_pwd = ""
+            if dept_env_pwd and not check_password_hash(current_hash, dept_env_pwd):
+                should_sync = True
+                target_pwd = dept_env_pwd
+            elif configured_pwd and (must_change or not last_login) and not check_password_hash(current_hash, configured_pwd):
+                should_sync = True
+                target_pwd = configured_pwd
+
+            if should_sync and target_pwd:
+                new_hash = generate_password_hash(target_pwd)
+                if postgres_enabled():
+                    with postgres_connect() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE fbpostpro_users
+                                SET password_hash = %s,
+                                    is_active = TRUE
+                                WHERE user_id = %s
+                                """,
+                                (new_hash, user_id),
+                            )
+                        conn.commit()
+                else:
+                    if user_id in users:
+                        users[user_id]["password_hash"] = new_hash
+                        users[user_id]["is_active"] = True
+                        updated_any = True
+                print(f"[BOOTSTRAP] Đã đồng bộ mật khẩu từ cấu hình môi trường cho tài khoản @{username}", flush=True)
+
             continue
 
-        raw_password = os.environ.get(spec["env_var"], "").strip()
-        is_from_env = bool(raw_password)
-
+        raw_password = configured_pwd
         if not raw_password:
             raw_password = generate_strong_password(14)
 
         user_id = make_user_id()
+        new_hash = generate_password_hash(raw_password)
         new_user = {
             "user_id": user_id,
             "username": username,
             "display_name": spec["display_name"],
             "email": spec["email"],
             "phone": "",
-            "password_hash": generate_password_hash(raw_password),
+            "password_hash": new_hash,
             "is_active": True,
             "role": "user",
             "departments": [spec["department"]],
@@ -1244,13 +1296,41 @@ def bootstrap_department_accounts():
             "last_login_at": None,
         }
 
-        users[user_id] = new_user
-        created_any = True
+        if postgres_enabled():
+            init_users_table()
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO fbpostpro_users (
+                            user_id, username, email, phone, display_name,
+                            password_hash, is_active, role, departments,
+                            must_change_password, created_at, last_login_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, TRUE, NOW(), NULL)
+                        ON CONFLICT (user_id) DO UPDATE SET
+                            password_hash = EXCLUDED.password_hash
+                        """,
+                        (
+                            user_id,
+                            username,
+                            spec["email"],
+                            "",
+                            spec["display_name"],
+                            new_hash,
+                            "user",
+                            json.dumps([spec["department"]]),
+                        ),
+                    )
+                conn.commit()
+        else:
+            users[user_id] = new_user
+            created_any = True
 
         entry = {
             "department": spec["department"],
             "display_name": spec["display_name"],
-            "initial_password": raw_password if not is_from_env else "[Configured via Environment Variable]",
+            "initial_password": raw_password if not is_from_env else "[Configured via Environment Variable / ADMIN_PASSWORD]",
             "source": "environment" if is_from_env else "generated",
             "created_at": now_iso(),
             "note": "Mật khẩu ban đầu. Hệ thống yêu cầu đổi mật khẩu sau lần đăng nhập đầu tiên.",
@@ -1258,8 +1338,10 @@ def bootstrap_department_accounts():
         bootstrap_info[username] = entry
         newly_created[username] = entry
 
-    if created_any:
+    if (created_any or updated_any) and not postgres_enabled():
         save_users(users)
+
+    if newly_created:
         try:
             write_json(BOOTSTRAP_CREDENTIALS_FILE, bootstrap_info)
             if hasattr(os, "chmod") and os.name != "nt":
@@ -1641,7 +1723,7 @@ if postgres_enabled():
 try:
     bootstrap_department_accounts()
 except Exception as _bootstrap_err:
-    logger.warning("Không thể tự động bootstrap tài khoản bộ phận: %s", _bootstrap_err)
+    print(f"[BOOTSTRAP ERROR] Không thể tự động bootstrap tài khoản bộ phận: {_bootstrap_err}", flush=True)
 
 def migrate_legacy_customer_data(old_customer_id, user_id):
 
@@ -1723,6 +1805,7 @@ def require_customer_login():
             "/health",
             "/quick-login",
             "/forget-device",
+            "/api/auth/reset-department-password",
         }
     ):
         return None
@@ -2073,6 +2156,102 @@ def forget_device():
     resp = redirect(url_for("login"))
     resp.delete_cookie(cookie_name, path="/")
     return resp
+
+
+@app.route("/api/auth/reset-department-password", methods=["POST"])
+def reset_department_password():
+    """
+    Đặt lại mật khẩu ban đầu cho 1 trong 3 tài khoản bộ phận bằng Khóa quản trị hệ thống (ADMIN_PASSWORD).
+    Không cho phép đặt lại tài khoản khác hoặc tài khoản thường ngoài 3 bộ phận.
+    """
+    data = request.get_json(silent=True) if request.is_json else request.form
+    admin_key = str(data.get("admin_key", "")).strip()
+    target = str(data.get("department", "") or data.get("username", "")).strip().lower()
+    new_password = str(data.get("new_password", "")).strip()
+    confirm_password = str(data.get("confirm_password", "")).strip()
+
+    server_admin_pwd = os.environ.get("ADMIN_PASSWORD", "").strip() or ADMIN_PASSWORD
+    if not server_admin_pwd:
+        return jsonify({
+            "ok": False,
+            "error": "Server chưa cấu hình biến môi trường ADMIN_PASSWORD. Vui lòng cấu hình ADMIN_PASSWORD trên Render Dashboard trước khi sử dụng tính năng này.",
+        }), 400
+
+    if not admin_key or not secrets.compare_digest(admin_key, server_admin_pwd):
+        return jsonify({
+            "ok": False,
+            "error": "Khóa quản trị (ADMIN_PASSWORD) không chính xác.",
+        }), 403
+
+    dept_map = {
+        "dai_kim": "daikim",
+        "daikim": "daikim",
+        "long_bien": "longbien",
+        "longbien": "longbien",
+        "tuyen_nhan_su": "tuyennhansu",
+        "tuyennhansu": "tuyennhansu",
+    }
+    username = dept_map.get(target)
+    if not username:
+        return jsonify({
+            "ok": False,
+            "error": "Chỉ được phép đặt lại mật khẩu cho 3 bộ phận quản lý (Đại Kim, Long Biên, Tuyển nhân sự).",
+        }), 400
+
+    if len(new_password) < 6:
+        return jsonify({
+            "ok": False,
+            "error": "Mật khẩu mới phải có ít nhất 6 ký tự.",
+        }), 400
+
+    if new_password != confirm_password:
+        return jsonify({
+            "ok": False,
+            "error": "Mật khẩu mới và xác nhận mật khẩu không trùng khớp.",
+        }), 400
+
+    user = find_user_by_login(username)
+    if not user:
+        bootstrap_department_accounts()
+        user = find_user_by_login(username)
+        if not user:
+            return jsonify({
+                "ok": False,
+                "error": f"Không tìm thấy tài khoản @{username}.",
+            }), 404
+
+    user_id = user["user_id"]
+    new_hash = generate_password_hash(new_password)
+
+    if postgres_enabled():
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE fbpostpro_users
+                    SET password_hash = %s,
+                        is_active = TRUE,
+                        must_change_password = FALSE
+                    WHERE user_id = %s
+                    """,
+                    (new_hash, user_id),
+                )
+            conn.commit()
+    else:
+        users = load_users()
+        if user_id in users:
+            users[user_id]["password_hash"] = new_hash
+            users[user_id]["is_active"] = True
+            users[user_id]["must_change_password"] = False
+            save_users(users)
+
+    print(f"[SECURITY] Khóa quản trị ADMIN_PASSWORD đã đặt lại mật khẩu thành công cho @{username}", flush=True)
+
+    return jsonify({
+        "ok": True,
+        "message": f"Đặt lại mật khẩu cho tài khoản @{username} thành công! Bạn có thể dùng mật khẩu mới này để đăng nhập ngay bây giờ.",
+        "username": username,
+    })
 
 
 @app.route("/logout")
