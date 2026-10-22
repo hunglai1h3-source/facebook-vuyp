@@ -2557,20 +2557,30 @@ def extract_group_urls_from_file(filename, file_bytes):
     return []
 
 
+_groups_cache = {}
+
+
 def load_groups(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     if not customer_id:
         return []
 
+    cached = _groups_cache.get(customer_id)
+    if cached is not None:
+        return cached.copy()
+
     if not postgres_enabled():
         path = customer_groups_file(customer_id)
         if not path.exists():
+            _groups_cache[customer_id] = []
             return []
-        return [
+        res = [
             normalize_group_url(x)
             for x in path.read_text(encoding="utf-8").splitlines()
             if normalize_group_url(x)
         ]
+        _groups_cache[customer_id] = res.copy()
+        return res
 
     init_groups_table()
     migrate_groups_file_to_postgres(customer_id)
@@ -2588,7 +2598,9 @@ def load_groups(customer_id):
             )
             rows = cur.fetchall()
 
-    return [row["group_url"] for row in rows if row.get("group_url")]
+    res = [row["group_url"] for row in rows if row.get("group_url")]
+    _groups_cache[customer_id] = res.copy()
+    return res
 
 
 def save_groups(customer_id, groups):
@@ -2604,6 +2616,8 @@ def save_groups(customer_id, groups):
             continue
         seen.add(group)
         clean_groups.append(group)
+
+    _groups_cache[customer_id] = clean_groups.copy()
 
     if not postgres_enabled():
         customer_groups_file(customer_id).write_text(
@@ -2690,9 +2704,19 @@ def migrate_groups_file_to_postgres(customer_id):
 # POST
 # ============================================================
 
+_post_content_cache = {}
+
+
 def load_post(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return ""
+
+    cached = _post_content_cache.get(customer_id)
+    if cached is not None:
+        return cached
 
     path = (
         customer_post_file(
@@ -2701,23 +2725,27 @@ def load_post(
     )
 
     if not path.exists():
-
+        _post_content_cache[customer_id] = ""
         return ""
 
-    return path.read_text(
+    content = path.read_text(
         encoding="utf-8"
     )
+    _post_content_cache[customer_id] = content
+    return content
 
 
 def save_post_content(
     customer_id,
     content,
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    _post_content_cache[customer_id] = content or ""
 
     customer_post_file(
         customer_id
     ).write_text(
-        content,
+        content or "",
         encoding="utf-8",
     )
 
@@ -4208,9 +4236,19 @@ def update_campaign_state(
 # JOBS
 # ============================================================
 
+_jobs_cache = {}
+
+
 def load_jobs(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return {}
+
+    cached = _jobs_cache.get(customer_id)
+    if cached is not None:
+        return cached.copy()
 
     data = read_json(
         customer_jobs_file(
@@ -4223,9 +4261,10 @@ def load_jobs(
         data,
         dict,
     ):
-
+        _jobs_cache[customer_id] = data.copy()
         return data
 
+    _jobs_cache[customer_id] = {}
     return {}
 
 
@@ -4233,6 +4272,8 @@ def save_jobs(
     customer_id,
     jobs,
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    _jobs_cache[customer_id] = (jobs or {}).copy()
 
     write_json(
         customer_jobs_file(
@@ -4603,9 +4644,19 @@ def start_scheduler_daemon():
 # CONTROL
 # ============================================================
 
+_control_cache = {}
+
+
 def load_control(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return {}
+
+    cached = _control_cache.get(customer_id)
+    if cached is not None:
+        return cached.copy()
 
     data = read_json(
         customer_control_file(
@@ -4618,9 +4669,10 @@ def load_control(
         data,
         dict,
     ):
-
+        _control_cache[customer_id] = data.copy()
         return data
 
+    _control_cache[customer_id] = {}
     return {}
 
 
@@ -4628,6 +4680,8 @@ def save_control(
     customer_id,
     control,
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    _control_cache[customer_id] = (control or {}).copy()
 
     write_json(
         customer_control_file(
