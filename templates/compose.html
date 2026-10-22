@@ -296,7 +296,7 @@ Soạn nội dung, chọn nhiều ảnh và đăng lên các Group Facebook.
     <!-- RIGHT -->
     <!-- ================================================= -->
 
-    <aside class="panel campaign-preview">
+    <aside class="panel campaign-preview" style="padding: 24px; box-sizing: border-box; min-width: 0; width: 100%;">
 
         <h3>
             Tổng quan chiến dịch
@@ -789,6 +789,68 @@ if (composeIsRunning || composeScheduledAt) {
 </script>
 
 <style>
+.compose-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 380px);
+    gap: 20px;
+    align-items: start;
+    width: 100%;
+}
+.campaign-preview {
+    padding: 24px;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+.campaign-preview h3 {
+    margin: 0 0 16px 0;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.3px;
+    color: var(--text);
+}
+.campaign-preview .preview-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    box-sizing: border-box;
+}
+.campaign-preview .preview-row span {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+.campaign-preview .preview-row strong {
+    color: var(--text);
+    font-weight: 800;
+    font-size: 13px;
+    text-align: right;
+    white-space: nowrap;
+}
+.campaign-preview .agent-box {
+    margin-top: 18px;
+    padding: 14px;
+    border-radius: 14px;
+    background: rgba(37,99,235,.06);
+    border: 1px solid rgba(37,99,235,.18);
+    box-sizing: border-box;
+    word-break: break-word;
+}
+.campaign-preview .btn {
+    box-sizing: border-box;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.4;
+}
+.campaign-preview p {
+    line-height: 1.5;
+    word-break: break-word;
+}
 .mode-tab-btn {
     border: none;
     background: transparent;
@@ -819,6 +881,11 @@ if (composeIsRunning || composeScheduledAt) {
     background: rgba(168,85,247,.25);
     color: #fff;
     border-color: rgba(168,85,247,.4);
+}
+@media (max-width: 1080px) {
+    .compose-grid {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 
