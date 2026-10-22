@@ -45,8 +45,22 @@
     <article class="panel dash-panel">
       <div class="panel-head">
         <div><span class="eyebrow">TRẠNG THÁI</span><h3>Chiến dịch hiện tại</h3></div>
-        {% if campaign_state.running %}<span class="status-badge running">ĐANG CHẠY</span>{% else %}<span class="status-badge idle">SẴN SÀNG</span>{% endif %}
+        {% if campaign_state.running %}<span class="status-badge running">ĐANG CHẠY</span>
+        {% elif schedule_info %}<span class="status-badge scheduled" style="background:rgba(168,85,247,.16);color:#c084fc">🕒 HẸN GIỜ: {{ schedule_info.time_remaining_str }}</span>
+        {% else %}<span class="status-badge idle">SẴN SÀNG</span>{% endif %}
       </div>
+
+      {% if schedule_info and not campaign_state.running %}
+      <div class="schedule-banner" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:12px;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(59,130,246,.08));border:1px solid rgba(168,85,247,.25);margin-bottom:14px;">
+        <div style="font-size:12px;">
+          <div style="font-weight:700;color:#c084fc;">🕒 Lịch hẹn: {{ schedule_info.campaign_name }}</div>
+          <div style="color:var(--muted);font-size:11px;margin-top:2px;">Chạy lúc <strong>{{ schedule_info.scheduled_at_formatted }}</strong> ({{ schedule_info.time_remaining_str }}) • {{ schedule_info.groups_count }} Groups</div>
+        </div>
+        <form method="post" action="{{ url_for('cancel_schedule') }}" style="margin:0;">
+          <button type="submit" class="btn danger" style="padding:4px 10px;font-size:11px;">Hủy hẹn</button>
+        </form>
+      </div>
+      {% endif %}
 
       <div class="campaign-status-box">
         <div class="campaign-status-icon">{% if campaign_state.running %}▶{% else %}◉{% endif %}</div>

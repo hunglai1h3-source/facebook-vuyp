@@ -7,7 +7,9 @@
   window.addEventListener('message',(event)=>{
     if(event.source!==window)return;
     const data=event.data||{};
-    if(data.source!=='FBPOST_WEB'||data.type!=='PAIR_CONNECTOR')return;
+    if(data.source!=='FBPOST_WEB')return;
+    if(data.type==='POLL_NOW'){ping();return;}
+    if(data.type!=='PAIR_CONNECTOR')return;
     chrome.runtime.sendMessage({type:'PAIR_FROM_WEB',serverOrigin:origin,code:String(data.code||'')})
       .then(result=>window.postMessage({source:'FBPOST_EXTENSION',type:'PAIR_RESULT',result},origin))
       .catch(err=>window.postMessage({source:'FBPOST_EXTENSION',type:'PAIR_RESULT',result:{ok:false,error:String(err)}},origin));

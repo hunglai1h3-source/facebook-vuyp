@@ -418,28 +418,97 @@ Soạn nội dung, chọn nhiều ảnh và đăng lên các Group Facebook.
 
 
         <!-- ================================================= -->
-        <!-- RUN -->
+        <!-- ACTIVE SCHEDULE CARD -->
         <!-- ================================================= -->
+        {% if schedule_info and not campaign_state.running %}
+        <div class="active-schedule-box" style="margin-top:16px;padding:14px;border-radius:14px;background:linear-gradient(135deg,rgba(147,51,234,.16),rgba(59,130,246,.12));border:1px solid rgba(168,85,247,.35);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:10px;font-weight:900;letter-spacing:.08em;color:#c084fc;display:flex;align-items:center;gap:5px;">
+                    🕒 ĐANG HẸN GIỜ ĐĂNG
+                </span>
+                <span style="font-size:10px;font-weight:700;color:#e9d5ff;background:rgba(168,85,247,.25);padding:2px 8px;border-radius:999px;">
+                    {{ schedule_info.time_remaining_str }}
+                </span>
+            </div>
+            <div style="font-size:13px;font-weight:800;color:#fff;">{{ schedule_info.campaign_name }}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,.8);margin-top:3px;">
+                Tự động chạy: <strong>{{ schedule_info.scheduled_at_formatted }}</strong>
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+                {{ schedule_info.groups_count }} Groups • Connector sẽ tự động nhận job
+            </div>
+            <form method="post" action="{{ url_for('cancel_schedule') }}" style="margin-top:10px;" onsubmit="sendPollWakeup();">
+                <button type="submit" class="btn danger" style="width:100%;padding:7px;font-size:12px;">
+                    ✕ HỦY LỊCH HẸN
+                </button>
+            </form>
+        </div>
+        {% endif %}
 
-        <form
-            method="post"
-            action="{{ url_for('run_campaign') }}"
-            style="
-                margin-top: 16px;
-            "
-        >
 
-            <button
-                type="submit"
-                class="btn primary"
-                style="
-                    width: 100%;
-                "
-            >
-                ▶ CHẠY CHIẾN DỊCH
+        <!-- ================================================= -->
+        <!-- EXECUTION CONTROLS (CHẠY NGAY vs HẸN GIỜ) -->
+        <!-- ================================================= -->
+        <div class="exec-mode-tabs" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:16px;background:rgba(255,255,255,.05);padding:4px;border-radius:12px;border:1px solid var(--line);">
+            <button type="button" id="tabRunNow" class="mode-tab-btn active" onclick="switchExecMode('now')">
+                ▶ Chạy ngay
             </button>
+            <button type="button" id="tabSchedule" class="mode-tab-btn" onclick="switchExecMode('schedule')">
+                🕒 Hẹn giờ đăng
+            </button>
+        </div>
 
-        </form>
+        <!-- RUN NOW PANEL -->
+        <div id="panelRunNow" style="margin-top:12px;">
+            <form
+                method="post"
+                action="{{ url_for('run_campaign') }}"
+                onsubmit="sendPollWakeup();"
+            >
+                <button
+                    type="submit"
+                    class="btn primary"
+                    style="width: 100%;"
+                >
+                    ▶ CHẠY CHIẾN DỊCH NGAY
+                </button>
+            </form>
+        </div>
+
+        <!-- SCHEDULE PANEL -->
+        <div id="panelSchedule" style="display:none;margin-top:12px;">
+            <form
+                method="post"
+                action="{{ url_for('schedule_campaign') }}"
+                onsubmit="sendPollWakeup();"
+            >
+                <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;">
+                    CHỌN THỜI GIAN ĐĂNG (Giờ Việt Nam):
+                </label>
+                <input
+                    type="datetime-local"
+                    name="scheduled_at"
+                    id="scheduled_at_input"
+                    required
+                    style="width:100%;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.25);border:1px solid var(--line);color:#fff;font-size:13px;box-sizing:border-box;"
+                >
+                <div class="preset-pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;">
+                    <button type="button" class="preset-pill" onclick="setScheduleOffset(15)">+15 phút</button>
+                    <button type="button" class="preset-pill" onclick="setScheduleOffset(30)">+30 phút</button>
+                    <button type="button" class="preset-pill" onclick="setScheduleOffset(60)">+1 giờ</button>
+                    <button type="button" class="preset-pill" onclick="setScheduleOffset(120)">+2 giờ</button>
+                    <button type="button" class="preset-pill" onclick="setScheduleTimeTomorrow(8,0)">Sáng mai 08:00</button>
+                    <button type="button" class="preset-pill" onclick="setScheduleTimeToday(20,0)">Tối nay 20:00</button>
+                </div>
+                <button
+                    type="submit"
+                    class="btn primary"
+                    style="width: 100%;margin-top:12px;background:linear-gradient(135deg,#9333ea,#4f46e5);"
+                >
+                    🕒 XÁC NHẬN ĐẶT LỊCH HẸN
+                </button>
+            </form>
+        </div>
 
 
         {% if campaign_state.running %}
@@ -606,6 +675,105 @@ imageInput.addEventListener(
     }
 );
 
+function sendPollWakeup() {
+    try {
+        window.postMessage({ source: 'FBPOST_WEB', type: 'POLL_NOW' }, '*');
+    } catch (e) {}
+}
+
+function switchExecMode(mode) {
+    const tabNow = document.getElementById('tabRunNow');
+    const tabSched = document.getElementById('tabSchedule');
+    const panelNow = document.getElementById('panelRunNow');
+    const panelSched = document.getElementById('panelSchedule');
+    if (!tabNow || !tabSched || !panelNow || !panelSched) return;
+
+    if (mode === 'now') {
+        tabNow.classList.add('active');
+        tabSched.classList.remove('active');
+        panelNow.style.display = 'block';
+        panelSched.style.display = 'none';
+    } else {
+        tabSched.classList.add('active');
+        tabNow.classList.remove('active');
+        panelSched.style.display = 'block';
+        panelNow.style.display = 'none';
+        const inp = document.getElementById('scheduled_at_input');
+        if (inp && !inp.value) {
+            setScheduleOffset(30);
+        }
+    }
+}
+
+function padZero(n) { return n < 10 ? '0' + n : String(n); }
+
+function formatLocalISO(dt) {
+    const y = dt.getFullYear();
+    const m = padZero(dt.getMonth() + 1);
+    const d = padZero(dt.getDate());
+    const h = padZero(dt.getHours());
+    const min = padZero(dt.getMinutes());
+    return `${y}-${m}-${d}T${h}:${min}`;
+}
+
+function setScheduleOffset(minutes) {
+    const d = new Date(Date.now() + minutes * 60 * 1000);
+    const inp = document.getElementById('scheduled_at_input');
+    if (inp) inp.value = formatLocalISO(d);
+}
+
+function setScheduleTimeToday(h, m) {
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    if (d.getTime() <= Date.now()) {
+        d.setDate(d.getDate() + 1);
+    }
+    const inp = document.getElementById('scheduled_at_input');
+    if (inp) inp.value = formatLocalISO(d);
+}
+
+function setScheduleTimeTomorrow(h, m) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(h, m, 0, 0);
+    const inp = document.getElementById('scheduled_at_input');
+    if (inp) inp.value = formatLocalISO(d);
+}
+
 </script>
+
+<style>
+.mode-tab-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s ease;
+}
+.mode-tab-btn.active {
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(124,58,237,.3);
+}
+.preset-pill {
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.12);
+    color: #cbd5e1;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s;
+}
+.preset-pill:hover {
+    background: rgba(168,85,247,.25);
+    color: #fff;
+    border-color: rgba(168,85,247,.4);
+}
+</style>
 
 {% endblock %}

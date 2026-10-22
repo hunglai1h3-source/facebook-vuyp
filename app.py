@@ -580,6 +580,18 @@ def customer_status_file(
     )
 
 
+def customer_schedule_file(
+    customer_id
+):
+
+    return (
+        customer_data_dir(
+            customer_id
+        )
+        / "schedule.json"
+    )
+
+
 # ============================================================
 # JSON
 # ============================================================
@@ -2841,10 +2853,15 @@ def load_settings(
     return settings
 
 
+_active_device_cache = {}
+
+
 def save_settings(
     customer_id,
     settings,
 ):
+
+    _active_device_cache.pop(sanitize_customer_id(customer_id), None)
 
     write_json(
         customer_settings_file(
@@ -3910,6 +3927,8 @@ def save_devices(
     devices,
 ):
 
+    _active_device_cache.pop(sanitize_customer_id(customer_id), None)
+
     write_json(
         customer_devices_file(
             customer_id
@@ -4000,6 +4019,14 @@ def get_online_devices(
 def get_active_device(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return None
+
+    now_ts = time.time()
+    cached = _active_device_cache.get(customer_id)
+    if cached and (now_ts - cached[0] < 1.5):
+        return cached[1]
 
     settings = load_settings(
         customer_id
@@ -4016,6 +4043,7 @@ def get_active_device(
         )
     )
 
+    res = None
     if active_id:
 
         device = devices.get(
@@ -4037,32 +4065,36 @@ def get_active_device(
                 "device_id"
             ] = active_id
 
-            return item
+            res = item
 
-    online = (
-        get_online_devices(
-            customer_id
+    if not res:
+        online = (
+            get_online_devices(
+                customer_id
+            )
         )
-    )
 
-    if not online:
+        if online:
+            device = online[0]
 
-        return None
+            settings[
+                "active_device_id"
+            ] = device[
+                "device_id"
+            ]
 
-    device = online[0]
+            save_settings(
+                customer_id,
+                settings,
+            )
 
-    settings[
-        "active_device_id"
-    ] = device[
-        "device_id"
-    ]
+            res = device
 
-    save_settings(
-        customer_id,
-        settings,
-    )
-
-    return device
+    if res is not None:
+        _active_device_cache[customer_id] = (now_ts, res)
+    else:
+        _active_device_cache.pop(customer_id, None)
+    return res
 
 
 # ============================================================
@@ -4181,6 +4213,329 @@ def save_jobs(
         ),
         jobs,
     )
+
+
+# ============================================================
+# SCHEDULES (HẸN GIỜ ĐĂNG BÀI)
+# ============================================================
+
+def init_schedules_table():
+    if not postgres_enabled():
+        return
+    try:
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_schedules (
+                        customer_id VARCHAR(100) PRIMARY KEY,
+                        schedule_data JSONB NOT NULL,
+                        scheduled_at TIMESTAMPTZ NOT NULL,
+                        status VARCHAR(30) NOT NULL DEFAULT 'scheduled',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_fbpostpro_schedules_time
+                    ON fbpostpro_schedules (scheduled_at, status)
+                    """
+                )
+            conn.commit()
+    except Exception as e:
+        print("[INIT SCHEDULES ERROR]", e, flush=True)
+
+
+def parse_scheduled_time(time_str):
+    if not time_str:
+        return None
+    time_str = str(time_str).strip()
+    try:
+        if time_str.isdigit():
+            ts = int(time_str)
+            if ts > 10**11:
+                ts = ts / 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        dt = datetime.fromisoformat(time_str)
+        if dt.tzinfo is None:
+            vn_tz = timezone(timedelta(hours=7))
+            dt = dt.replace(tzinfo=vn_tz)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def format_vietnam_time(dt_utc):
+    if not dt_utc:
+        return ""
+    try:
+        vn_tz = timezone(timedelta(hours=7))
+        dt_vn = dt_utc.astimezone(vn_tz)
+        return dt_vn.strftime("%H:%M ngày %d/%m/%Y")
+    except Exception:
+        return str(dt_utc)
+
+
+def load_schedule(customer_id):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return None
+
+    if postgres_enabled():
+        init_schedules_table()
+        try:
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT schedule_data, status
+                        FROM fbpostpro_schedules
+                        WHERE customer_id = %s
+                        """,
+                        (customer_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        data = row["schedule_data"]
+                        if isinstance(data, str):
+                            data = json.loads(data)
+                        if isinstance(data, dict):
+                            data["status"] = row.get("status", data.get("status", "scheduled"))
+                            return data
+            return None
+        except Exception as e:
+            print("[LOAD SCHEDULE PG ERROR]", e, flush=True)
+
+    return read_json(customer_schedule_file(customer_id), None)
+
+
+def save_schedule(customer_id, schedule_data):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return
+
+    if postgres_enabled():
+        init_schedules_table()
+        try:
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    if not schedule_data:
+                        cur.execute(
+                            """
+                            DELETE FROM fbpostpro_schedules
+                            WHERE customer_id = %s
+                            """,
+                            (customer_id,),
+                        )
+                    else:
+                        sched_at = schedule_data.get("scheduled_at", now_iso())
+                        status = schedule_data.get("status", "scheduled")
+                        cur.execute(
+                            """
+                            INSERT INTO fbpostpro_schedules (customer_id, schedule_data, scheduled_at, status, updated_at)
+                            VALUES (%s, %s, %s, %s, NOW())
+                            ON CONFLICT (customer_id) DO UPDATE SET
+                                schedule_data = EXCLUDED.schedule_data,
+                                scheduled_at = EXCLUDED.scheduled_at,
+                                status = EXCLUDED.status,
+                                updated_at = NOW()
+                            """,
+                            (customer_id, json.dumps(schedule_data), sched_at, status),
+                        )
+                conn.commit()
+            return
+        except Exception as e:
+            print("[SAVE SCHEDULE PG ERROR]", e, flush=True)
+
+    if not schedule_data:
+        p = customer_schedule_file(customer_id)
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return
+
+    write_json(customer_schedule_file(customer_id), schedule_data)
+
+
+def get_schedule_info(customer_id):
+    sched = load_schedule(customer_id)
+    if not sched or sched.get("status") != "scheduled":
+        return None
+
+    dt_utc = parse_scheduled_time(sched.get("scheduled_at"))
+    if not dt_utc:
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+    diff = dt_utc - now_utc
+    total_seconds = int(diff.total_seconds())
+    if total_seconds <= 0:
+        time_remaining_str = "Sắp chạy..."
+    else:
+        hours = total_seconds // 3600
+        mins = (total_seconds % 3600) // 60
+        if hours > 24:
+            days = hours // 24
+            time_remaining_str = f"còn {days} ngày {hours % 24} giờ"
+        elif hours > 0:
+            time_remaining_str = f"còn {hours} giờ {mins} phút"
+        else:
+            time_remaining_str = f"còn {max(1, mins)} phút"
+
+    return {
+        "schedule_id": sched.get("schedule_id", ""),
+        "campaign_name": sched.get("campaign_name", "Chiến dịch"),
+        "scheduled_at": sched.get("scheduled_at"),
+        "scheduled_at_formatted": format_vietnam_time(dt_utc),
+        "time_remaining_str": time_remaining_str,
+        "status": "scheduled",
+        "groups_count": len(sched.get("groups", [])),
+    }
+
+
+def trigger_single_schedule(customer_id, sched):
+    if not sched or sched.get("status") != "scheduled":
+        return False
+
+    dt_utc = parse_scheduled_time(sched.get("scheduled_at"))
+    if not dt_utc:
+        return False
+
+    now_utc = datetime.now(timezone.utc)
+    if dt_utc > now_utc:
+        return False
+
+    # Due! Check active device
+    device = get_active_device(customer_id)
+    if not device:
+        update_campaign_state(
+            customer_id,
+            running=False,
+            status="scheduled_paused",
+            message=f"Đã đến giờ hẹn ({format_vietnam_time(dt_utc)}) nhưng FB POST PRO Connector chưa online.",
+        )
+        return False
+
+    device_id = device["device_id"]
+    job_id = "job_" + uuid.uuid4().hex[:20]
+    jobs = load_jobs(customer_id)
+
+    campaign_name = sched.get("campaign_name", "Chiến dịch hẹn giờ")
+    groups_list = sched.get("groups", [])
+    content = sched.get("content", "")
+    images = sched.get("images", [])
+    min_delay = sched.get("min_delay", 3)
+    max_delay = sched.get("max_delay", 7)
+
+    jobs[device_id] = {
+        "job_id": job_id,
+        "status": "pending",
+        "mode": "chrome_extension",
+        "created_at": now_iso(),
+        "campaign_name": campaign_name,
+        "groups": list(groups_list),
+        "content": content,
+        "images": images,
+        "min_delay": min_delay,
+        "max_delay": max_delay,
+    }
+    save_jobs(customer_id, jobs)
+
+    control = load_control(customer_id)
+    control[device_id] = {
+        "stop_requested": False,
+        "reset_profile_requested": False,
+    }
+    save_control(customer_id, control)
+
+    update_campaign_state(
+        customer_id,
+        running=True,
+        status="queued",
+        message=f"Chiến dịch hẹn giờ '{campaign_name}' đang bắt đầu...",
+        processed=0,
+        total=len(groups_list),
+        success=0,
+        errors=0,
+    )
+
+    save_schedule(customer_id, None)
+
+    add_history(
+        customer_id,
+        "info",
+        "Kích hoạt chiến dịch hẹn giờ",
+        f"Chiến dịch '{campaign_name}' đã tự động kích hoạt theo lịch hẹn lúc {format_vietnam_time(dt_utc)}.",
+    )
+    print(f"[SCHEDULER] Đã kích hoạt chiến dịch hẹn giờ '{campaign_name}' cho {customer_id}", flush=True)
+    return True
+
+
+def check_and_trigger_schedules():
+    triggered = 0
+    now_utc = datetime.now(timezone.utc)
+
+    if postgres_enabled():
+        init_schedules_table()
+        try:
+            with postgres_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT customer_id, schedule_data
+                        FROM fbpostpro_schedules
+                        WHERE scheduled_at <= %s AND status = 'scheduled'
+                        """,
+                        (now_utc,),
+                    )
+                    rows = cur.fetchall()
+            for r in rows:
+                cid = r["customer_id"]
+                s_data = r["schedule_data"]
+                if isinstance(s_data, str):
+                    s_data = json.loads(s_data)
+                if trigger_single_schedule(cid, s_data):
+                    triggered += 1
+        except Exception as e:
+            print("[SCHEDULER PG ERROR]", e, flush=True)
+        return triggered
+
+    try:
+        users = load_users()
+        for uid, u in users.items():
+            for dept in VALID_DEPARTMENTS:
+                cid = f"{uid}__{dept}"
+                sched = load_schedule(cid)
+                if sched and sched.get("status") == "scheduled":
+                    if trigger_single_schedule(cid, sched):
+                        triggered += 1
+    except Exception as e:
+        print("[SCHEDULER LOCAL ERROR]", e, flush=True)
+
+    return triggered
+
+
+_scheduler_started = False
+def start_scheduler_daemon():
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+
+    def _loop():
+        while True:
+            try:
+                check_and_trigger_schedules()
+            except Exception:
+                pass
+            time.sleep(5)
+
+    t = threading.Thread(target=_loop, daemon=True, name="fbpost_scheduler_daemon")
+    t.start()
 
 
 # ============================================================
@@ -4826,6 +5181,9 @@ def dashboard():
         ),
         agent_device=
             active_device,
+        schedule_info=get_schedule_info(
+            customer_id
+        ),
         **dashboard_data(
             customer_id
         ),
@@ -4880,6 +5238,9 @@ def compose():
         ),
         agent_device=
             active_device,
+        schedule_info=get_schedule_info(
+            customer_id
+        ),
     )
 
 
@@ -6761,6 +7122,119 @@ def run_campaign():
     return redirect(url_for("compose"))
 
 
+# ============================================================
+# SCHEDULE CAMPAIGN (HẸN GIỜ ĐĂNG BÀI)
+# ============================================================
+
+@app.route("/schedule-campaign", methods=["POST"])
+def schedule_campaign():
+    customer_id = get_customer_id()
+    state = get_campaign_state(customer_id)
+
+    if state.get("running"):
+        flash("Chiến dịch hiện tại đang chạy, không thể đặt lịch mới.", "warning")
+        return redirect(url_for("compose"))
+
+    groups_list = load_groups(customer_id)
+    form_content = request.form.get("content", "").strip()
+    if form_content:
+        save_post_content(customer_id, form_content)
+    content = load_post(customer_id).strip()
+    settings_data = load_settings(customer_id)
+
+    if not groups_list:
+        flash("Bạn chưa thêm Group.", "warning")
+        return redirect(url_for("groups"))
+    if not content:
+        flash("Bạn chưa nhập nội dung bài đăng.", "warning")
+        return redirect(url_for("compose"))
+
+    scheduled_at_raw = request.form.get("scheduled_at", "").strip()
+    if not scheduled_at_raw:
+        flash("Vui lòng chọn thời gian hẹn giờ đăng bài.", "warning")
+        return redirect(url_for("compose"))
+
+    dt_utc = parse_scheduled_time(scheduled_at_raw)
+    now_utc = datetime.now(timezone.utc)
+    if not dt_utc or dt_utc <= now_utc + timedelta(seconds=10):
+        flash("Thời gian hẹn giờ phải ở tương lai (ít nhất sau thời điểm hiện tại 1 phút).", "warning")
+        return redirect(url_for("compose"))
+
+    form_campaign_name = request.form.get("campaign_name", "").strip()
+    campaign_name = form_campaign_name or settings_data.get("campaign_name", "Chiến dịch hẹn giờ")
+    form_min_delay = request.form.get("min_delay")
+    form_max_delay = request.form.get("max_delay")
+    try:
+        min_delay_val = max(0, int(form_min_delay)) if form_min_delay is not None else max(0, int(settings_data.get("min_delay", 3)))
+    except (ValueError, TypeError):
+        min_delay_val = max(0, int(settings_data.get("min_delay", 3)))
+    try:
+        max_delay_val = max(0, int(form_max_delay)) if form_max_delay is not None else max(0, int(settings_data.get("max_delay", 7)))
+    except (ValueError, TypeError):
+        max_delay_val = max(0, int(settings_data.get("max_delay", 7)))
+
+    schedule_data = {
+        "schedule_id": "sched_" + uuid.uuid4().hex[:16],
+        "campaign_name": campaign_name,
+        "scheduled_at": dt_utc.isoformat(),
+        "status": "scheduled",
+        "created_at": now_iso(),
+        "groups": list(groups_list),
+        "content": content,
+        "images": [Path(x).name for x in settings_data.get("post_images", [])],
+        "min_delay": min_delay_val,
+        "max_delay": max_delay_val,
+    }
+    save_schedule(customer_id, schedule_data)
+
+    vn_time_str = format_vietnam_time(dt_utc)
+    add_history(
+        customer_id,
+        "info",
+        "Đã lên lịch chiến dịch",
+        f"'{campaign_name}' hẹn đăng vào {vn_time_str} • {len(groups_list)} Groups",
+    )
+    flash(f"Đã lên lịch hẹn thành công! Chiến dịch sẽ tự động chạy vào {vn_time_str}.", "success")
+
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({
+            "ok": True,
+            "message": f"Đã lên lịch hẹn: {vn_time_str}",
+            "schedule": get_schedule_info(customer_id),
+        })
+    return redirect(url_for("compose"))
+
+
+@app.route("/cancel-schedule", methods=["POST"])
+def cancel_schedule():
+    customer_id = get_customer_id()
+    sched = load_schedule(customer_id)
+    if sched:
+        campaign_name = sched.get("campaign_name", "Chiến dịch")
+        save_schedule(customer_id, None)
+        add_history(
+            customer_id,
+            "info",
+            "Đã hủy lịch hẹn",
+            f"Đã hủy lịch hẹn đăng bài của chiến dịch '{campaign_name}'.",
+        )
+        flash("Đã hủy lịch hẹn đăng bài.", "info")
+    else:
+        flash("Không có lịch hẹn nào đang hoạt động.", "info")
+
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"ok": True, "message": "Đã hủy lịch hẹn."})
+    return redirect(url_for("compose"))
+
+
+@app.route("/schedule-status", methods=["GET"])
+def schedule_status():
+    check_and_trigger_schedules()
+    customer_id = get_customer_id()
+    info = get_schedule_info(customer_id)
+    return jsonify(info or {"status": "none"})
+
+
 @app.route("/stop-campaign", methods=["POST"])
 def stop_campaign():
     customer_id = get_customer_id()
@@ -6795,12 +7269,14 @@ def stop_campaign():
 
 @app.route("/campaign-status")
 def campaign_status():
+    check_and_trigger_schedules()
     customer_id = get_customer_id()
     state = get_campaign_state(customer_id)
     active_device = get_active_device(customer_id)
     state["agent_online"] = active_device is not None
     state["agent_device"] = active_device
     state["facebook"] = get_facebook_state(customer_id)
+    state["schedule"] = get_schedule_info(customer_id)
     return jsonify(state)
 
 
@@ -7200,6 +7676,8 @@ def agent_get_job():
             "device_id"
         ]
     )
+
+    check_and_trigger_schedules()
 
     jobs = (
         load_jobs(
@@ -7801,6 +8279,15 @@ def file_too_large(
             "compose"
         )
     )
+
+
+# ============================================================
+# START SCHEDULER DAEMON
+# ============================================================
+try:
+    start_scheduler_daemon()
+except Exception as _e:
+    print("[SCHEDULER DAEMON START ERROR]", _e, flush=True)
 
 
 # ============================================================
