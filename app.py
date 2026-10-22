@@ -124,6 +124,8 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "",
 ).strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
 
 USER_STORE = (
     "postgres"
@@ -1734,6 +1736,7 @@ def migrate_json_users_to_postgres():
 if postgres_enabled():
     init_users_table()
     init_trusted_devices_table()
+    init_schedules_table()
     migrate_json_users_to_postgres()
 
 try:

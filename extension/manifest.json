@@ -13,6 +13,7 @@
   "host_permissions": [
     "https://*.facebook.com/*",
     "https://*.onrender.com/*",
+    "https://*/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
