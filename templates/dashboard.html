@@ -45,16 +45,16 @@
     <article class="panel dash-panel">
       <div class="panel-head">
         <div><span class="eyebrow">TRẠNG THÁI</span><h3>Chiến dịch hiện tại</h3></div>
-        {% if campaign_state.running %}<span class="status-badge running">ĐANG CHẠY</span>
-        {% elif schedule_info %}<span class="status-badge scheduled" style="background:rgba(168,85,247,.16);color:#c084fc">🕒 HẸN GIỜ: {{ schedule_info.time_remaining_str }}</span>
-        {% else %}<span class="status-badge idle">SẴN SÀNG</span>{% endif %}
+        {% if campaign_state.running %}<span id="dash-status-badge" class="status-badge running">ĐANG CHẠY</span>
+        {% elif schedule_info %}<span id="dash-status-badge" class="status-badge scheduled" style="background:rgba(168,85,247,.16);color:#c084fc">🕒 HẸN GIỜ: {{ schedule_info.time_remaining_str }}</span>
+        {% else %}<span id="dash-status-badge" class="status-badge idle">SẴN SÀNG</span>{% endif %}
       </div>
 
       {% if schedule_info and not campaign_state.running %}
-      <div class="schedule-banner" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:12px;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(59,130,246,.08));border:1px solid rgba(168,85,247,.25);margin-bottom:14px;">
+      <div id="dash-schedule-banner" class="schedule-banner" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:12px;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(59,130,246,.08));border:1px solid rgba(168,85,247,.25);margin-bottom:14px;">
         <div style="font-size:12px;">
           <div style="font-weight:700;color:#c084fc;">🕒 Lịch hẹn: {{ schedule_info.campaign_name }}</div>
-          <div style="color:var(--muted);font-size:11px;margin-top:2px;">Chạy lúc <strong>{{ schedule_info.scheduled_at_formatted }}</strong> ({{ schedule_info.time_remaining_str }}) • {{ schedule_info.groups_count }} Groups</div>
+          <div style="color:var(--muted);font-size:11px;margin-top:2px;">Chạy lúc <strong>{{ schedule_info.scheduled_at_formatted }}</strong> (<span id="dash-schedule-countdown">{{ schedule_info.time_remaining_str }}</span>) • {{ schedule_info.groups_count }} Groups</div>
         </div>
         <form method="post" action="{{ url_for('cancel_schedule') }}" style="margin:0;">
           <button type="submit" class="btn danger" style="padding:4px 10px;font-size:11px;">Hủy hẹn</button>
@@ -65,27 +65,27 @@
       <div class="campaign-status-box">
         <div class="campaign-status-icon">{% if campaign_state.running %}▶{% else %}◉{% endif %}</div>
         <div class="campaign-status-copy">
-          <strong>{{ campaign_state.message or 'Chưa chạy chiến dịch' }}</strong>
-          <span>{{ campaign_state.status or 'idle' }}</span>
+          <strong id="dash-campaign-msg">{{ campaign_state.message or 'Chưa chạy chiến dịch' }}</strong>
+          <span id="dash-campaign-status">{{ campaign_state.status or 'idle' }}</span>
         </div>
       </div>
 
       <div class="progress-row">
-        <div><span>Tiến độ</span><strong>{{ campaign_state.processed or 0 }} / {{ campaign_state.total or 0 }}</strong></div>
+        <div><span>Tiến độ</span><strong id="dash-progress-text">{{ campaign_state.processed or 0 }} / {{ campaign_state.total or 0 }}</strong></div>
         {% set pct = ((campaign_state.processed or 0) * 100 / (campaign_state.total or 1)) if (campaign_state.total or 0) else 0 %}
-        <div class="progress-track"><span style="width:{{ pct }}%"></span></div>
+        <div class="progress-track"><span id="dash-progress-track" style="width:{{ pct }}%"></span></div>
       </div>
 
       <div class="mini-grid">
-        <div><span>Thành công</span><strong class="ok">{{ campaign_state.success or 0 }}</strong></div>
-        <div><span>Lỗi</span><strong class="bad">{{ campaign_state.errors or 0 }}</strong></div>
+        <div><span>Thành công</span><strong id="dash-success-count" class="ok">{{ campaign_state.success or 0 }}</strong></div>
+        <div><span>Lỗi</span><strong id="dash-error-count" class="bad">{{ campaign_state.errors or 0 }}</strong></div>
       </div>
     </article>
 
     <article class="panel dash-panel">
       <div class="panel-head">
         <div><span class="eyebrow">KẾT NỐI</span><h3>FB POST PRO Connector</h3></div>
-        {% if agent_online %}<span class="status-badge online">ONLINE</span>{% else %}<span class="status-badge offline">CHƯA KẾT NỐI</span>{% endif %}
+        {% if agent_online %}<span id="dash-connector-badge" class="status-badge online">ONLINE</span>{% else %}<span id="dash-connector-badge" class="status-badge offline">CHƯA KẾT NỐI</span>{% endif %}
       </div>
 
       <div class="cloud-card {% if agent_online %}is-online{% endif %}">
@@ -128,4 +128,103 @@
 <style>
 .fb-dashboard{display:grid;gap:18px}.hero-card{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:27px 28px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(135deg,rgba(124,58,237,.13),rgba(37,99,235,.08)),var(--panel);box-shadow:var(--shadow);overflow:hidden;position:relative}.hero-card:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;right:-110px;top:-135px;background:rgba(99,102,241,.13)}.hero-card>div{position:relative;z-index:1}.hero-eyebrow,.eyebrow{font-size:9px;letter-spacing:.16em;font-weight:850;color:#a78bfa}.hero-card h2{margin:8px 0 7px;font-size:25px;letter-spacing:-.45px}.hero-card p{margin:0;color:var(--muted);font-size:12px;line-height:1.65}.hero-actions{display:flex;gap:9px;flex-wrap:wrap}.dash-stats{grid-template-columns:repeat(4,minmax(0,1fr))}.stat-top{display:flex;align-items:center;gap:9px}.stat-icon{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;font-weight:900}.stat-icon.purple{background:rgba(124,58,237,.15);color:#c4b5fd}.stat-icon.green{background:rgba(34,197,94,.13);color:#86efac}.stat-icon.blue{background:rgba(37,99,235,.14);color:#93c5fd}.stat-icon.red{background:rgba(239,68,68,.12);color:#fca5a5}.stat-label{font-size:11px;color:var(--muted);font-weight:700}.stat-value{font-size:30px;font-weight:900;letter-spacing:-.8px;margin:15px 0 3px}.stat-foot{font-size:10px;color:var(--muted)}.dashboard-main-grid{display:grid;grid-template-columns:1.35fr .9fr;gap:18px}.dash-panel{padding:20px}.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;margin-bottom:17px}.panel-head h3{margin:5px 0 0;font-size:17px}.status-badge{font-size:9px;font-weight:900;letter-spacing:.08em;padding:6px 9px;border-radius:999px}.status-badge.running{background:rgba(59,130,246,.14);color:#93c5fd}.status-badge.idle{background:rgba(148,163,184,.11);color:#cbd5e1}.status-badge.online{background:rgba(34,197,94,.13);color:#86efac}.status-badge.offline{background:rgba(245,158,11,.12);color:#fcd34d}.campaign-status-box{display:flex;align-items:center;gap:13px;padding:15px;border:1px solid var(--line);border-radius:15px;background:color-mix(in srgb,var(--panel2) 68%,transparent)}.campaign-status-icon{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;font-weight:900}.campaign-status-copy strong{display:block;font-size:12px}.campaign-status-copy span{display:block;margin-top:4px;color:var(--muted);font-size:10px}.progress-row{margin-top:16px}.progress-row>div:first-child{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:8px}.progress-row strong{color:var(--text)}.progress-track{height:7px;border-radius:999px;background:color-mix(in srgb,var(--panel2) 80%,transparent);overflow:hidden}.progress-track span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#7c3aed,#2563eb)}.mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini-grid>div{padding:12px;border:1px solid var(--line);border-radius:12px}.mini-grid span{display:block;font-size:9px;color:var(--muted)}.mini-grid strong{display:block;margin-top:4px;font-size:18px}.mini-grid .ok{color:#86efac}.mini-grid .bad{color:#fca5a5}.cloud-card{display:flex;gap:13px;padding:16px;border:1px solid rgba(245,158,11,.14);border-radius:15px;background:rgba(245,158,11,.045);margin-bottom:12px}.cloud-card.is-online{border-color:rgba(34,197,94,.16);background:rgba(34,197,94,.045)}.cloud-orb{width:42px;height:42px;flex:0 0 auto;border-radius:13px;display:grid;place-items:center;background:rgba(99,102,241,.13);font-size:19px}.cloud-card strong{font-size:12px}.cloud-card p{font-size:10px;line-height:1.6;color:var(--muted);margin:5px 0 0}.wide{width:100%;display:flex;justify-content:center}.history-panel{min-width:0}.text-link{font-size:10px;color:#a78bfa;text-decoration:none;font-weight:800}.activity-list{display:grid}.activity-item{display:grid;grid-template-columns:12px minmax(0,1fr) auto;align-items:center;gap:11px;padding:12px 2px;border-bottom:1px solid var(--line)}.activity-item:last-child{border-bottom:0}.activity-dot{width:7px;height:7px;border-radius:50%;background:#64748b}.activity-dot.success{background:#22c55e}.activity-dot.error{background:#ef4444}.activity-dot.warning{background:#f59e0b}.activity-dot.info{background:#3b82f6}.activity-copy strong{font-size:11px;display:block}.activity-copy span{display:block;color:var(--muted);font-size:9px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.activity-item time{font-size:9px;color:var(--muted);white-space:nowrap}@media(max-width:1050px){.dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-main-grid{grid-template-columns:1fr}}@media(max-width:640px){.hero-card{align-items:flex-start;flex-direction:column;padding:21px}.hero-actions{width:100%}.hero-actions .btn{flex:1;justify-content:center}.dash-stats{grid-template-columns:1fr}.activity-item{grid-template-columns:12px minmax(0,1fr)}.activity-item time{grid-column:2}}
 </style>
+
+<script>
+let isRunning = {{ 'true' if campaign_state.running else 'false' }};
+let scheduledAt = {{ ("'" + schedule_info.scheduled_at + "'") if schedule_info else 'null' }};
+
+function updateScheduleTimer() {
+    if (!scheduledAt) return;
+    const target = new Date(scheduledAt).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((target - now) / 1000));
+    const timerEl = document.getElementById('dash-schedule-countdown');
+    if (!timerEl) return;
+    if (diff <= 0) {
+        timerEl.textContent = 'Sắp chạy...';
+        pollStatus();
+        return;
+    }
+    const h = Math.floor(diff / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    const s = diff % 60;
+    if (h > 0) {
+        timerEl.textContent = `còn ${h}h ${m}m ${s}s`;
+    } else {
+        timerEl.textContent = `còn ${m}m ${s}s`;
+    }
+}
+setInterval(updateScheduleTimer, 1000);
+updateScheduleTimer();
+
+async function pollStatus() {
+    try {
+        const res = await fetch('/campaign-status');
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // Update message & status
+        const msgEl = document.getElementById('dash-campaign-msg');
+        if (msgEl && data.message) msgEl.textContent = data.message;
+        const statEl = document.getElementById('dash-campaign-status');
+        if (statEl && data.status) statEl.textContent = data.status;
+
+        // Progress
+        const proc = data.processed || 0;
+        const tot = data.total || 0;
+        const prgText = document.getElementById('dash-progress-text');
+        if (prgText) prgText.textContent = `${proc} / ${tot}`;
+        const pct = tot > 0 ? (proc * 100 / tot) : 0;
+        const prgBar = document.getElementById('dash-progress-track');
+        if (prgBar) prgBar.style.width = pct + '%';
+
+        // Counters
+        const okEl = document.getElementById('dash-success-count');
+        if (okEl) okEl.textContent = data.success || 0;
+        const badEl = document.getElementById('dash-error-count');
+        if (badEl) badEl.textContent = data.errors || 0;
+
+        // Badge
+        const badge = document.getElementById('dash-status-badge');
+        if (badge) {
+            if (data.running) {
+                badge.className = 'status-badge running';
+                badge.textContent = 'ĐANG CHẠY';
+            } else if (data.schedule) {
+                badge.className = 'status-badge scheduled';
+                badge.style.background = 'rgba(168,85,247,.16)';
+                badge.style.color = '#c084fc';
+                badge.textContent = '🕒 HẸN GIỜ: ' + (data.schedule.time_remaining_str || '');
+            } else {
+                badge.className = 'status-badge idle';
+                badge.textContent = 'SẴN SÀNG';
+            }
+        }
+
+        // Connector online badge
+        const connBadge = document.getElementById('dash-connector-badge');
+        if (connBadge) {
+            if (data.agent_online) {
+                connBadge.className = 'status-badge online';
+                connBadge.textContent = 'ONLINE';
+            } else {
+                connBadge.className = 'status-badge offline';
+                connBadge.textContent = 'CHƯA KẾT NỐI';
+            }
+        }
+
+        if (isRunning !== !!data.running) {
+            isRunning = !!data.running;
+            // State transition
+            if (!isRunning) {
+                setTimeout(() => location.reload(), 1500);
+            }
+        }
+    } catch (e) {}
+}
+
+if (isRunning || scheduledAt) {
+    setInterval(pollStatus, 2500);
+}
+</script>
 {% endblock %}

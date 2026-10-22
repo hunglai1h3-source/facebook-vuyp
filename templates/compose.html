@@ -426,7 +426,7 @@ Soạn nội dung, chọn nhiều ảnh và đăng lên các Group Facebook.
                 <span style="font-size:10px;font-weight:900;letter-spacing:.08em;color:#c084fc;display:flex;align-items:center;gap:5px;">
                     🕒 ĐANG HẸN GIỜ ĐĂNG
                 </span>
-                <span style="font-size:10px;font-weight:700;color:#e9d5ff;background:rgba(168,85,247,.25);padding:2px 8px;border-radius:999px;">
+                <span id="compose-schedule-countdown" style="font-size:10px;font-weight:700;color:#e9d5ff;background:rgba(168,85,247,.25);padding:2px 8px;border-radius:999px;">
                     {{ schedule_info.time_remaining_str }}
                 </span>
             </div>
@@ -738,6 +738,52 @@ function setScheduleTimeTomorrow(h, m) {
     d.setHours(h, m, 0, 0);
     const inp = document.getElementById('scheduled_at_input');
     if (inp) inp.value = formatLocalISO(d);
+}
+
+let composeIsRunning = {{ 'true' if campaign_state.running else 'false' }};
+let composeScheduledAt = {{ ("'" + schedule_info.scheduled_at + "'") if schedule_info else 'null' }};
+
+function updateComposeScheduleTimer() {
+    if (!composeScheduledAt) return;
+    const target = new Date(composeScheduledAt).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((target - now) / 1000));
+    const timerEl = document.getElementById('compose-schedule-countdown');
+    if (!timerEl) return;
+    if (diff <= 0) {
+        timerEl.textContent = 'Sắp chạy...';
+        pollComposeStatus();
+        return;
+    }
+    const h = Math.floor(diff / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    const s = diff % 60;
+    if (h > 0) {
+        timerEl.textContent = `còn ${h}h ${m}m ${s}s`;
+    } else {
+        timerEl.textContent = `còn ${m}m ${s}s`;
+    }
+}
+setInterval(updateComposeScheduleTimer, 1000);
+updateComposeScheduleTimer();
+
+async function pollComposeStatus() {
+    try {
+        const res = await fetch('/campaign-status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const agentBox = document.querySelector('.agent-box div');
+        if (agentBox && data.message) {
+            agentBox.textContent = data.message;
+        }
+        if (composeIsRunning !== !!data.running) {
+            location.reload();
+        }
+    } catch (e) {}
+}
+
+if (composeIsRunning || composeScheduledAt) {
+    setInterval(pollComposeStatus, 2500);
 }
 
 </script>
