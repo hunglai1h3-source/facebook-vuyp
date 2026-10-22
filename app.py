@@ -2905,6 +2905,9 @@ def init_facebook_table():
         conn.commit()
 
 
+_facebook_state_cache = {}
+
+
 def get_facebook_state(user_id):
     user_id = sanitize_customer_id(user_id)
 
@@ -2919,6 +2922,10 @@ def get_facebook_state(user_id):
     if not user_id:
         return default
 
+    cached = _facebook_state_cache.get(user_id)
+    if cached is not None:
+        return cached.copy()
+
     if not postgres_enabled():
         current = load_settings(user_id)
         default.update({
@@ -2926,6 +2933,7 @@ def get_facebook_state(user_id):
             "status": str(current.get("facebook_status", "disconnected") or "disconnected"),
             "connected_at": str(current.get("facebook_connected_at", "") or ""),
         })
+        _facebook_state_cache[user_id] = default.copy()
         return default
 
     init_facebook_table()
@@ -2944,15 +2952,18 @@ def get_facebook_state(user_id):
             row = cur.fetchone()
 
     if not row:
+        _facebook_state_cache[user_id] = default.copy()
         return default
 
-    return {
+    res = {
         "user_id": row.get("user_id", user_id),
         "context_id": row.get("context_id", "") or "",
         "status": row.get("status", "disconnected") or "disconnected",
         "connected_at": _serialize_dt(row.get("connected_at")),
         "updated_at": _serialize_dt(row.get("updated_at")),
     }
+    _facebook_state_cache[user_id] = res.copy()
+    return res
 
 
 def save_facebook_state(
@@ -2964,6 +2975,8 @@ def save_facebook_state(
     user_id = sanitize_customer_id(user_id)
     if not user_id:
         return
+
+    _facebook_state_cache.pop(user_id, None)
 
     context_id = str(context_id or "").strip()
     status = str(status or "disconnected").strip()[:32]
@@ -4115,9 +4128,19 @@ def default_campaign_state():
     }
 
 
+_campaign_state_cache = {}
+
+
 def get_campaign_state(
     customer_id
 ):
+    customer_id = sanitize_customer_id(customer_id)
+    if not customer_id:
+        return default_campaign_state()
+
+    cached = _campaign_state_cache.get(customer_id)
+    if cached is not None:
+        return cached.copy()
 
     state = read_json(
         customer_status_file(
@@ -4145,6 +4168,7 @@ def get_campaign_state(
             value,
         )
 
+    _campaign_state_cache[customer_id] = state.copy()
     return state
 
 
@@ -4152,6 +4176,7 @@ def update_campaign_state(
     customer_id,
     **kwargs,
 ):
+    customer_id = sanitize_customer_id(customer_id)
 
     state = (
         get_campaign_state(
@@ -4166,6 +4191,8 @@ def update_campaign_state(
     state[
         "updated_at"
     ] = now_iso()
+
+    _campaign_state_cache[customer_id] = state.copy()
 
     write_json(
         customer_status_file(
@@ -4278,10 +4305,17 @@ def format_vietnam_time(dt_utc):
         return str(dt_utc)
 
 
+_schedules_cache = {}
+
+
 def load_schedule(customer_id):
     customer_id = sanitize_customer_id(customer_id)
     if not customer_id:
         return None
+
+    cached = _schedules_cache.get(customer_id)
+    if cached is not None:
+        return cached.copy()
 
     if postgres_enabled():
         init_schedules_table()
@@ -4303,18 +4337,27 @@ def load_schedule(customer_id):
                             data = json.loads(data)
                         if isinstance(data, dict):
                             data["status"] = row.get("status", data.get("status", "scheduled"))
+                            _schedules_cache[customer_id] = data.copy()
                             return data
+            _schedules_cache[customer_id] = None
             return None
         except Exception as e:
             print("[LOAD SCHEDULE PG ERROR]", e, flush=True)
 
-    return read_json(customer_schedule_file(customer_id), None)
+    data = read_json(customer_schedule_file(customer_id), None)
+    _schedules_cache[customer_id] = data.copy() if data else None
+    return data
 
 
 def save_schedule(customer_id, schedule_data):
     customer_id = sanitize_customer_id(customer_id)
     if not customer_id:
         return
+
+    if schedule_data:
+        _schedules_cache[customer_id] = schedule_data.copy()
+    else:
+        _schedules_cache.pop(customer_id, None)
 
     if postgres_enabled():
         init_schedules_table()
