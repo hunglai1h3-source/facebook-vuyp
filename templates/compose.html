@@ -741,7 +741,7 @@ function setScheduleTimeTomorrow(h, m) {
 }
 
 let composeIsRunning = {{ 'true' if campaign_state.running else 'false' }};
-let composeScheduledAt = {{ ("'" + schedule_info.scheduled_at + "'") if schedule_info else 'null' }};
+let composeScheduledAt = {{ ("'" + schedule_info.scheduled_at + "'") if (schedule_info and schedule_info.scheduled_at) else 'null' }};
 
 function updateComposeScheduleTimer() {
     if (!composeScheduledAt) return;

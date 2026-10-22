@@ -4493,15 +4493,33 @@ def trigger_single_schedule(customer_id, sched):
     if dt_utc > now_utc:
         return False
 
-    # Due! Check active device
+    # 1. Bảo vệ quá hạn: Nếu lịch hẹn đã quá hạn > 24 giờ (máy tắt lâu ngày), hủy an toàn thay vì bung bất ngờ
+    if now_utc - dt_utc > timedelta(hours=24):
+        save_schedule(customer_id, None)
+        add_history(
+            customer_id,
+            "warning",
+            "Lịch hẹn đã quá hạn",
+            f"Chiến dịch '{sched.get('campaign_name', 'Hẹn giờ')}' lên lịch lúc {format_vietnam_time(dt_utc)} đã quá hạn 24 giờ do thiết bị không online. Đã hủy an toàn.",
+        )
+        return False
+
+    # 2. Bảo vệ tranh chấp: Nếu đang có chiến dịch khác chạy dở, chờ chiến dịch đó xong mới bung lịch hẹn
+    current_state = get_campaign_state(customer_id)
+    if current_state.get("running"):
+        return False
+
+    # 3. Kiểm tra thiết bị Chrome Extension kết nối
     device = get_active_device(customer_id)
     if not device:
-        update_campaign_state(
-            customer_id,
-            running=False,
-            status="scheduled_paused",
-            message=f"Đã đến giờ hẹn ({format_vietnam_time(dt_utc)}) nhưng FB POST PRO Connector chưa online.",
-        )
+        msg = f"Đã đến giờ hẹn ({format_vietnam_time(dt_utc)}) nhưng FB POST PRO Connector chưa online."
+        if current_state.get("message") != msg or current_state.get("status") != "scheduled_paused":
+            update_campaign_state(
+                customer_id,
+                running=False,
+                status="scheduled_paused",
+                message=msg,
+            )
         return False
 
     device_id = device["device_id"]

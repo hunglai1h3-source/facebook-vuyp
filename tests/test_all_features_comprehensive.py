@@ -88,6 +88,15 @@ def run_comprehensive_tests():
     # 2. KIỂM THỬ XÁC THỰC, PHÂN QUYỀN 3 BỘ PHẬN & CÁCH LY DỮ LIỆU
     # ═══════════════════════════════════════════════════════════════════════════
     print("\n[CHỨC NĂNG 2] Kiểm tra Đăng nhập, 3 Bộ phận & Cách ly dữ liệu...")
+
+    dk_user = find_user_by_login("daikim")
+    lb_user = find_user_by_login("longbien")
+    users = fb_app.load_users()
+    users[dk_user["user_id"]]["password_hash"] = fb_app.generate_password_hash("Daikim@2026_Secure")
+    users[dk_user["user_id"]]["must_change_password"] = False
+    users[lb_user["user_id"]]["password_hash"] = fb_app.generate_password_hash("Longbien@2026_Secure")
+    users[lb_user["user_id"]]["must_change_password"] = False
+    fb_app.save_users(users)
     
     # 2.1 Từ chối mật khẩu sai
     r_bad = client.post("/login", data={
@@ -95,7 +104,7 @@ def run_comprehensive_tests():
         "password": "WrongPassword123",
         "department": "dai_kim"
     }, follow_redirects=True)
-    check("Từ chối mật khẩu không chính xác", "Sai tài khoản hoặc mật khẩu" in r_bad.data.decode("utf-8") or r_bad.status_code == 200)
+    check("Từ chối mật khẩu không chính xác", "Sai tài khoản hoặc mật khẩu" in r_bad.data.decode("utf-8") or "không chính xác" in r_bad.data.decode("utf-8"))
 
     # 2.2 Đăng nhập Đại Kim thành công
     client_daikim = app.test_client()
@@ -105,6 +114,9 @@ def run_comprehensive_tests():
         "department": "dai_kim"
     }, follow_redirects=True)
     check("Đăng nhập tài khoản @daikim thành công", r_dk.status_code == 200)
+    with client_daikim.session_transaction() as sess:
+        check("Session lưu trữ user_id hợp lệ của Đại Kim", sess.get("user_id") == dk_user["user_id"])
+        check("Session nhận diện đúng bộ phận dai_kim", sess.get("department") == "dai_kim")
     check("Dashboard nhận diện bộ phận ĐẠI KIM", "ĐẠI KIM" in r_dk.data.decode("utf-8"))
 
     # 2.3 Đăng nhập Long Biên thành công
@@ -115,11 +127,12 @@ def run_comprehensive_tests():
         "department": "long_bien"
     }, follow_redirects=True)
     check("Đăng nhập tài khoản @longbien thành công", r_lb.status_code == 200)
+    with client_lb.session_transaction() as sess:
+        check("Session lưu trữ user_id hợp lệ của Long Biên", sess.get("user_id") == lb_user["user_id"])
+        check("Session nhận diện đúng bộ phận long_bien", sess.get("department") == "long_bien")
     check("Dashboard nhận diện bộ phận LONG BIÊN", "LONG BIÊN" in r_lb.data.decode("utf-8"))
 
     # 2.4 Kiểm tra cách ly dữ liệu: Thêm group ở Đại Kim không xuất hiện ở Long Biên
-    dk_user = find_user_by_login("daikim")
-    lb_user = find_user_by_login("longbien")
     dk_cid = f"{dk_user['user_id']}__dai_kim"
     lb_cid = f"{lb_user['user_id']}__long_bien"
 
@@ -135,7 +148,6 @@ def run_comprehensive_tests():
     # 3. KIỂM THỬ TOÀN BỘ CÁC TRANG QUẢN TRỊ (VIEW RENDERING)
     # ═══════════════════════════════════════════════════════════════════════════
     print("\n[CHỨC NĂNG 3] Kiểm tra tải tất cả các trang quản trị...")
-    # Make sure user does not have must_change_password=True for page testing
     users = fb_app.load_users()
     users[dk_user["user_id"]]["must_change_password"] = False
     fb_app.save_users(users)
