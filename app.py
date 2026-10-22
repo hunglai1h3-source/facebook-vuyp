@@ -824,6 +824,35 @@ def init_trusted_devices_table():
         conn.commit()
 
 
+def init_schedules_table():
+    if not postgres_enabled():
+        return
+    try:
+        with postgres_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fbpostpro_schedules (
+                        customer_id VARCHAR(100) PRIMARY KEY,
+                        schedule_data JSONB NOT NULL,
+                        scheduled_at TIMESTAMPTZ NOT NULL,
+                        status VARCHAR(30) NOT NULL DEFAULT 'scheduled',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_fbpostpro_schedules_time
+                    ON fbpostpro_schedules (scheduled_at, status)
+                    """
+                )
+            conn.commit()
+    except Exception as e:
+        print("[INIT SCHEDULES ERROR]", e, flush=True)
+
+
 def load_trusted_devices():
     if not postgres_enabled():
         data = read_json(TRUSTED_DEVICES_FILE, {})
@@ -4289,35 +4318,6 @@ def save_jobs(
 # ============================================================
 # SCHEDULES (HẸN GIỜ ĐĂNG BÀI)
 # ============================================================
-
-def init_schedules_table():
-    if not postgres_enabled():
-        return
-    try:
-        with postgres_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS fbpostpro_schedules (
-                        customer_id VARCHAR(100) PRIMARY KEY,
-                        schedule_data JSONB NOT NULL,
-                        scheduled_at TIMESTAMPTZ NOT NULL,
-                        status VARCHAR(30) NOT NULL DEFAULT 'scheduled',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_fbpostpro_schedules_time
-                    ON fbpostpro_schedules (scheduled_at, status)
-                    """
-                )
-            conn.commit()
-    except Exception as e:
-        print("[INIT SCHEDULES ERROR]", e, flush=True)
-
 
 def parse_scheduled_time(time_str):
     if not time_str:
