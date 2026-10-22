@@ -4475,23 +4475,35 @@ def trigger_single_schedule(customer_id, sched):
     return True
 
 
-def check_and_trigger_schedules():
+def check_and_trigger_schedules(target_customer_id=None):
     triggered = 0
     now_utc = datetime.now(timezone.utc)
+
+    target_cid = sanitize_customer_id(target_customer_id) if target_customer_id else None
 
     if postgres_enabled():
         init_schedules_table()
         try:
             with postgres_connect() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT customer_id, schedule_data
-                        FROM fbpostpro_schedules
-                        WHERE scheduled_at <= %s AND status = 'scheduled'
-                        """,
-                        (now_utc,),
-                    )
+                    if target_cid:
+                        cur.execute(
+                            """
+                            SELECT customer_id, schedule_data
+                            FROM fbpostpro_schedules
+                            WHERE customer_id = %s AND scheduled_at <= %s AND status = 'scheduled'
+                            """,
+                            (target_cid, now_utc),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT customer_id, schedule_data
+                            FROM fbpostpro_schedules
+                            WHERE scheduled_at <= %s AND status = 'scheduled'
+                            """,
+                            (now_utc,),
+                        )
                     rows = cur.fetchall()
             for r in rows:
                 cid = r["customer_id"]
@@ -4505,14 +4517,20 @@ def check_and_trigger_schedules():
         return triggered
 
     try:
-        users = load_users()
-        for uid, u in users.items():
-            for dept in VALID_DEPARTMENTS:
-                cid = f"{uid}__{dept}"
-                sched = load_schedule(cid)
-                if sched and sched.get("status") == "scheduled":
-                    if trigger_single_schedule(cid, sched):
-                        triggered += 1
+        if target_cid:
+            sched = load_schedule(target_cid)
+            if sched and sched.get("status") == "scheduled":
+                if trigger_single_schedule(target_cid, sched):
+                    triggered += 1
+        else:
+            users = load_users()
+            for uid, u in users.items():
+                for dept in VALID_DEPARTMENTS:
+                    cid = f"{uid}__{dept}"
+                    sched = load_schedule(cid)
+                    if sched and sched.get("status") == "scheduled":
+                        if trigger_single_schedule(cid, sched):
+                            triggered += 1
     except Exception as e:
         print("[SCHEDULER LOCAL ERROR]", e, flush=True)
 
@@ -7229,8 +7247,8 @@ def cancel_schedule():
 
 @app.route("/schedule-status", methods=["GET"])
 def schedule_status():
-    check_and_trigger_schedules()
     customer_id = get_customer_id()
+    check_and_trigger_schedules(customer_id)
     info = get_schedule_info(customer_id)
     return jsonify(info or {"status": "none"})
 
@@ -7269,8 +7287,8 @@ def stop_campaign():
 
 @app.route("/campaign-status")
 def campaign_status():
-    check_and_trigger_schedules()
     customer_id = get_customer_id()
+    check_and_trigger_schedules(customer_id)
     state = get_campaign_state(customer_id)
     active_device = get_active_device(customer_id)
     state["agent_online"] = active_device is not None
@@ -7677,7 +7695,7 @@ def agent_get_job():
         ]
     )
 
-    check_and_trigger_schedules()
+    check_and_trigger_schedules(customer_id)
 
     jobs = (
         load_jobs(
