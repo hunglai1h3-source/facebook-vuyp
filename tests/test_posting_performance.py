@@ -161,12 +161,12 @@ section("G. BẢNG ĐO ĐỘ TRỄ KỸ THUẬT NHÂN TẠO (MỤC TIÊU TẤT C
 
 TECHNICAL_DELAYS_BREAKDOWN = [
     ("1. Điều hướng: Loại bỏ sleep cố định", 2200, 0, "Bỏ 2200ms sleep sau waitTab, dùng instant probe"),
-    ("2. Chờ khu vực tạo bài: Loại bỏ sleep ban đầu", 1800, 30, "Bỏ 1800ms sleep, dùng MutationObserver"),
-    ("3. Mở popup soạn bài: Polling phản xạ", 500, 20, "Bỏ polling lag, dùng MutationObserver"),
+    ("2. Chờ khu vực tạo bài: Loại bỏ sleep ban đầu", 1800, 15, "Bỏ 1800ms sleep, dùng MutationObserver & scoped query"),
+    ("3. Mở popup soạn bài: Polling phản xạ", 500, 15, "Triệt tiêu Forced Reflow, dùng MutationObserver"),
     ("4. Nhập nội dung: Lexical / React flush", 500, 25, "Hạ sleep từ 500ms xuống 25ms (React batch)"),
-    ("5. Upload media: File picker & upload wait", 4400, 100, "Bỏ 900ms picker + 3500ms sleep, dùng MutationObserver"),
-    ("6. Kiểm tra nút Đăng: Sẵn sàng gửi", 300, 15, "MutationObserver theo dõi aria-disabled"),
-    ("7. Xác nhận kết quả: Đóng hộp thoại", 1500, 50, "MutationObserver theo dõi dialog unmount"),
+    ("5. Upload media: File picker & upload wait", 4400, 80, "Bỏ 900ms picker + 3500ms sleep, dùng MutationObserver"),
+    ("6. Kiểm tra nút Đăng: Sẵn sàng gửi", 300, 10, "MutationObserver theo dõi aria-disabled & CSS direct"),
+    ("7. Xác nhận kết quả: Đóng hộp thoại", 1500, 30, "MutationObserver theo dõi dialog unmount"),
 ]
 
 print(f"\n  {'Hạng mục kỹ thuật':<44} {'Trước':>10} {'Sau':>8} {'Cải thiện':>12}")
