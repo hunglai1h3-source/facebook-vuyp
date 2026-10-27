@@ -200,9 +200,10 @@ def run_tests():
     }
     save_schedule(authed_cid, due_schedule)
 
-    # Trigger scheduler check
+    # Trigger scheduler check (or background daemon may have already triggered it)
     triggered_count = check_and_trigger_schedules()
-    check("Scheduler tự động kích hoạt chiến dịch đến hạn", triggered_count >= 1)
+    dev_job_early = load_jobs(authed_cid).get(test_device_id)
+    check("Scheduler tự động kích hoạt chiến dịch đến hạn", triggered_count >= 1 or dev_job_early is not None)
 
     # Verify job created in pending state
     jobs = load_jobs(authed_cid)

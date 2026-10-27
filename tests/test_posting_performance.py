@@ -83,12 +83,16 @@ has_smart_upload = "waitFor(()=>{" in runner_src and "previews.length>=images.le
 check("Smart upload wait: poll for thumbnail count + spinner gone", has_smart_upload)
 
 has_sleep_500 = "sleep(500)" in runner_src
-has_sleep_200_filltext = "sleep(200)" in runner_src
-check("REDUCE fillText sleep 500ms→200ms", not has_sleep_500 and has_sleep_200_filltext)
+m_fill = re.search(r"fillText[^{]*\{.*?sleep\((\d+)\)", runner_src, re.DOTALL)
+fill_sleep = int(m_fill.group(1)) if m_fill else None
+has_sleep_200_filltext = "sleep(200)" in runner_src or (fill_sleep is not None and fill_sleep <= 200)
+check("REDUCE fillText sleep 500ms→<=200ms", not has_sleep_500 and has_sleep_200_filltext)
 
 has_step_250 = re.search(r"waitFor\(.*step=250\)", runner_src)
-has_step_150 = "step=150" in runner_src
-check("REDUCE waitFor polling step 250ms→150ms", not has_step_250 and has_step_150)
+m_step = re.search(r"step\s*=\s*(\d+)", runner_src)
+poll_step = int(m_step.group(1)) if m_step else None
+has_step_150 = "step=150" in runner_src or (poll_step is not None and poll_step <= 150)
+check("REDUCE waitFor polling step 250ms→<=150ms", not has_step_250 and has_step_150)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 section("C. service_worker.js — DELAY REMOVALS & LATENCY REDUCTION")
