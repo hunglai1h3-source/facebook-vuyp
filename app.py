@@ -1763,10 +1763,22 @@ def migrate_json_users_to_postgres():
 # Khởi tạo bảng ngay khi service khởi động.
 # Nếu DATABASE_URL chưa có, local vẫn tiếp tục bằng users.json.
 if postgres_enabled():
-    init_users_table()
-    init_trusted_devices_table()
-    init_schedules_table()
-    migrate_json_users_to_postgres()
+    _db_initialized = False
+    for _attempt in range(1, 4):
+        try:
+            init_users_table()
+            init_trusted_devices_table()
+            init_schedules_table()
+            migrate_json_users_to_postgres()
+            _db_initialized = True
+            print(f"[DATABASE] Kết nối PostgreSQL và khởi tạo bảng thành công (lần thử {_attempt}).", flush=True)
+            break
+        except Exception as _db_init_err:
+            print(f"[DATABASE WARNING] Không thể kết nối PostgreSQL ở lần thử {_attempt}/3: {_db_init_err}", flush=True)
+            if _attempt < 3:
+                time.sleep(2)
+    if not _db_initialized:
+        print("[DATABASE ERROR] Không thể khởi tạo bảng PostgreSQL sau 3 lần thử. Hệ thống sẽ tiếp tục hoạt động với cơ chế dự phòng an toàn.", flush=True)
 
 try:
     bootstrap_department_accounts()
